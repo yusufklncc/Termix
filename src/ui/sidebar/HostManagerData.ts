@@ -7,6 +7,7 @@ type RawSSHHost = SSHHostWithStatus & {
   hasRdpPassword?: boolean;
   hasVncPassword?: boolean;
   hasTelnetPassword?: boolean;
+  hasStreamPassword?: boolean;
 };
 type HostQuickAction = Host["quickActions"][number];
 type HostJumpHost = NonNullable<Host["jumpHosts"]>[number];
@@ -80,6 +81,8 @@ export function sshHostToHost(h: SSHHostWithStatus): Host {
     enableVnc: h.enableVnc != null ? h.enableVnc : h.connectionType === "vnc",
     enableTelnet:
       h.enableTelnet != null ? h.enableTelnet : h.connectionType === "telnet",
+    enableStream:
+      h.enableStream != null ? h.enableStream : h.connectionType === "stream",
     sshPort:
       h.sshPort ??
       (h.connectionType === "ssh" || !h.connectionType ? h.port : 22),
@@ -113,6 +116,18 @@ export function sshHostToHost(h: SSHHostWithStatus): Host {
     telnetUser: h.telnetUser,
     telnetPassword: h.telnetPassword ?? "",
     hasTelnetPassword: !!host.hasTelnetPassword || !!h.telnetPassword,
+    streamUrl: h.streamUrl,
+    streamPath: h.streamPath,
+    streamMode: (h.streamMode as "embed" | "webrtc") ?? "embed",
+    streamPublisher: (h.streamPublisher as "neko" | "selkies") ?? "neko",
+    streamAuthType:
+      (h.streamAuthType as "none" | "direct" | "credential") ??
+      (h.streamCredentialId ? "credential" : "none"),
+    streamCredentialId:
+      h.streamCredentialId != null ? String(h.streamCredentialId) : undefined,
+    streamUser: h.streamUser,
+    streamPassword: h.streamPassword ?? "",
+    hasStreamPassword: !!host.hasStreamPassword || !!h.streamPassword,
     quickActions: (h.quickActions ?? []).map((a: HostQuickAction) => ({
       name: a.name,
       snippetId: String(a.snippetId),

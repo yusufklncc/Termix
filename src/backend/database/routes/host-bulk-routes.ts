@@ -603,6 +603,7 @@ export function registerHostBulkRoutes(
             enableRdp: hostData.enableRdp ?? false,
             enableVnc: hostData.enableVnc ?? false,
             enableTelnet: hostData.enableTelnet ?? false,
+            enableStream: hostData.enableStream ?? false,
             updatedAt: new Date().toISOString(),
           };
 
@@ -628,6 +629,12 @@ export function registerHostBulkRoutes(
             sshDataObj.enableRdp = hostData.enableRdp ? 1 : 0;
             sshDataObj.enableVnc = hostData.enableVnc ? 1 : 0;
             sshDataObj.enableTelnet = hostData.enableTelnet ? 1 : 0;
+            sshDataObj.enableStream = hostData.enableStream ? 1 : 0;
+            sshDataObj.streamUrl = hostData.streamUrl || null;
+            sshDataObj.streamPath = hostData.streamPath || null;
+            sshDataObj.streamAuthType = hostData.streamAuthType || null;
+            sshDataObj.streamUser = hostData.streamUser || null;
+            sshDataObj.streamPassword = hostData.streamPassword || null;
             sshDataObj.guacamoleConfig = hostData.guacamoleConfig
               ? JSON.stringify(hostData.guacamoleConfig)
               : null;
@@ -851,6 +858,7 @@ export function registerHostBulkRoutes(
             enableRdp: false,
             enableVnc: false,
             enableTelnet: false,
+            enableStream: false,
             updatedAt: new Date().toISOString(),
           };
 

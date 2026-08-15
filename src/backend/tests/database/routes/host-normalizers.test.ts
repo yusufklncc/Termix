@@ -147,6 +147,14 @@ describe("normalizeImportedHost", () => {
     expect(host.enableRdp).toBe(true);
   });
 
+  it("infers stream from enableStream and defaults to port 443", () => {
+    const host = normalizeImportedHost({ enableStream: true, ip: "s.example" });
+    expect(host.connectionType).toBe("stream");
+    expect(host.port).toBe(443);
+    expect(host.enableStream).toBe(true);
+    expect(host.enableSsh).toBe(false);
+  });
+
   it("honors an explicit port over protocol defaults", () => {
     const host = normalizeImportedHost({
       connectionType: "ssh",
@@ -242,6 +250,19 @@ describe("stripSensitiveFields", () => {
     expect(result.hasRdpPassword).toBe(false);
     expect(result.hasVncPassword).toBe(false);
     expect(result.hasTelnetPassword).toBe(false);
+  });
+
+  it("strips the stream password but keeps the embed target", () => {
+    const result = stripSensitiveFields({
+      name: "stream-box",
+      streamUrl: "https://desktop.example.com",
+      streamPath: "/session",
+      streamPassword: "stream-secret",
+    });
+    expect(result.streamPassword).toBeUndefined();
+    expect(result.hasStreamPassword).toBe(true);
+    expect(result.streamUrl).toBe("https://desktop.example.com");
+    expect(result.streamPath).toBe("/session");
   });
 });
 

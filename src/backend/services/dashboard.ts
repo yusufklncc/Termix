@@ -141,7 +141,7 @@ app.get("/activity/recent", async (req, res) => {
  *             properties:
  *               type:
  *                 type: string
- *                 enum: [terminal, file_manager, server_stats, tunnel, docker, telnet, vnc, rdp]
+ *                 enum: [terminal, file_manager, server_stats, tunnel, docker, telnet, vnc, rdp, stream]
  *               hostId:
  *                 type: integer
  *               hostName:
@@ -187,11 +187,12 @@ app.post("/activity/log", async (req, res) => {
         "telnet",
         "vnc",
         "rdp",
+        "stream",
       ].includes(type)
     ) {
       return res.status(400).json({
         error:
-          "Invalid activity type. Must be 'terminal', 'file_manager', 'server_stats', 'tunnel', 'docker', 'telnet', 'vnc', or 'rdp'",
+          "Invalid activity type. Must be 'terminal', 'file_manager', 'server_stats', 'tunnel', 'docker', 'telnet', 'vnc', 'rdp', or 'stream'",
       });
     }
 

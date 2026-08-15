@@ -186,6 +186,7 @@ export type NormalizedImportedHost = Record<string, unknown> & {
   enableRdp: boolean;
   enableVnc: boolean;
   enableTelnet: boolean;
+  enableStream: boolean;
 };
 
 export function normalizeImportedHost(
@@ -201,7 +202,9 @@ export function normalizeImportedHost(
         ? "vnc"
         : asBoolean(hostData.enableTelnet)
           ? "telnet"
-          : "ssh");
+          : asBoolean(hostData.enableStream)
+            ? "stream"
+            : "ssh");
 
   const port =
     asPort(hostData.port) ||
@@ -211,7 +214,9 @@ export function normalizeImportedHost(
         ? asPort(hostData.vncPort) || 5900
         : connectionType === "telnet"
           ? asPort(hostData.telnetPort) || 23
-          : asPort(hostData.sshPort) || 22);
+          : connectionType === "stream"
+            ? 443
+            : asPort(hostData.sshPort) || 22);
 
   return {
     ...hostData,
@@ -252,6 +257,10 @@ export function normalizeImportedHost(
       hostData.enableTelnet === undefined
         ? connectionType === "telnet"
         : asBoolean(hostData.enableTelnet),
+    enableStream:
+      hostData.enableStream === undefined
+        ? connectionType === "stream"
+        : asBoolean(hostData.enableStream),
   };
 }
 
@@ -266,6 +275,7 @@ const SENSITIVE_FIELDS = [
   "rdpPassword",
   "vncPassword",
   "telnetPassword",
+  "streamPassword",
   "autostartPassword",
 ];
 
@@ -280,6 +290,7 @@ export function stripSensitiveFields(
   result.hasRdpPassword = !!host.rdpPassword;
   result.hasVncPassword = !!host.vncPassword;
   result.hasTelnetPassword = !!host.telnetPassword;
+  result.hasStreamPassword = !!host.streamPassword;
   for (const field of SENSITIVE_FIELDS) {
     delete result[field];
   }
@@ -332,10 +343,17 @@ const CONNECT_LEVEL_FIELDS = new Set([
   "enableRdp",
   "enableVnc",
   "enableTelnet",
+  "enableStream",
   "sshPort",
   "rdpPort",
   "vncPort",
   "telnetPort",
+  // A stream recipient needs the embed target itself; without these the tab
+  // has nothing to render. Credentials stay owner-private.
+  "streamUrl",
+  "streamPath",
+  "streamMode",
+  "streamPublisher",
   "defaultPath",
   "scpLegacy",
   "tunnelConnections",
@@ -432,12 +450,15 @@ export function transformHostResponse(
       const rdp = !!host.enableRdp;
       const vnc = !!host.enableVnc;
       const tel = !!host.enableTelnet;
-      const isMigratedNonSsh = !rdp && !vnc && !tel && ct && ct !== "ssh";
+      const stream = !!host.enableStream;
+      const isMigratedNonSsh =
+        !rdp && !vnc && !tel && !stream && ct && ct !== "ssh";
       return {
         enableSsh: isMigratedNonSsh ? false : !!host.enableSsh,
         enableRdp: isMigratedNonSsh ? ct === "rdp" : rdp,
         enableVnc: isMigratedNonSsh ? ct === "vnc" : vnc,
         enableTelnet: isMigratedNonSsh ? ct === "telnet" : tel,
+        enableStream: isMigratedNonSsh ? ct === "stream" : stream,
       };
     })(),
     sshPort: host.sshPort ?? host.port ?? 22,
@@ -450,6 +471,11 @@ export function transformHostResponse(
     rdpIgnoreCert: !!host.rdpIgnoreCert,
     vncUser: host.vncUser || undefined,
     telnetUser: host.telnetUser || undefined,
+    streamUrl: host.streamUrl || undefined,
+    streamPath: host.streamPath || undefined,
+    streamUser: host.streamUser || undefined,
+    streamMode: host.streamMode || undefined,
+    streamPublisher: host.streamPublisher || undefined,
     tunnelConnections: host.tunnelConnections
       ? JSON.parse(host.tunnelConnections as string)
       : [],

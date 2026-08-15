@@ -240,6 +240,15 @@ router.post(
       telnetCredentialId,
       telnetUser,
       telnetPassword,
+      enableStream,
+      streamUrl,
+      streamPath,
+      streamAuthType,
+      streamCredentialId,
+      streamUser,
+      streamPassword,
+      streamMode,
+      streamPublisher,
     } = hostData;
     databaseLogger.info("Creating SSH host", {
       operation: "host_create",
@@ -270,7 +279,7 @@ router.post(
       authMethod ||
       (effectiveConnectionType !== "ssh" ? "password" : undefined);
     const effectiveUsername =
-      username || rdpUser || vncUser || telnetUser || "";
+      username || rdpUser || vncUser || telnetUser || streamUser || "";
     const effectiveName =
       name || (effectiveUsername ? `${effectiveUsername}@${ip}` : String(ip));
     const sshDataObj: Record<string, unknown> = {
@@ -384,6 +393,20 @@ router.post(
           ? telnetCredentialId
           : null,
       telnetUser: telnetUser || null,
+      enableStream: enableStream ? 1 : 0,
+      streamUrl: enableStream ? streamUrl || null : null,
+      streamPath: enableStream ? streamPath || null : null,
+      streamAuthType: enableStream ? streamAuthType || null : null,
+      streamCredentialId:
+        enableStream && streamAuthType === "credential" && streamCredentialId
+          ? streamCredentialId
+          : null,
+      streamUser: streamUser || null,
+      streamMode: enableStream ? streamMode || "embed" : null,
+      streamPublisher:
+        enableStream && streamMode === "webrtc"
+          ? streamPublisher || "neko"
+          : null,
     };
 
     // For non-SSH hosts (RDP, VNC, Telnet), always save password if provided
@@ -442,6 +465,7 @@ router.post(
     sshDataObj.rdpPassword = rdpPassword || null;
     sshDataObj.vncPassword = vncPassword || null;
     sshDataObj.telnetPassword = telnetPassword || null;
+    sshDataObj.streamPassword = streamPassword || null;
 
     try {
       const result = await createCurrentHostRepository().createEncryptedForUser(
@@ -891,6 +915,15 @@ router.put(
       telnetCredentialId,
       telnetUser,
       telnetPassword,
+      enableStream,
+      streamUrl,
+      streamPath,
+      streamAuthType,
+      streamCredentialId,
+      streamUser,
+      streamPassword,
+      streamMode,
+      streamPublisher,
     } = hostData;
     databaseLogger.info("Updating SSH host", {
       operation: "host_update",
@@ -919,7 +952,7 @@ router.put(
 
     const effectiveAuthType = authType || authMethod;
     const effectiveUsername =
-      username || rdpUser || vncUser || telnetUser || "";
+      username || rdpUser || vncUser || telnetUser || streamUser || "";
     const effectiveName =
       name || (effectiveUsername ? `${effectiveUsername}@${ip}` : String(ip));
     const sshDataObj: Record<string, unknown> = {
@@ -1032,6 +1065,20 @@ router.put(
           ? telnetCredentialId
           : null,
       telnetUser: telnetUser || null,
+      enableStream: enableStream ? 1 : 0,
+      streamUrl: enableStream ? streamUrl || null : null,
+      streamPath: enableStream ? streamPath || null : null,
+      streamAuthType: enableStream ? streamAuthType || null : null,
+      streamCredentialId:
+        enableStream && streamAuthType === "credential" && streamCredentialId
+          ? streamCredentialId
+          : null,
+      streamUser: streamUser || null,
+      streamMode: enableStream ? streamMode || "embed" : null,
+      streamPublisher:
+        enableStream && streamMode === "webrtc"
+          ? streamPublisher || "neko"
+          : null,
     };
 
     // For non-SSH hosts (RDP, VNC, Telnet), always save password if provided
@@ -1099,6 +1146,7 @@ router.put(
     if (rdpPassword) sshDataObj.rdpPassword = rdpPassword;
     if (vncPassword) sshDataObj.vncPassword = vncPassword;
     if (telnetPassword) sshDataObj.telnetPassword = telnetPassword;
+    if (streamPassword) sshDataObj.streamPassword = streamPassword;
 
     try {
       const accessInfo = await permissionManager.canAccessHost(
@@ -1713,7 +1761,7 @@ router.get(
 
       const exportedConnectionType =
         (resolvedHost.connectionType as string) || "ssh";
-      const isRemoteDesktop = ["rdp", "vnc", "telnet"].includes(
+      const isRemoteDesktop = ["rdp", "vnc", "telnet", "stream"].includes(
         exportedConnectionType,
       );
 
@@ -1757,6 +1805,15 @@ router.get(
             telnetCredentialId: resolvedHost.telnetCredentialId || null,
             telnetUser: resolvedHost.telnetUser || null,
             telnetPassword: resolvedHost.telnetPassword || null,
+            enableStream: !!resolvedHost.enableStream,
+            streamUrl: resolvedHost.streamUrl || null,
+            streamPath: resolvedHost.streamPath || null,
+            streamAuthType: resolvedHost.streamAuthType || null,
+            streamCredentialId: resolvedHost.streamCredentialId || null,
+            streamUser: resolvedHost.streamUser || null,
+            streamPassword: resolvedHost.streamPassword || null,
+            streamMode: resolvedHost.streamMode || null,
+            streamPublisher: resolvedHost.streamPublisher || null,
             guacamoleConfig: resolvedHost.guacamoleConfig
               ? JSON.parse(resolvedHost.guacamoleConfig as string)
               : null,
@@ -1887,7 +1944,7 @@ router.get(
 
         const exportedConnectionType =
           (resolvedHost.connectionType as string) || "ssh";
-        const isRemoteDesktop = ["rdp", "vnc", "telnet"].includes(
+        const isRemoteDesktop = ["rdp", "vnc", "telnet", "stream"].includes(
           exportedConnectionType,
         );
 
@@ -1913,6 +1970,14 @@ router.get(
               domain: resolvedHost.domain || null,
               security: resolvedHost.security || null,
               ignoreCert: !!resolvedHost.ignoreCert,
+              enableStream: !!resolvedHost.enableStream,
+              streamUrl: resolvedHost.streamUrl || null,
+              streamPath: resolvedHost.streamPath || null,
+              streamAuthType: resolvedHost.streamAuthType || null,
+              streamUser: resolvedHost.streamUser || null,
+              streamPassword: shareMode
+                ? null
+                : resolvedHost.streamPassword || null,
               guacamoleConfig: resolvedHost.guacamoleConfig
                 ? JSON.parse(resolvedHost.guacamoleConfig as string)
                 : null,

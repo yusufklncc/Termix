@@ -34,6 +34,7 @@ class FieldCrypto {
       "rdpPassword",
       "vncPassword",
       "telnetPassword",
+      "streamPassword",
     ]),
     ssh_credentials: new Set([
       "password",

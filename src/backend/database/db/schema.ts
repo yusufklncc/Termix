@@ -212,6 +212,7 @@ export const hosts = sqliteTable("ssh_data", {
   enableRdp: integer("enable_rdp", { mode: "boolean" }).notNull().default(false),
   enableVnc: integer("enable_vnc", { mode: "boolean" }).notNull().default(false),
   enableTelnet: integer("enable_telnet", { mode: "boolean" }).notNull().default(false),
+  enableStream: integer("enable_stream", { mode: "boolean" }).notNull().default(false),
 
   sshPort: integer("ssh_port").default(22),
   rdpPort: integer("rdp_port").default(3389),
@@ -232,6 +233,21 @@ export const hosts = sqliteTable("ssh_data", {
   telnetUser: text("telnet_user"),
   telnetPassword: text("telnet_password"),
   telnetCredentialId: integer("telnet_credential_id").references(() => sshCredentials.id, { onDelete: "set null" }),
+
+  // An externally hosted desktop stream (Selkies, neko, ...) embedded as an
+  // iframe. Termix stores where it lives and, optionally, credentials for it;
+  // it does not proxy the media.
+  streamUrl: text("stream_url"),
+  streamPath: text("stream_path"),
+  // "embed" renders the publisher's own page in an iframe; "webrtc" negotiates
+  // a peer connection through Termix's signaling gateway. Null means embed, so
+  // hosts created before the gateway existed keep their behaviour.
+  streamMode: text("stream_mode"),
+  streamPublisher: text("stream_publisher"),
+  streamCredentialId: integer("stream_credential_id").references(() => sshCredentials.id, { onDelete: "set null" }),
+  streamUser: text("stream_user"),
+  streamPassword: text("stream_password"),
+  streamAuthType: text("stream_auth_type"),
 
   rdpAuthType: text("rdp_auth_type"),
   vncAuthType: text("vnc_auth_type"),

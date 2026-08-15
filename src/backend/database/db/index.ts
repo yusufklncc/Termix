@@ -1564,6 +1564,15 @@ const migrateSchema = () => {
     { column: "telnet_auth_type", sql: "ALTER TABLE ssh_data ADD COLUMN telnet_auth_type TEXT" },
     { column: "allow_session_sharing", sql: "ALTER TABLE ssh_data ADD COLUMN allow_session_sharing INTEGER NOT NULL DEFAULT 1" },
     { column: "connection_origin", sql: "ALTER TABLE ssh_data ADD COLUMN connection_origin TEXT" },
+    { column: "enable_stream", sql: "ALTER TABLE ssh_data ADD COLUMN enable_stream INTEGER NOT NULL DEFAULT 0" },
+    { column: "stream_url", sql: "ALTER TABLE ssh_data ADD COLUMN stream_url TEXT" },
+    { column: "stream_path", sql: "ALTER TABLE ssh_data ADD COLUMN stream_path TEXT" },
+    { column: "stream_credential_id", sql: "ALTER TABLE ssh_data ADD COLUMN stream_credential_id INTEGER REFERENCES ssh_credentials(id) ON DELETE SET NULL" },
+    { column: "stream_user", sql: "ALTER TABLE ssh_data ADD COLUMN stream_user TEXT" },
+    { column: "stream_password", sql: "ALTER TABLE ssh_data ADD COLUMN stream_password TEXT" },
+    { column: "stream_auth_type", sql: "ALTER TABLE ssh_data ADD COLUMN stream_auth_type TEXT" },
+    { column: "stream_mode", sql: "ALTER TABLE ssh_data ADD COLUMN stream_mode TEXT" },
+    { column: "stream_publisher", sql: "ALTER TABLE ssh_data ADD COLUMN stream_publisher TEXT" },
   ];
 
   for (const migration of sshDataMigrations) {

@@ -285,6 +285,7 @@ export class LazyFieldEncryption {
     rdpPassword: "rdp_password",
     vncPassword: "vnc_password",
     telnetPassword: "telnet_password",
+    streamPassword: "stream_password",
     totpSecret: "totp_secret",
     totpBackupCodes: "totp_backup_codes",
     clientSecret: "client_secret",
@@ -305,6 +306,7 @@ export class LazyFieldEncryption {
         "rdpPassword",
         "vncPassword",
         "telnetPassword",
+        "streamPassword",
       ],
       ssh_credentials: [
         "password",

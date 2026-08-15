@@ -149,9 +149,10 @@ CLAUDE.md'nin **Faz 3** tarifine denk düşüyor. Selkies adapter'ı hangi moda 
 - [x] Input (klavye/fare) — **neko tamam**: `keysym.ts` (X11 keysym eşlemesi),
       `stream-input.ts` (pointer/klavye/tekerlek, koordinat ölçekleme, takılı tuş temizliği),
       `control/request` ile kontrol alma. 16 test.
-- [ ] Input — **Selkies eksik**: girdiyi data channel'da _binary_ formatta taşıyor
-      (`binaryType = "arraybuffer"`), format hiçbir yerde belgelenmemiş. Tahmin edilmedi;
-      UI'da "sadece izleme" rozeti gösteriliyor. Ayrı bir iş kalemi.
+- [x] Input — **Selkies tamam**: girdi data channel'da CSV metin (`binaryType` sadece
+      sunucudan gelen veri için). Format `input_handler.py` `_dispatch_message`'tan çıkarıldı:
+      `kd,<keysym>` · `ku,<keysym>` · `kr` · `m,<x>,<y>,<mask>,<magnitude>`, fare bit maskesi
+      ve pulse'lu scroll bitleri dahil.
 - [x] `StreamApp` içinde mod dallanması: `embed` → iframe, `webrtc` → peer connection
 - [x] Bağlantı kopması, yeniden bağlanma, ICE restart (neko'da `signal/restart`)
 - [x] TURN — neko `signal/provide` içinde kendi `iceservers`'ını gönderiyor ve gateway bunu
@@ -160,8 +161,8 @@ CLAUDE.md'nin **Faz 3** tarifine denk düşüyor. Selkies adapter'ı hangi moda 
 
 ### Ölçüm
 
-> Bu bölümü ben çalıştıramam: canlı bir neko/Selkies hedefi ve senin hedef makinen gerekiyor.
-> Kod hazır olduğunda ölçüm adımlarını yazıp sana vereceğim.
+> Signaling ve input canlı neko'ya (Docker) karşı uçtan uca doğrulandı — aşağıya bak.
+> FPS/gecikme rakamları gerçek bir tarayıcı gerektiriyor; adımlar `docs/` altında.
 
 - [ ] FPS + uçtan uca gecikme (LAN ve WAN)
 - [ ] Sunucu CPU: signaling sırasında ve akış sırasında (beklenti: akışta ~0)

@@ -229,9 +229,7 @@ export function createHostEditorForm(
       (host?.streamCredentialId ? "credential" : "none")) as
       "none" | "direct" | "credential",
     streamMode: (host?.streamMode ?? "embed") as "embed" | "webrtc",
-    streamPublisher: (host?.streamPublisher ?? "neko") as
-      | "neko"
-      | "selkies",
+    streamPublisher: (host?.streamPublisher ?? "neko") as "neko" | "selkies",
     guacamoleConfig: host?.guacamoleConfig ?? {},
     statsConfig: host?.statsConfig ?? {
       statusCheckEnabled: d?.statusCheckEnabled ?? true,

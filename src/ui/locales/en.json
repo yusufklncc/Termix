@@ -1680,8 +1680,7 @@
     "sharingUnsupported": "Session sharing is not available for stream hosts.",
     "connecting": "Negotiating stream...",
     "negotiationFailed": "Could not negotiate the stream",
-    "signalingClosed": "Signaling connection closed",
-    "inputUnsupported": "Keyboard and mouse are not available for Selkies yet — view only."
+    "signalingClosed": "Signaling connection closed"
   },
   "terminal": {
     "connect": "Connect to Host",

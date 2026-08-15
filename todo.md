@@ -164,11 +164,19 @@ CLAUDE.md'nin **Faz 3** tarifine denk düşüyor. Selkies adapter'ı hangi moda 
 > Signaling ve input canlı neko'ya (Docker) karşı uçtan uca doğrulandı — aşağıya bak.
 > FPS/gecikme rakamları gerçek bir tarayıcı gerektiriyor; adımlar `docs/` altında.
 
-- [ ] FPS + uçtan uca gecikme (LAN ve WAN)
-- [ ] Sunucu CPU: signaling sırasında ve akış sırasında (beklenti: akışta ~0)
-- [ ] Guacamole yolu ile karşılaştırma
+- [x] FPS — **1080p'de ~60** (`NEKO_MAX_FPS=60` ile; neko varsayılanı 25'te sabitliyor)
+- [ ] Uçtan uca gecikme — jitter buffer ~60–70 ms + decode ~4–5 ms ölçüldü;
+      **fiziksel gecikme ölçülmedi**. LAN/WAN yok, her şey tek makinede loopback.
+- [x] Sunucu CPU — **Termix backend %0.30**, akış sürerken (neko aynı anda ~%240).
+      Medyanın Termix'ten geçmediği hem CPU'yla hem ICE candidate pair'le doğrulandı.
+- [ ] Guacamole yolu ile karşılaştırma — **yapılmadı**. Bu fazın kazancını rakamla
+      söyleyebilmek için şart; Faz 4'e kaldı.
 
-**Çıktı:** ölçülmüş rakamlar → **DUR, onay bekle**
+**Çıktı:** ölçüldü → [`docs/stream-webrtc-measurement.md`](docs/stream-webrtc-measurement.md)
+Kod tarafı bitti. Açık kalanlar: fiziksel gecikme, gerçek LAN/WAN, Guacamole karşılaştırması,
+ve FPS ile birlikte artan jitter buffer gecikmesinin sebebi.
+
+**DUR, onay bekle**
 
 ---
 

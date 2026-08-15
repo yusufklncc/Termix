@@ -184,15 +184,48 @@ ve FPS ile birlikte artan jitter buffer gecikmesinin sebebi.
 
 guacd olmadan gerçek RDP, 60fps hedefi. Riskli.
 
-- [ ] Faz başı: detaylı görev kırılımı
-- [ ] **Faz başı: eksik kalacak özellik listesi** (klavye scan code, clipboard, RDPDR, ses, çoklu monitör, reconnect)
-- [ ] Referans implementasyonların araştırılması (sıfırdan icat edilmiyor)
-- [ ] FreeRDP 3 ayrı yardımcı process olarak (native addon değil)
-- [ ] GFX H.264 NAL'ları decode edilmeden binary WS ile tarayıcıya
-- [ ] AVC420 ile başla (AVC444 tarayıcıda desteklenmiyor)
-- [ ] Tarayıcı: WebCodecs `VideoDecoder` + `OffscreenCanvas` worker'da
-- [ ] Host formunda render motoru seçimi (varsayılan Guacamole)
-- [ ] WebTransport opsiyonunun değerlendirilmesi (HOL blocking)
+### Faz başı — tamamlandı
+
+- [x] Referans implementasyon araştırıldı: [`qxsch/freerdp-web`](https://github.com/qxsch/freerdp-web)
+      (Apache-2.0, aktif). Native FreeRDP3 + tipli binary wire format + WebCodecs
+      `VideoDecoder` + OffscreenCanvas worker + AudioWorklet ring buffer — CLAUDE.md'nin
+      tarif ettiği mimarinin birebir karşılığı.
+- [x] **Eksik kalacak özellik listesi** → [`docs/phase3-direct-rdp-gaps.md`](docs/phase3-direct-rdp-gaps.md)
+
+### Faz başı bulguları
+
+- **AVC444 tuzağı doğrulandı.** Referans sunucuda FFmpeg ile 4:2:0'a transcode ediyor,
+  yani CLAUDE.md'nin "CPU maliyeti geri gelir" dediği yolu seçmiş. Biz AVC420 zorlayacağız.
+- **FreeRDP3 kaynaktan derlenmeli** (`-DWITH_FFMPEG=ON`). Dağıtım paketlerinde H.264 yok.
+- **COOP/COEP çakışması.** `SharedArrayBuffer` cross-origin isolation ister; `COEP: require-corp`
+  Faz 1'in iframe embed modunu kırar. Ses ve progressive codec ilk prototipte kapsam dışı
+  bırakılırsa gerekmiyor.
+
+### Karar bekleyenler
+
+- [ ] Yardımcı process dili: referans Python + C (`librdp_bridge.so`). Termix Node.
+      Referansı olduğu gibi mi alacağız, kendi köprümüzü mü yazacağız?
+- [ ] FreeRDP3 kaynaktan derlemenin Termix Docker imajına maliyeti kabul edilebilir mi?
+
+### Backend
+
+- [ ] FreeRDP3 yardımcı process (native addon değil — çökme izolasyonu için)
+- [ ] AVC420 zorla, H.264 NAL'ları **decode etmeden** geçir
+- [ ] Binary wire format (magic header deseni)
+- [ ] Yeni WS modülü, JWT + `canAccessHost` (Faz 2 gateway'i örnek)
+- [ ] Jump host tüneli — mevcut mekanizma yeniden kullanılacak
+
+### Frontend
+
+- [ ] WebCodecs `VideoDecoder` + `OffscreenCanvas` worker'da (ana thread'de çizim yok)
+- [ ] RDP **scan code** eşlemesi (Faz 2'deki X11 keysym tablosu burada işe yaramıyor)
+- [ ] Fare + tekerlek
+- [ ] Host formunda render motoru seçimi, **varsayılan Guacamole**
+
+### Sonraya
+
+- [ ] WebTransport (HTTP/3 datagram) — WebSocket HOL blocking için
+- [ ] Ses, clipboard, RDPDR — COOP/COEP kararı ile birlikte
 
 **Çıktı:** prototip + eksik özellik listesi + ölçüm → **DUR, onay bekle**
 

@@ -11,7 +11,10 @@ import { getSSHHosts, logActivity } from "@/main-axios.ts";
 import { Button } from "@/components/button.tsx";
 import { SimpleLoader } from "@/lib/SimpleLoader.tsx";
 import { buildStreamUrl } from "@/features/stream/stream-url.ts";
-import { attachNekoInput } from "@/features/stream/stream-input.ts";
+import {
+  attachNekoInput,
+  attachSelkiesInput,
+} from "@/features/stream/stream-input.ts";
 import {
   connectStreamWebRTC,
   type StreamConnectionState,
@@ -115,11 +118,9 @@ const StreamWebRTCView = React.forwardRef<
   const surfaceRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<StreamWebRTCHandle | null>(null);
   const detachInputRef = useRef<(() => void) | null>(null);
+  const publisherRef = useRef<"neko" | "selkies" | null>(null);
   const [state, setState] = useState<StreamConnectionState>("connecting");
   const [detail, setDetail] = useState<string | null>(null);
-  const [inputPublisher, setInputPublisher] = useState<
-    "neko" | "selkies" | null
-  >(null);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -129,7 +130,7 @@ const StreamWebRTCView = React.forwardRef<
 
     setState("connecting");
     setDetail(null);
-    setInputPublisher(null);
+    publisherRef.current = null;
     const session = connectStreamWebRTC({
       hostId,
       video,
@@ -139,15 +140,27 @@ const StreamWebRTCView = React.forwardRef<
         if (message) setDetail(message);
       },
       onReady: (publisher) => {
-        setInputPublisher(publisher);
-        // Only neko carries input on the signaling socket; Selkies uses a
-        // binary data-channel format that is not wired up yet.
+        publisherRef.current = publisher;
+        // neko carries input as control/* on the signaling socket; Selkies
+        // waits for its data channel and is attached in onDataChannel below.
         if (publisher !== "neko") return;
         detachInputRef.current?.();
         detachInputRef.current = attachNekoInput({
           surface,
           video,
           send: (event, payload) => session.sendPublisherEvent(event, payload),
+        });
+        surface.focus();
+      },
+      onDataChannel: (sendText) => {
+        // neko negotiates a data channel of its own but carries input on the
+        // signaling socket; taking this one over would unbind its input.
+        if (publisherRef.current !== "selkies") return;
+        detachInputRef.current?.();
+        detachInputRef.current = attachSelkiesInput({
+          surface,
+          video,
+          send: sendText,
         });
         surface.focus();
       },
@@ -190,12 +203,6 @@ const StreamWebRTCView = React.forwardRef<
         playsInline
         muted={false}
       />
-
-      {state === "connected" && inputPublisher === "selkies" && (
-        <div className="absolute bottom-2 left-2 px-2 py-1 text-[10px] bg-background/80 border border-border text-muted-foreground">
-          {t("stream.inputUnsupported")}
-        </div>
-      )}
 
       {state !== "connected" && (
         <div

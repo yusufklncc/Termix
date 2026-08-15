@@ -35,6 +35,8 @@ export interface StreamWebRTCOptions {
   onState(state: StreamConnectionState, detail?: string): void;
   /** Fired once the gateway reports which publisher is on the other end. */
   onReady?(publisher: "neko" | "selkies"): void;
+  /** Fired when the publisher's data channel opens (Selkies carries input there). */
+  onDataChannel?(send: (text: string) => void): void;
 }
 
 export interface StreamWebRTCHandle {
@@ -51,6 +53,7 @@ export function connectStreamWebRTC({
   token,
   onState,
   onReady,
+  onDataChannel,
 }: StreamWebRTCOptions): StreamWebRTCHandle {
   const base = buildStreamSignalingBaseUrl({
     isDev: import.meta.env.DEV,
@@ -88,6 +91,19 @@ export function connectStreamWebRTC({
           // bound either way and starts on the first gesture.
         });
       }
+    });
+
+    // Both publishers open a channel from their side (neko negotiates one in
+    // its offer too), so callers must decide by publisher whether this is the
+    // input channel — attaching to it unconditionally would tear down neko's
+    // own input path the moment the channel opens.
+    peer.addEventListener("datachannel", (event) => {
+      const channel = event.channel;
+      channel.addEventListener("open", () => {
+        onDataChannel?.((text) => {
+          if (channel.readyState === "open") channel.send(text);
+        });
+      });
     });
 
     peer.addEventListener("icecandidate", (event) => {

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { mapPointerToRemote } from "../../../features/stream/stream-input";
+import {
+  mapPointerToRemote,
+  scrollMagnitude,
+} from "../../../features/stream/stream-input";
 
 function videoStub(
   videoWidth: number,
@@ -75,5 +78,29 @@ describe("mapPointerToRemote", () => {
       height: 600,
     });
     expect(mapPointerToRemote(video, 10, 10)).toBeNull();
+  });
+});
+
+describe("scrollMagnitude", () => {
+  it("treats a 100px pixel-mode wheel as one notch", () => {
+    expect(scrollMagnitude(100, 0)).toBe(1);
+    expect(scrollMagnitude(-100, 0)).toBe(1);
+  });
+
+  it("scales a larger pixel delta into more notches", () => {
+    expect(scrollMagnitude(300, 0)).toBe(3);
+  });
+
+  it("takes line and page deltas at face value", () => {
+    expect(scrollMagnitude(3, 1)).toBe(3);
+    expect(scrollMagnitude(1, 2)).toBe(1);
+  });
+
+  it("never returns zero for a tiny trackpad delta", () => {
+    expect(scrollMagnitude(4, 0)).toBe(1);
+  });
+
+  it("clamps runaway deltas", () => {
+    expect(scrollMagnitude(99999, 0)).toBe(10);
   });
 });

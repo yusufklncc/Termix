@@ -435,17 +435,24 @@ function sqliteSchemaSql(): string {
   if (cachedSqliteSchema) return cachedSqliteSchema;
 
   const dir = path.resolve(process.cwd(), "drizzle", "sqlite");
-  const file = fs
+  // Every migration in order, not just the newest: 0000 creates the tables and
+  // each later file only carries its own ALTERs.
+  const files = fs
     .readdirSync(dir)
     .filter((name) => name.endsWith(".sql"))
-    .sort()
-    .at(-1);
+    .sort();
 
-  if (!file) throw new Error(`No SQLite migration found in ${dir}`);
+  if (files.length === 0) {
+    throw new Error(`No SQLite migration found in ${dir}`);
+  }
 
-  cachedSqliteSchema = fs
-    .readFileSync(path.join(dir, file), "utf8")
-    .split("--> statement-breakpoint")
+  cachedSqliteSchema = files
+    .map((file) =>
+      fs
+        .readFileSync(path.join(dir, file), "utf8")
+        .split("--> statement-breakpoint")
+        .join("\n"),
+    )
     .join("\n");
 
   return cachedSqliteSchema;

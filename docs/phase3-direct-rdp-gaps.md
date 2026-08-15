@@ -100,7 +100,52 @@ sonra değerlendirilecek. Referans da WebSocket kullanıyor.
 
 ---
 
-## 5. İlk prototipin kapsamı (öneri)
+## 5. Pass-through hook'u — FreeRDP 3 kaynağından doğrulandı
+
+Bu fazın en riskli varsayımı "H.264 NAL'larını decode etmeden alabilir miyiz"
+sorusuydu. Cevap **evet** ve hook noktası net.
+
+`channels/rdpgfx/client/rdpgfx_codec.c`, `rdpgfx_decode_AVC420()`:
+
+```c
+UINT error = rdpgfx_read_h264_metablock(gfx, s, &(h264.meta));  // sadece metablock
+h264.data   = Stream_Pointer(s);                                 // kalan = ham H.264
+h264.length = (UINT32)Stream_GetRemainingLength(s);
+cmd->extra  = (void*)&h264;
+error = logSurfaceCommand(gfx, cmd);                             // → context->SurfaceCommand
+free_h264_metablock(&h264.meta);
+```
+
+Ve `rdpgfx_main.c`, `logSurfaceCommand()`:
+
+```c
+const UINT error = IFCALLRESULT(CHANNEL_RC_OK, context->SurfaceCommand, context, cmd);
+```
+
+Yani FreeRDP yalnızca **metablock'u** (bölge dikdörtgenleri + quant/quality) parse
+ediyor; H.264 bitstream'ine dokunmuyor ve olduğu gibi callback'e veriyor. Decode
+işi daha sonra, GDI'nin `gdi_SurfaceCommand_AVC420` → `avc420_decompress`
+implementasyonunda oluyor — ki biz tam olarak onu değiştireceğiz.
+
+**Hook:** `RdpgfxClientContext`'in `SurfaceCommand` alanına kendi callback'imizi
+yazmak. `codecId == RDPGFX_CODECID_AVC420` olduğunda:
+
+| Elimize gelen                                                   | Ne işe yarar                          |
+| --------------------------------------------------------------- | ------------------------------------- |
+| `cmd->surfaceId`                                                | Hangi yüzey                           |
+| `cmd->left/top/right/bottom`, `width/height`                    | Hedef bölge                           |
+| `((RDPGFX_AVC420_BITMAP_STREAM*)cmd->extra)->data` / `->length` | **Dokunulmamış H.264 bitstream**      |
+| `->meta.numRegionRects`, `->meta.regionRects`                   | Bu karenin güncellediği dikdörtgenler |
+
+**Tuzak:** `free_h264_metablock(&h264.meta)` callback döner dönmez çalışıyor.
+Rect'ler callback içinde kopyalanmalı, referans tutulamaz.
+
+Sunucu tarafında decode/encode adımı yok — CLAUDE.md'nin "bütün mesele bu" dediği
+şart sağlanıyor.
+
+---
+
+## 6. İlk prototipin kapsamı (öneri)
 
 Yukarıdakiler ışığında, "çalışan prototip" için en dar ve en dürüst kapsam:
 

@@ -201,11 +201,17 @@ guacd olmadan gerçek RDP, 60fps hedefi. Riskli.
   Faz 1'in iframe embed modunu kırar. Ses ve progressive codec ilk prototipte kapsam dışı
   bırakılırsa gerekmiyor.
 
-### Karar bekleyenler
+### Kararlar (verildi)
 
-- [ ] Yardımcı process dili: referans Python + C (`librdp_bridge.so`). Termix Node.
-      Referansı olduğu gibi mi alacağız, kendi köprümüzü mü yazacağız?
-- [ ] FreeRDP3 kaynaktan derlemenin Termix Docker imajına maliyeti kabul edilebilir mi?
+- [x] Yardımcı process: **bağımsız C executable**. Python bağımlılığı yok, native addon yok,
+      Node onu spawn eder ve binary wire format'ı soket üzerinden konuşur.
+- [x] Dağıtım: **ayrı sidecar konteyner**, guacd'nin bugünkü konumu gibi. Ana Termix imajı büyümez.
+
+### Pass-through doğrulandı
+
+- [x] FreeRDP 3 kaynağından teyit edildi: `RdpgfxClientContext.SurfaceCommand` callback'i
+      AVC420'de ham H.264 bitstream'ini `cmd->extra` ile veriyor, decode etmeden.
+      Detay ve tuzaklar → `docs/phase3-direct-rdp-gaps.md` §5
 
 ### Backend
 

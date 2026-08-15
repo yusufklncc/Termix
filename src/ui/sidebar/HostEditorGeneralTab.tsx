@@ -8,6 +8,7 @@ import type { Host } from "@/types/ui-types";
 import {
   Globe,
   Monitor,
+  MonitorPlay,
   MousePointerClick,
   Plus,
   Tag,
@@ -128,6 +129,13 @@ export function HostEditorGeneralTab({
               icon: <Terminal className="size-4" />,
               portField: "telnetPort" as const,
             },
+            {
+              proto: "enableStream" as const,
+              label: t("hosts.tabStream"),
+              desc: t("hosts.embeddedStream"),
+              icon: <MonitorPlay className="size-4" />,
+              portField: "sshPort" as const,
+            },
           ].map(({ proto, label, desc, icon }) => {
             const enabled = protocols[proto];
             return (
@@ -233,7 +241,8 @@ export function HostEditorGeneralTab({
       {!protocols.enableSsh &&
         !protocols.enableRdp &&
         !protocols.enableVnc &&
-        !protocols.enableTelnet && (
+        !protocols.enableTelnet &&
+        !protocols.enableStream && (
           <div className="flex items-center gap-3 p-3 border border-border bg-muted/20 text-xs text-muted-foreground">
             <Globe className="size-4 shrink-0 text-muted-foreground/40" />
             <span>{t("hosts.enableAtLeastOneProtocol")}</span>

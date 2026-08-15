@@ -6,6 +6,7 @@ import {
   Folder,
   KeyRound,
   Monitor,
+  MonitorPlay,
   MousePointerClick,
   Network,
   Server,
@@ -25,7 +26,8 @@ export type HostTabId =
   | "host-metrics"
   | "rdp"
   | "vnc"
-  | "telnet";
+  | "telnet"
+  | "stream";
 export type CredentialTabId = "general" | "auth";
 
 type HostTab = {
@@ -75,6 +77,11 @@ export function makeHostTabs(t: (key: string) => string): HostTab[] {
       id: "telnet",
       label: t("hosts.tabTelnet"),
       icon: <Terminal className="size-3" />,
+    },
+    {
+      id: "stream",
+      label: t("hosts.tabStream"),
+      icon: <MonitorPlay className="size-3" />,
     },
   ];
 }

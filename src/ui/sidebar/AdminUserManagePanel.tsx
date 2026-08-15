@@ -120,6 +120,7 @@ export function AdminUserManagePanel({
     enableRdp: false,
     enableVnc: false,
     enableTelnet: false,
+    enableStream: false,
   });
   const [confirmDialog, setConfirmDialog] = useState<{
     message: string;
@@ -387,6 +388,7 @@ export function AdminUserManagePanel({
           if (tab.id === "rdp") return editorProtocols.enableRdp;
           if (tab.id === "vnc") return editorProtocols.enableVnc;
           if (tab.id === "telnet") return editorProtocols.enableTelnet;
+          if (tab.id === "stream") return editorProtocols.enableStream;
           return false;
         })
       : makeCredentialTabs(t);
@@ -760,6 +762,7 @@ export function AdminUserManagePanel({
                         enableRdp: false,
                         enableVnc: false,
                         enableTelnet: false,
+                        enableStream: false,
                       });
                       setEditorTab("general");
                       setEditor({ kind: "host", host: null });
@@ -811,6 +814,7 @@ export function AdminUserManagePanel({
                           enableRdp: host.enableRdp,
                           enableVnc: host.enableVnc,
                           enableTelnet: host.enableTelnet,
+                          enableStream: host.enableStream,
                         });
                         setEditorTab("general");
                         setEditor({ kind: "host", host });

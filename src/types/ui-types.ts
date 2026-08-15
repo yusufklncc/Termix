@@ -156,6 +156,7 @@ export type Host = {
   enableRdp: boolean;
   enableVnc: boolean;
   enableTelnet: boolean;
+  enableStream: boolean;
 
   sshPort: number;
   rdpPort: number;
@@ -182,6 +183,16 @@ export type Host = {
   telnetUser?: string;
   telnetPassword?: string;
   hasTelnetPassword?: boolean;
+
+  streamAuthType?: "none" | "direct" | "credential";
+  streamCredentialId?: string;
+  streamUrl?: string;
+  streamPath?: string;
+  streamUser?: string;
+  streamPassword?: string;
+  hasStreamPassword?: boolean;
+  streamMode?: "embed" | "webrtc";
+  streamPublisher?: "neko" | "selkies";
 
   guacamoleConfig?: Record<string, unknown>;
   forceKeyboardInteractive?: boolean;
@@ -254,6 +265,7 @@ export type TabType =
   | "network_graph"
   | "tmux_monitor" // --- tmux-monitor ---
   | "serial"
+  | "stream"
   | "homepage";
 
 export type SerialConfig = {

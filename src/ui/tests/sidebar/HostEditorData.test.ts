@@ -12,6 +12,7 @@ const sshOnly: HostProtocols = {
   enableRdp: false,
   enableVnc: false,
   enableTelnet: false,
+  enableStream: false,
 };
 
 const rdpOnly: HostProtocols = {
@@ -19,6 +20,7 @@ const rdpOnly: HostProtocols = {
   enableRdp: true,
   enableVnc: false,
   enableTelnet: false,
+  enableStream: false,
 };
 
 const vncOnly: HostProtocols = {
@@ -26,6 +28,7 @@ const vncOnly: HostProtocols = {
   enableRdp: false,
   enableVnc: true,
   enableTelnet: false,
+  enableStream: false,
 };
 
 const telnetOnly: HostProtocols = {
@@ -33,6 +36,15 @@ const telnetOnly: HostProtocols = {
   enableRdp: false,
   enableVnc: false,
   enableTelnet: true,
+  enableStream: false,
+};
+
+const streamOnly: HostProtocols = {
+  enableSsh: false,
+  enableRdp: false,
+  enableVnc: false,
+  enableTelnet: false,
+  enableStream: true,
 };
 
 describe("omitOwnerSshAuthFromSharedEdit", () => {
@@ -286,5 +298,83 @@ describe("RDP/VNC/Telnet password persistence indicator", () => {
     const payload = buildHostEditorPayload(form, telnetOnly);
 
     expect(payload.telnetPassword).toBeNull();
+  });
+
+  it("seeds a sentinel value when the host reports a saved stream password", () => {
+    const host = {
+      hasStreamPassword: true,
+      streamAuthType: "direct",
+    } as Host;
+    const form = createHostEditorForm(host);
+
+    expect(form.streamPassword).toBe("existing_stream_password");
+  });
+
+  it("does not send the stream sentinel back to the backend unchanged", () => {
+    const host = {
+      hasStreamPassword: true,
+      streamAuthType: "direct",
+    } as Host;
+    const form = { ...createHostEditorForm(host) };
+
+    const payload = buildHostEditorPayload(form, streamOnly);
+
+    expect(payload.streamPassword).toBeNull();
+  });
+});
+
+describe("buildHostEditorPayload for stream hosts", () => {
+  it("derives ip and port from the stream URL", () => {
+    const form = {
+      ...createHostEditorForm(null),
+      streamUrl: "https://desktop.example.com:8443",
+      streamPath: "/session",
+    };
+
+    const payload = buildHostEditorPayload(form, streamOnly);
+
+    expect(payload.connectionType).toBe("stream");
+    expect(payload.enableStream).toBe(true);
+    expect(payload.ip).toBe("desktop.example.com");
+    expect(payload.port).toBe(8443);
+    expect(payload.streamUrl).toBe("https://desktop.example.com:8443");
+    expect(payload.streamPath).toBe("/session");
+  });
+
+  it("clears stream fields when the protocol is disabled", () => {
+    const form = {
+      ...createHostEditorForm(null),
+      streamUrl: "https://desktop.example.com",
+      streamPath: "/session",
+      streamAuthType: "direct" as const,
+      streamUser: "admin",
+      streamPassword: "secret",
+    };
+
+    const payload = buildHostEditorPayload(form, sshOnly);
+
+    expect(payload.enableStream).toBe(false);
+    expect(payload.streamUrl).toBeNull();
+    expect(payload.streamPath).toBeNull();
+    expect(payload.streamAuthType).toBeNull();
+    expect(payload.streamUser).toBeNull();
+    expect(payload.streamPassword).toBeNull();
+  });
+
+  it("keeps the credential reference and drops direct fields in credential mode", () => {
+    const form = {
+      ...createHostEditorForm(null),
+      streamUrl: "https://desktop.example.com",
+      streamAuthType: "credential" as const,
+      streamCredentialId: "12",
+      streamUser: "admin",
+      streamPassword: "secret",
+    };
+
+    const payload = buildHostEditorPayload(form, streamOnly);
+
+    expect(payload.streamCredentialId).toBe(12);
+    expect(payload.streamUser).toBeNull();
+    expect(payload.streamPassword).toBeNull();
   });
 });

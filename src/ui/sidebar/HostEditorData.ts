@@ -1,4 +1,5 @@
 import { TERMINAL_THEMES } from "@/lib/terminal-themes";
+import { parseStreamEndpoint } from "@/features/stream/stream-url";
 import type { Host } from "@/types/ui-types";
 import type { SSHHostData } from "@/types";
 import type { HostDefaults } from "@/api/settings-api";
@@ -10,6 +11,7 @@ export type HostProtocols = {
   enableRdp: boolean;
   enableVnc: boolean;
   enableTelnet: boolean;
+  enableStream: boolean;
 };
 
 export type HostAuthType = Host["authType"];
@@ -215,6 +217,21 @@ export function createHostEditorForm(
     telnetAuthType: (host?.telnetAuthType ??
       (host?.telnetCredentialId ? "credential" : "direct")) as
       "direct" | "credential",
+    streamUrl: host?.streamUrl ?? "",
+    streamPath: host?.streamPath ?? "",
+    streamUser: host?.streamUser ?? "",
+    streamPassword: host?.hasStreamPassword
+      ? "existing_stream_password"
+      : (host?.streamPassword ?? ""),
+    streamCredentialId:
+      host?.streamCredentialId != null ? String(host.streamCredentialId) : "",
+    streamAuthType: (host?.streamAuthType ??
+      (host?.streamCredentialId ? "credential" : "none")) as
+      "none" | "direct" | "credential",
+    streamMode: (host?.streamMode ?? "embed") as "embed" | "webrtc",
+    streamPublisher: (host?.streamPublisher ?? "neko") as
+      | "neko"
+      | "selkies",
     guacamoleConfig: host?.guacamoleConfig ?? {},
     statsConfig: host?.statsConfig ?? {
       statusCheckEnabled: d?.statusCheckEnabled ?? true,
@@ -285,6 +302,14 @@ export function buildHostEditorPayload(
   const usesPassword = form.authType === "password";
   const usesAgent = form.authType === "agent";
 
+  const streamOnly =
+    protocols.enableStream &&
+    !protocols.enableSsh &&
+    !protocols.enableRdp &&
+    !protocols.enableVnc &&
+    !protocols.enableTelnet;
+  const streamEndpoint = parseStreamEndpoint(form.streamUrl);
+
   return {
     connectionType: protocols.enableSsh
       ? "ssh"
@@ -292,16 +317,22 @@ export function buildHostEditorPayload(
         ? "rdp"
         : protocols.enableVnc
           ? "vnc"
-          : "telnet",
+          : protocols.enableTelnet
+            ? "telnet"
+            : "stream",
     name: form.name,
-    ip: form.ip,
+    // A stream host is identified by its URL, but ip/port stay populated so the
+    // sidebar, search and host list keep rendering it like any other host.
+    ip: streamOnly ? streamEndpoint.host || form.ip : form.ip,
     port: protocols.enableSsh
       ? Number(form.sshPort)
       : protocols.enableRdp
         ? Number(form.rdpPort)
         : protocols.enableVnc
           ? Number(form.vncPort)
-          : Number(form.telnetPort),
+          : protocols.enableTelnet
+            ? Number(form.telnetPort)
+            : streamEndpoint.port,
     username: form.username,
     folder: form.folder,
     tags: form.tags,
@@ -358,6 +389,7 @@ export function buildHostEditorPayload(
     enableRdp: protocols.enableRdp,
     enableVnc: protocols.enableVnc,
     enableTelnet: protocols.enableTelnet,
+    enableStream: protocols.enableStream,
     sshPort: Number(form.sshPort),
     rdpPort: Number(form.rdpPort),
     vncPort: Number(form.vncPort),
@@ -416,6 +448,30 @@ export function buildHostEditorPayload(
       form.telnetAuthType === "direct" &&
       form.telnetPassword !== "existing_telnet_password"
         ? form.telnetPassword || null
+        : null,
+    streamUrl: protocols.enableStream ? form.streamUrl || null : null,
+    streamPath: protocols.enableStream ? form.streamPath || null : null,
+    streamAuthType: protocols.enableStream ? form.streamAuthType : null,
+    streamCredentialId:
+      protocols.enableStream &&
+      form.streamAuthType === "credential" &&
+      form.streamCredentialId
+        ? Number(form.streamCredentialId)
+        : null,
+    streamUser:
+      protocols.enableStream && form.streamAuthType === "direct"
+        ? form.streamUser || null
+        : null,
+    streamMode: protocols.enableStream ? form.streamMode : null,
+    streamPublisher:
+      protocols.enableStream && form.streamMode === "webrtc"
+        ? form.streamPublisher
+        : null,
+    streamPassword:
+      protocols.enableStream &&
+      form.streamAuthType === "direct" &&
+      form.streamPassword !== "existing_stream_password"
+        ? form.streamPassword || null
         : null,
     jumpHosts: form.jumpHosts,
     portKnockSequence: form.portKnockSequence,

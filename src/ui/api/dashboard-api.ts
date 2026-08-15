@@ -58,7 +58,8 @@ export async function logActivity(
     | "docker"
     | "rdp"
     | "vnc"
-    | "telnet",
+    | "telnet"
+    | "stream",
   hostId: number,
   hostName: string,
 ): Promise<{ message: string; id: number | string }> {

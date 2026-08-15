@@ -6,6 +6,7 @@ import {
   Network,
   Server,
   Monitor,
+  MonitorPlay,
   Tv,
   Phone,
   Zap,
@@ -32,6 +33,7 @@ const TYPE_ICONS: Record<QuickConnectType, React.ReactNode> = {
   rdp: <Monitor size={12} />,
   vnc: <Tv size={12} />,
   telnet: <Phone size={12} />,
+  stream: <MonitorPlay size={12} />,
 };
 
 type EnableCheck = (host: SSHHostWithStatus) => boolean;
@@ -45,6 +47,7 @@ const TYPE_ENABLED: Record<QuickConnectType, EnableCheck> = {
   rdp: (h) => !!h.enableRdp,
   vnc: (h) => !!h.enableVnc,
   telnet: (h) => !!h.enableTelnet,
+  stream: (h) => !!h.enableStream,
 };
 
 function statusDotClass(host: SSHHostWithStatus): string {

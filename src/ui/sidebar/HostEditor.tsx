@@ -80,6 +80,7 @@ import {
   HostEditorTelnetTab,
   HostEditorVncTab,
 } from "./HostEditorGuacamoleTabs";
+import { HostEditorStreamTab } from "./HostEditorStreamTab";
 import { HostStatsTab } from "./HostEditorStatsTab";
 import { VaultProfileManager } from "./VaultProfileManager";
 import { findHostByTunnelEndpoint } from "@/features/tunnel/tunnel-endpoints";
@@ -386,6 +387,7 @@ export function HostEditor({
       enableRdp: "rdp",
       enableVnc: "vnc",
       enableTelnet: "telnet",
+      enableStream: "stream",
     };
     const sshGroupTabs = [
       "ssh",
@@ -2322,6 +2324,15 @@ export function HostEditor({
               form={form}
               setField={setField}
               setGuacField={setGuacField}
+              host={host}
+              credentials={credentials}
+            />
+          )}
+
+          {activeTab === "stream" && (
+            <HostEditorStreamTab
+              form={form}
+              setField={setField}
               host={host}
               credentials={credentials}
             />

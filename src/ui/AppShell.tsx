@@ -960,6 +960,7 @@ export function AppShell({
                 if (saved.tabType === "rdp" && !host.enableRdp) continue;
                 if (saved.tabType === "vnc" && !host.enableVnc) continue;
                 if (saved.tabType === "telnet" && !host.enableTelnet) continue;
+                if (saved.tabType === "stream" && !host.enableStream) continue;
               }
 
               // Singleton tabs use their type as the stable ID; host-bound tabs get a unique ID
@@ -1231,6 +1232,7 @@ export function AppShell({
       enableRdp: false,
       enableVnc: false,
       enableTelnet: false,
+      enableStream: false,
       sshPort: 22,
       rdpPort: 3389,
       vncPort: 5900,
@@ -1414,6 +1416,9 @@ export function AppShell({
       window.dispatchEvent(
         new CustomEvent("termix:refresh-guacamole", { detail: { tabId: id } }),
       );
+    } else if (tab.type === "stream") {
+      const ref = tab.terminalRef?.current;
+      ref?.reconnect?.();
     }
   }
 
@@ -1802,6 +1807,7 @@ export function AppShell({
                   enableRdp: false,
                   enableVnc: false,
                   enableTelnet: false,
+                  enableStream: false,
                   sshPort: 22,
                   rdpPort: 3389,
                   vncPort: 5900,

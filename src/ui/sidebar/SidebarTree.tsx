@@ -29,6 +29,7 @@ import {
   MemoryStick,
   MessagesSquare,
   Monitor,
+  MonitorPlay,
   MoreHorizontal,
   MousePointerClick,
   Network,
@@ -108,6 +109,7 @@ function buildStatusTooltip(host: Host, online: boolean): string {
   if (host.enableRdp) protocols.push("RDP");
   if (host.enableVnc) protocols.push("VNC");
   if (host.enableTelnet) protocols.push("Telnet");
+  if (host.enableStream) protocols.push("Stream");
   if (protocols.length === 0) return statusLabel;
   return `${protocols.join(", ")}: ${statusLabel}`;
 }
@@ -436,12 +438,14 @@ export function HostItem({
               host.enableRdp,
               host.enableVnc,
               host.enableTelnet,
+              host.enableStream,
             ].filter(Boolean).length;
             if (actionCount + otherProtocols <= 1) {
               if (host.enableSsh) onOpenTab("terminal");
               else if (host.enableRdp) onOpenTab("rdp");
               else if (host.enableVnc) onOpenTab("vnc");
               else if (host.enableTelnet) onOpenTab("telnet");
+              else if (host.enableStream) onOpenTab("stream");
               else onOpenTab("terminal");
             } else {
               onTrayOpenChange?.(!isTrayOpen);
@@ -452,6 +456,7 @@ export function HostItem({
           else if (host.enableRdp) onOpenTab("rdp");
           else if (host.enableVnc) onOpenTab("vnc");
           else if (host.enableTelnet) onOpenTab("telnet");
+          else if (host.enableStream) onOpenTab("stream");
           else onOpenTab("terminal");
         }}
       >
@@ -552,7 +557,10 @@ export function HostItem({
                   </button>
                 ))}
                 {host.enableSsh &&
-                  (host.enableRdp || host.enableVnc || host.enableTelnet) &&
+                  (host.enableRdp ||
+                    host.enableVnc ||
+                    host.enableTelnet ||
+                    host.enableStream) &&
                   getSshActions(host).length > 0 && (
                     <div className="w-px h-3.5 bg-border/60 mx-0.5 shrink-0" />
                   )}
@@ -590,6 +598,18 @@ export function HostItem({
                     className="flex items-center justify-center size-7 rounded text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10 transition-colors"
                   >
                     <MessagesSquare className="size-3.5" />
+                  </button>
+                )}
+                {host.enableStream && (
+                  <button
+                    title="Stream"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenTab("stream");
+                    }}
+                    className="flex items-center justify-center size-7 rounded text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10 transition-colors"
+                  >
+                    <MonitorPlay className="size-3.5" />
                   </button>
                 )}
                 {host.macAddress && (
@@ -766,7 +786,10 @@ export function HostItem({
                   </button>
                 ))}
                 {host.enableSsh &&
-                  (host.enableRdp || host.enableVnc || host.enableTelnet) &&
+                  (host.enableRdp ||
+                    host.enableVnc ||
+                    host.enableTelnet ||
+                    host.enableStream) &&
                   getSshActions(host).length > 0 && (
                     <div className="w-px h-3.5 bg-border/60 mx-0.5 shrink-0" />
                   )}
@@ -804,6 +827,18 @@ export function HostItem({
                     className="flex items-center justify-center size-7 rounded text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10 transition-colors"
                   >
                     <MessagesSquare className="size-3.5" />
+                  </button>
+                )}
+                {host.enableStream && (
+                  <button
+                    title="Stream"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenTab("stream");
+                    }}
+                    className="flex items-center justify-center size-7 rounded text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10 transition-colors"
+                  >
+                    <MonitorPlay className="size-3.5" />
                   </button>
                 )}
                 {host.macAddress && (
@@ -1000,6 +1035,7 @@ export function HostItem({
           else if (host.enableRdp) onOpenTab("rdp");
           else if (host.enableVnc) onOpenTab("vnc");
           else if (host.enableTelnet) onOpenTab("telnet");
+          else if (host.enableStream) onOpenTab("stream");
           else onOpenTab("terminal");
         };
         // On touch devices, open the action tray so the per-protocol buttons are
@@ -1136,7 +1172,10 @@ export function HostItem({
               </button>
             ))}
             {host.enableSsh &&
-              (host.enableRdp || host.enableVnc || host.enableTelnet) &&
+              (host.enableRdp ||
+                host.enableVnc ||
+                host.enableTelnet ||
+                host.enableStream) &&
               getSshActions(host).length > 0 && (
                 <div className="w-px h-3.5 bg-border/60 mx-0.5 shrink-0" />
               )}
@@ -1174,6 +1213,18 @@ export function HostItem({
                 className="flex items-center justify-center size-7 rounded text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10 transition-colors"
               >
                 <MessagesSquare className="size-3.5" />
+              </button>
+            )}
+            {host.enableStream && (
+              <button
+                title="Stream"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenTab("stream");
+                }}
+                className="flex items-center justify-center size-7 rounded text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10 transition-colors"
+              >
+                <MonitorPlay className="size-3.5" />
               </button>
             )}
             {host.macAddress && (
@@ -1255,7 +1306,10 @@ export function HostItem({
                   </button>
                 ))}
                 {host.enableSsh &&
-                  (host.enableRdp || host.enableVnc || host.enableTelnet) &&
+                  (host.enableRdp ||
+                    host.enableVnc ||
+                    host.enableTelnet ||
+                    host.enableStream) &&
                   getSshActions(host).length > 0 && (
                     <div className="w-px h-3.5 bg-border/60 mx-0.5 shrink-0" />
                   )}
@@ -1293,6 +1347,18 @@ export function HostItem({
                     className="flex items-center justify-center size-7 rounded text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10 transition-colors"
                   >
                     <MessagesSquare className="size-3.5" />
+                  </button>
+                )}
+                {host.enableStream && (
+                  <button
+                    title="Stream"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenTab("stream");
+                    }}
+                    className="flex items-center justify-center size-7 rounded text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10 transition-colors"
+                  >
+                    <MonitorPlay className="size-3.5" />
                   </button>
                 )}
                 {host.macAddress && (
@@ -2134,6 +2200,7 @@ export function SidebarTree({
         enableRdp: host.enableRdp,
         enableVnc: host.enableVnc,
         enableTelnet: host.enableTelnet,
+        enableStream: host.enableStream,
         enableTerminal: host.enableTerminal,
         enableTunnel: host.enableTunnel,
         enableFileManager: host.enableFileManager,
@@ -2570,6 +2637,7 @@ export function SidebarTree({
                   else if (host.enableRdp) onOpenTab(host, "rdp");
                   else if (host.enableVnc) onOpenTab(host, "vnc");
                   else if (host.enableTelnet) onOpenTab(host, "telnet");
+                  else if (host.enableStream) onOpenTab(host, "stream");
                 }
                 setSelectedHostIds(new Set());
                 onToggleSelectionMode();

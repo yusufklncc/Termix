@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   LayoutGrid,
   Monitor,
+  MonitorPlay,
   Network,
   Server,
   Settings,
@@ -23,6 +24,7 @@ import type {
   TerminalHostConfig,
 } from "@/features/terminal/Terminal";
 import type { GuacamoleAppHandle } from "@/features/guacamole/GuacamoleApp";
+import type { StreamAppHandle } from "@/features/stream/StreamApp";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { Tab, TabType, Host } from "@/types/ui-types";
 import type { SSHHost } from "@/types";
@@ -92,6 +94,11 @@ const NetworkGraphCard = lazy(() =>
 const Serial = lazy(() =>
   import("@/features/serial/Serial").then((m) => ({
     default: m.Serial,
+  })),
+);
+const StreamApp = lazy(() =>
+  import("@/features/stream/StreamApp").then((m) => ({
+    default: m.default,
   })),
 );
 
@@ -195,6 +202,8 @@ export function tabIcon(type: TabType) {
       return <Layers className="size-3.5" />;
     case "serial":
       return <Usb className="size-3.5" />;
+    case "stream":
+      return <MonitorPlay className="size-3.5" />;
     case "homepage":
       return <LayoutGrid className="size-3.5" />;
   }
@@ -417,6 +426,20 @@ export function renderTabContent(
           config={tab.serialConfig}
           isVisible={isVisible}
           instanceId={tab.instanceId}
+        />,
+      );
+
+    case "stream":
+      if (!host)
+        return (
+          <EmptyState icon={MonitorPlay} messageKey="stream.noHostSelected" />
+        );
+      return withTabSuspense(
+        <StreamApp
+          ref={tab.terminalRef as React.Ref<StreamAppHandle>}
+          hostId={host.id}
+          tabId={tab.id}
+          isVisible={isVisible}
         />,
       );
 

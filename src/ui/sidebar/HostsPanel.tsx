@@ -53,7 +53,7 @@ import {
 type FilterState = {
   status: ("online" | "offline" | "pinned")[];
   authType: ("password" | "key" | "credential" | "none" | "opkssh")[];
-  protocol: ("ssh" | "rdp" | "vnc" | "telnet")[];
+  protocol: ("ssh" | "rdp" | "vnc" | "telnet" | "stream")[];
   features: ("terminal" | "fileManager" | "tunnel" | "docker")[];
   tags: string[];
 };
@@ -89,6 +89,7 @@ function hostGroupNames(host: Host, key: GroupKey): string[] {
       if (host.enableRdp) protos.push("rdp");
       if (host.enableVnc) protos.push("vnc");
       if (host.enableTelnet) protos.push("telnet");
+      if (host.enableStream) protos.push("stream");
       return protos.length > 0 ? protos : ["__none__"];
     }
     case "auth":
@@ -143,7 +144,8 @@ function hostPassesFilters(host: Host, filters: FilterState): boolean {
       (filters.protocol.includes("ssh") && host.enableSsh) ||
       (filters.protocol.includes("rdp") && host.enableRdp) ||
       (filters.protocol.includes("vnc") && host.enableVnc) ||
-      (filters.protocol.includes("telnet") && host.enableTelnet);
+      (filters.protocol.includes("telnet") && host.enableTelnet) ||
+      (filters.protocol.includes("stream") && host.enableStream);
     if (!ok) return false;
   }
   if (filters.features.length > 0) {
@@ -458,6 +460,8 @@ export function HostsPanel({
                     enableVnc: h.enableVnc ?? h.connectionType === "vnc",
                     enableTelnet:
                       h.enableTelnet ?? h.connectionType === "telnet",
+                    enableStream:
+                      h.enableStream ?? h.connectionType === "stream",
                   }),
                 );
                 const result = await bulkImportSSHHosts(

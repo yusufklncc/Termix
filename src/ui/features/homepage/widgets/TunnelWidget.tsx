@@ -86,6 +86,7 @@ function TunnelWidget({
     enableRdp: host.enableRdp ?? false,
     enableVnc: host.enableVnc ?? false,
     enableTelnet: host.enableTelnet ?? false,
+    enableStream: host.enableStream ?? false,
     sshPort: host.sshPort ?? host.port,
     rdpPort: host.rdpPort ?? 3389,
     vncPort: host.vncPort ?? 5900,

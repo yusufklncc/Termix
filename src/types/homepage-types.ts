@@ -225,7 +225,8 @@ export type QuickConnectType =
   | "host-metrics"
   | "rdp"
   | "vnc"
-  | "telnet";
+  | "telnet"
+  | "stream";
 
 export interface QuickConnectConfig {
   hostIds: number[];

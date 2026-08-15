@@ -26,7 +26,16 @@ import { isElectron } from "@/lib/electron";
 import type { Tab, TabType, SplitMode } from "@/types/ui-types";
 import { SPLIT_MODES, PANE_COUNTS } from "@/lib/theme";
 
-const CONNECTION_TAB_TYPES: TabType[] = ["terminal", "rdp", "vnc", "telnet"];
+const CONNECTION_TAB_TYPES: TabType[] = [
+  "terminal",
+  "rdp",
+  "vnc",
+  "telnet",
+  "stream",
+];
+// A stream tab embeds a page Termix does not serve, so there is no session to
+// hand a second viewer. Sharing stays off for it while refresh stays on.
+const SHAREABLE_TAB_TYPES: TabType[] = ["terminal", "rdp", "vnc", "telnet"];
 
 export function TabBar({
   tabs,
@@ -355,7 +364,7 @@ export function TabBar({
                         <RefreshCw className="size-3" />
                       </button>
                     )}
-                    {CONNECTION_TAB_TYPES.includes(tab.type) && onOpenShare && (
+                    {SHAREABLE_TAB_TYPES.includes(tab.type) && onOpenShare && (
                       <button
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={(e) => {

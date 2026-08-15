@@ -120,6 +120,7 @@ export function HostManager({
     enableRdp: false,
     enableVnc: false,
     enableTelnet: false,
+    enableStream: false,
   });
   const hostsRef = useRef<Host[]>([]);
   useEffect(() => {
@@ -151,6 +152,7 @@ export function HostManager({
           enableRdp: host.enableRdp,
           enableVnc: host.enableVnc,
           enableTelnet: host.enableTelnet,
+          enableStream: host.enableStream,
         });
         return true;
       }
@@ -209,6 +211,7 @@ export function HostManager({
           enableRdp: false,
           enableVnc: false,
           enableTelnet: false,
+          enableStream: false,
         });
         setActiveHostTab("general");
       } else if (action === "add-credential") {
@@ -229,6 +232,7 @@ export function HostManager({
         enableRdp: false,
         enableVnc: false,
         enableTelnet: false,
+        enableStream: false,
       });
       setActiveHostTab("general");
     };
@@ -249,6 +253,7 @@ export function HostManager({
           enableRdp: host.enableRdp,
           enableVnc: host.enableVnc,
           enableTelnet: host.enableTelnet,
+          enableStream: host.enableStream,
         });
       }
     };
@@ -313,6 +318,7 @@ export function HostManager({
           if (tab.id === "rdp") return editingProtocols.enableRdp;
           if (tab.id === "vnc") return editingProtocols.enableVnc;
           if (tab.id === "telnet") return editingProtocols.enableTelnet;
+          if (tab.id === "stream") return editingProtocols.enableStream;
           return false;
         })
       : makeCredentialTabs(t);

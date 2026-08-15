@@ -64,7 +64,7 @@ export interface LDAPProviderConfig {
 // HOST TYPES (SSH, RDP, VNC, Telnet)
 // ============================================================================
 
-export type ConnectionType = "ssh" | "rdp" | "vnc" | "telnet";
+export type ConnectionType = "ssh" | "rdp" | "vnc" | "telnet" | "stream";
 export type SSHAuthType =
   "password" | "key" | "credential" | "none" | "opkssh" | "tailscale";
 
@@ -184,7 +184,7 @@ export interface Host {
     delay?: number;
   }>;
 
-  connectionType?: "ssh" | "rdp" | "vnc" | "telnet";
+  connectionType?: "ssh" | "rdp" | "vnc" | "telnet" | "stream";
   domain?: string;
   security?: string;
   ignoreCert?: boolean;
@@ -195,6 +195,7 @@ export interface Host {
   enableRdp?: boolean;
   enableVnc?: boolean;
   enableTelnet?: boolean;
+  enableStream?: boolean;
   sshPort?: number;
   rdpPort?: number;
   vncPort?: number;
@@ -214,6 +215,14 @@ export interface Host {
   rdpAuthType?: "direct" | "credential" | "none" | null;
   vncAuthType?: "direct" | "credential" | null;
   telnetAuthType?: "direct" | "credential" | null;
+  streamUrl?: string;
+  streamPath?: string;
+  streamUser?: string;
+  streamPassword?: string;
+  streamCredentialId?: number | null;
+  streamAuthType?: "none" | "direct" | "credential" | null;
+  streamMode?: "embed" | "webrtc" | null;
+  streamPublisher?: "neko" | "selkies" | null;
   createdAt: string;
   updatedAt: string;
 
@@ -309,7 +318,7 @@ export interface HostData {
     delay?: number;
   }>;
 
-  connectionType?: "ssh" | "rdp" | "vnc" | "telnet";
+  connectionType?: "ssh" | "rdp" | "vnc" | "telnet" | "stream";
   domain?: string;
   security?: string;
   ignoreCert?: boolean;
@@ -320,6 +329,7 @@ export interface HostData {
   enableRdp?: boolean;
   enableVnc?: boolean;
   enableTelnet?: boolean;
+  enableStream?: boolean;
   sshPort?: number;
   rdpPort?: number;
   vncPort?: number;
@@ -339,6 +349,14 @@ export interface HostData {
   rdpAuthType?: "direct" | "credential" | "none" | null;
   vncAuthType?: "direct" | "credential" | null;
   telnetAuthType?: "direct" | "credential" | null;
+  streamUrl?: string;
+  streamPath?: string;
+  streamUser?: string;
+  streamPassword?: string;
+  streamCredentialId?: number | null;
+  streamAuthType?: "none" | "direct" | "credential" | null;
+  streamMode?: "embed" | "webrtc" | null;
+  streamPublisher?: "neko" | "selkies" | null;
 }
 
 export type SSHHost = Host;

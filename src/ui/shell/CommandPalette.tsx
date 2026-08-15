@@ -386,7 +386,9 @@ export function CommandPalette({
                                     ? "vnc"
                                     : host.enableTelnet
                                       ? "telnet"
-                                      : "terminal";
+                                      : host.enableStream
+                                        ? "stream"
+                                        : "terminal";
                               onOpenTab(type, host.name);
                             })
                           }
@@ -442,7 +444,8 @@ export function CommandPalette({
                             {host.enableSsh &&
                               (host.enableRdp ||
                                 host.enableVnc ||
-                                host.enableTelnet) && (
+                                host.enableTelnet ||
+                                host.enableStream) && (
                                 <div className="w-px h-3.5 bg-border/60 mx-0.5 shrink-0" />
                               )}
                             {host.enableRdp && (

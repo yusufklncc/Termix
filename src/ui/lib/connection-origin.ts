@@ -16,6 +16,9 @@ interface OriginResolvableHost {
  * embedded backend. Serial always resolves to "local" -- the hardware is
  * physically attached to this desktop machine. Everything else follows the
  * host's own override if set, falling back to the desktop-wide default.
+ *
+ * "stream" is deliberately absent: the browser loads the embed URL directly,
+ * so no Termix backend sits in that path and the origin never applies.
  */
 export async function resolveConnectionOrigin(
   host: OriginResolvableHost,

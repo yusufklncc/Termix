@@ -252,6 +252,16 @@ async function provisionLocalDesktopUserIfNeeded(): Promise<void> {
         });
     }
 
+    // WebRTC signaling gateway for "stream" hosts in webrtc mode. Independent
+    // of guacd, so it loads regardless of the Guacamole setting above; a
+    // failure here must not take the rest of the backend down with it.
+    import("./hosts/webrtc/index.js").catch((error) => {
+      systemLogger.warn("Failed to initialize WebRTC signaling gateway", {
+        operation: "webrtc_init_skip",
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    });
+
     const { startAnalyticsHeartbeat } = await import("./utils/analytics.js");
     startAnalyticsHeartbeat();
 

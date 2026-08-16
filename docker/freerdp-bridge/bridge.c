@@ -545,14 +545,17 @@ static BOOL tx_pre_connect(freerdp* instance)
 
 	/* There is no client-side bitrate or frame rate knob in RDP: the server's
 	 * encoder decides, which is the whole point of a pass-through. What the
-	 * client does get to say is how much network it thinks it has, and Windows
-	 * picks quality and frame rate from that.
+	 * client does get to say is how much network it assumes, and Windows picks
+	 * quality and frame rate from that.
 	 *
-	 * Left alone, RDP measures the link and adapts. That is the right default
-	 * over a real WAN, but it also means a link with jitter -- Wi-Fi -- gets a
-	 * cautious answer. BRIDGE_RDP_NETWORK=lan says "assume a LAN" instead, the
-	 * same thing xfreerdp /network:lan does. Unset keeps FreeRDP's behaviour so
-	 * the two can be compared rather than assumed. */
+	 * freerdp_set_connection_type does the whole job -- the field plus the
+	 * visual settings that go with it. Setting the field by hand skips those.
+	 *
+	 * NetworkAutoDetect is deliberately left alone. Forcing it off alongside a
+	 * LAN hint killed every session immediately after the first surface
+	 * command, and FreeRDP itself pairs CONNECTION_TYPE_LAN with autodetect
+	 * still on (client/common/cmdline.c), so turning it off was never part of
+	 * what a connection type means. */
 	const char* networkEnv = getenv("BRIDGE_RDP_NETWORK");
 	if (networkEnv && *networkEnv)
 	{
@@ -571,15 +574,10 @@ static BOOL tx_pre_connect(freerdp* instance)
 		if (connectionType == 0)
 			fprintf(stderr, "[%s] BRIDGE_RDP_NETWORK='%s' not recognised, ignoring\n", TAG,
 			        networkEnv);
+		else if (!freerdp_set_connection_type(settings, connectionType))
+			return FALSE;
 		else
-		{
-			const BOOL autoDetect = connectionType == CONNECTION_TYPE_AUTODETECT;
-			if (!freerdp_settings_set_uint32(settings, FreeRDP_ConnectionType, connectionType) ||
-			    !freerdp_settings_set_bool(settings, FreeRDP_NetworkAutoDetect, autoDetect))
-				return FALSE;
-			fprintf(stderr, "[%s] network hint '%s' (type=%u, autodetect=%s)\n", TAG, networkEnv,
-			        connectionType, autoDetect ? "on" : "off");
-		}
+			fprintf(stderr, "[%s] network hint '%s' (type=%u)\n", TAG, networkEnv, connectionType);
 		fflush(stderr);
 	}
 

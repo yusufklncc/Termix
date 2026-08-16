@@ -121,75 +121,115 @@ static void wire_error(termixContext* ctx, const char* message)
 /* graphics pipeline callbacks                                         */
 /* ------------------------------------------------------------------ */
 
-static void tx_log_once(RdpgfxClientContext* gfx, const char* name);
+/*
+ * FreeRDP's own pipeline is installed first and then partly overridden.
+ *
+ * Replacing the whole callback set was tried and does not work: the server
+ * drops the session a couple of seconds in, before any surface command, while
+ * the same host stays connected when gdi_graphics_pipeline_init owns the
+ * channel. The GDI does bookkeeping the channel depends on -- surface
+ * registration, cache slots, the reset/resize path -- and reimplementing all of
+ * it is neither necessary nor what CLAUDE.md asks for.
+ *
+ * So the GDI keeps the channel, and DeactivateClientDecoding leaves its
+ * SurfaceCommand null, which is exactly the slot the pass-through needs. The
+ * frame callbacks are chained rather than replaced: ours emit the wire message,
+ * then hand back to the GDI's.
+ *
+ * gfx->custom belongs to the GDI, so the session is reached through a file
+ * static instead. One session per process makes that safe.
+ */
+
+static termixContext* g_session = NULL;
+
+static pcRdpgfxResetGraphics gdi_ResetGraphicsFn = NULL;
+static pcRdpgfxCreateSurface gdi_CreateSurfaceFn = NULL;
+static pcRdpgfxDeleteSurface gdi_DeleteSurfaceFn = NULL;
+static pcRdpgfxMapSurfaceToOutput gdi_MapSurfaceToOutputFn = NULL;
+static pcRdpgfxStartFrame gdi_StartFrameFn = NULL;
+static pcRdpgfxEndFrame gdi_EndFrameFn = NULL;
 
 static UINT tx_ResetGraphics(RdpgfxClientContext* gfx, const RDPGFX_RESET_GRAPHICS_PDU* pdu)
 {
-	termixContext* ctx = (termixContext*)gfx->custom;
-	tx_log_once(gfx, "tx_ResetGraphics");
-	BYTE payload[8];
-	put_u32(payload, pdu->width);
-	put_u32(payload + 4, pdu->height);
-	ctx->desktopWidth = pdu->width;
-	ctx->desktopHeight = pdu->height;
-	wire_send(ctx, "HELO", payload, sizeof(payload));
-	return CHANNEL_RC_OK;
+	termixContext* ctx = g_session;
+	if (ctx)
+	{
+		BYTE payload[8];
+		put_u32(payload, pdu->width);
+		put_u32(payload + 4, pdu->height);
+		ctx->desktopWidth = pdu->width;
+		ctx->desktopHeight = pdu->height;
+		wire_send(ctx, "HELO", payload, sizeof(payload));
+		fprintf(stderr, "[%s] reset graphics %ux%u\n", TAG, pdu->width, pdu->height);
+		fflush(stderr);
+	}
+	return gdi_ResetGraphicsFn ? gdi_ResetGraphicsFn(gfx, pdu) : CHANNEL_RC_OK;
 }
 
 static UINT tx_CreateSurface(RdpgfxClientContext* gfx, const RDPGFX_CREATE_SURFACE_PDU* pdu)
 {
-	termixContext* ctx = (termixContext*)gfx->custom;
-	tx_log_once(gfx, "tx_CreateSurface");
-	BYTE payload[7];
-	put_u16(payload, pdu->surfaceId);
-	put_u16(payload + 2, pdu->width);
-	put_u16(payload + 4, pdu->height);
-	payload[6] = (BYTE)pdu->pixelFormat;
-	wire_send(ctx, "SURF", payload, sizeof(payload));
-	return CHANNEL_RC_OK;
+	termixContext* ctx = g_session;
+	if (ctx)
+	{
+		BYTE payload[7];
+		put_u16(payload, pdu->surfaceId);
+		put_u16(payload + 2, pdu->width);
+		put_u16(payload + 4, pdu->height);
+		payload[6] = (BYTE)pdu->pixelFormat;
+		wire_send(ctx, "SURF", payload, sizeof(payload));
+	}
+	return gdi_CreateSurfaceFn ? gdi_CreateSurfaceFn(gfx, pdu) : CHANNEL_RC_OK;
 }
 
 static UINT tx_DeleteSurface(RdpgfxClientContext* gfx, const RDPGFX_DELETE_SURFACE_PDU* pdu)
 {
-	termixContext* ctx = (termixContext*)gfx->custom;
-	tx_log_once(gfx, "tx_DeleteSurface");
-	BYTE payload[2];
-	put_u16(payload, pdu->surfaceId);
-	wire_send(ctx, "DELS", payload, sizeof(payload));
-	return CHANNEL_RC_OK;
+	termixContext* ctx = g_session;
+	if (ctx)
+	{
+		BYTE payload[2];
+		put_u16(payload, pdu->surfaceId);
+		wire_send(ctx, "DELS", payload, sizeof(payload));
+	}
+	return gdi_DeleteSurfaceFn ? gdi_DeleteSurfaceFn(gfx, pdu) : CHANNEL_RC_OK;
 }
 
 static UINT tx_MapSurfaceToOutput(RdpgfxClientContext* gfx,
                                   const RDPGFX_MAP_SURFACE_TO_OUTPUT_PDU* pdu)
 {
-	termixContext* ctx = (termixContext*)gfx->custom;
-	tx_log_once(gfx, "tx_MapSurfaceToOutput");
-	BYTE payload[10];
-	put_u16(payload, pdu->surfaceId);
-	put_u32(payload + 2, pdu->outputOriginX);
-	put_u32(payload + 6, pdu->outputOriginY);
-	wire_send(ctx, "SMAP", payload, sizeof(payload));
-	return CHANNEL_RC_OK;
+	termixContext* ctx = g_session;
+	if (ctx)
+	{
+		BYTE payload[10];
+		put_u16(payload, pdu->surfaceId);
+		put_u32(payload + 2, pdu->outputOriginX);
+		put_u32(payload + 6, pdu->outputOriginY);
+		wire_send(ctx, "SMAP", payload, sizeof(payload));
+	}
+	return gdi_MapSurfaceToOutputFn ? gdi_MapSurfaceToOutputFn(gfx, pdu) : CHANNEL_RC_OK;
 }
 
 static UINT tx_StartFrame(RdpgfxClientContext* gfx, const RDPGFX_START_FRAME_PDU* pdu)
 {
-	termixContext* ctx = (termixContext*)gfx->custom;
-	tx_log_once(gfx, "tx_StartFrame");
-	BYTE payload[4];
-	put_u32(payload, pdu->frameId);
-	wire_send(ctx, "FBEG", payload, sizeof(payload));
-	return CHANNEL_RC_OK;
+	termixContext* ctx = g_session;
+	if (ctx)
+	{
+		BYTE payload[4];
+		put_u32(payload, pdu->frameId);
+		wire_send(ctx, "FBEG", payload, sizeof(payload));
+	}
+	return gdi_StartFrameFn ? gdi_StartFrameFn(gfx, pdu) : CHANNEL_RC_OK;
 }
 
 static UINT tx_EndFrame(RdpgfxClientContext* gfx, const RDPGFX_END_FRAME_PDU* pdu)
 {
-	termixContext* ctx = (termixContext*)gfx->custom;
-	tx_log_once(gfx, "tx_EndFrame");
-	BYTE payload[4];
-	put_u32(payload, pdu->frameId);
-	wire_send(ctx, "FEND", payload, sizeof(payload));
-	return CHANNEL_RC_OK;
+	termixContext* ctx = g_session;
+	if (ctx)
+	{
+		BYTE payload[4];
+		put_u32(payload, pdu->frameId);
+		wire_send(ctx, "FEND", payload, sizeof(payload));
+	}
+	return gdi_EndFrameFn ? gdi_EndFrameFn(gfx, pdu) : CHANNEL_RC_OK;
 }
 
 /*
@@ -201,7 +241,10 @@ static UINT tx_EndFrame(RdpgfxClientContext* gfx, const RDPGFX_END_FRAME_PDU* pd
  */
 static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COMMAND* cmd)
 {
-	termixContext* ctx = (termixContext*)gfx->custom;
+	WINPR_UNUSED(gfx);
+	termixContext* ctx = g_session;
+	if (!ctx)
+		return CHANNEL_RC_OK;
 
 	static BOOL loggedFirstFrame = FALSE;
 	if (!loggedFirstFrame)
@@ -214,12 +257,15 @@ static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COM
 
 	if (cmd->codecId != RDPGFX_CODECID_AVC420)
 	{
-		/* AVC420 is negotiated exclusively; anything else means the server
-		 * ignored our capability set and the session cannot be rendered. */
-		char message[128];
-		(void)snprintf(message, sizeof(message), "unsupported codecId %u, expected AVC420",
-		               (unsigned)cmd->codecId);
-		wire_error(ctx, message);
+		static BOOL loggedWrongCodec = FALSE;
+		if (!loggedWrongCodec)
+		{
+			loggedWrongCodec = TRUE;
+			char message[128];
+			(void)snprintf(message, sizeof(message), "unsupported codecId %u, expected AVC420",
+			               (unsigned)cmd->codecId);
+			wire_error(ctx, message);
+		}
 		return CHANNEL_RC_OK;
 	}
 
@@ -277,122 +323,38 @@ static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COM
 	return CHANNEL_RC_OK;
 }
 
-
-/*
- * Every callback gdi_graphics_pipeline_init installs, stubbed.
- *
- * Leaving them NULL is not equivalent: the channel invokes them, and a gap in
- * the set is indistinguishable from a client that cannot speak the protocol.
- * These accept and ignore the operations this path does not render, and log the
- * first of each so the negotiation sequence is visible.
- */
-#define TX_GFX_STUB(fn, type)                                                     \
-	static UINT fn(RdpgfxClientContext* gfx, const type* pdu)                     \
-	{                                                                             \
-		WINPR_UNUSED(pdu);                                                        \
-		tx_log_once(gfx, #fn);                                                    \
-		return CHANNEL_RC_OK;                                                     \
-	}
-
-static void tx_log_once(RdpgfxClientContext* gfx, const char* name)
-{
-	WINPR_UNUSED(gfx);
-	static const char* seen[32];
-	static size_t seenCount = 0;
-	for (size_t i = 0; i < seenCount; i++)
-	{
-		if (strcmp(seen[i], name) == 0)
-			return;
-	}
-	if (seenCount < ARRAYSIZE(seen))
-		seen[seenCount++] = name;
-	fprintf(stderr, "[%s] gfx: %s\n", TAG, name);
-	fflush(stderr);
-}
-
-TX_GFX_STUB(tx_DeleteEncodingContext, RDPGFX_DELETE_ENCODING_CONTEXT_PDU)
-TX_GFX_STUB(tx_SolidFill, RDPGFX_SOLID_FILL_PDU)
-TX_GFX_STUB(tx_SurfaceToSurface, RDPGFX_SURFACE_TO_SURFACE_PDU)
-TX_GFX_STUB(tx_SurfaceToCache, RDPGFX_SURFACE_TO_CACHE_PDU)
-TX_GFX_STUB(tx_CacheToSurface, RDPGFX_CACHE_TO_SURFACE_PDU)
-TX_GFX_STUB(tx_CacheImportReply, RDPGFX_CACHE_IMPORT_REPLY_PDU)
-TX_GFX_STUB(tx_EvictCacheEntry, RDPGFX_EVICT_CACHE_ENTRY_PDU)
-TX_GFX_STUB(tx_MapSurfaceToWindow, RDPGFX_MAP_SURFACE_TO_WINDOW_PDU)
-TX_GFX_STUB(tx_MapSurfaceToScaledOutput, RDPGFX_MAP_SURFACE_TO_SCALED_OUTPUT_PDU)
-TX_GFX_STUB(tx_MapSurfaceToScaledWindow, RDPGFX_MAP_SURFACE_TO_SCALED_WINDOW_PDU)
-
-static UINT tx_ImportCacheEntry(RdpgfxClientContext* gfx, UINT16 cacheSlot,
-                                const PERSISTENT_CACHE_ENTRY* entry)
-{
-	WINPR_UNUSED(cacheSlot);
-	WINPR_UNUSED(entry);
-	tx_log_once(gfx, "ImportCacheEntry");
-	return CHANNEL_RC_OK;
-}
-
-static UINT tx_ExportCacheEntry(RdpgfxClientContext* gfx, UINT16 cacheSlot,
-                                PERSISTENT_CACHE_ENTRY* entry)
-{
-	WINPR_UNUSED(cacheSlot);
-	WINPR_UNUSED(entry);
-	tx_log_once(gfx, "ExportCacheEntry");
-	return CHANNEL_RC_OK;
-}
-
-static UINT tx_UpdateSurfaces(RdpgfxClientContext* gfx)
-{
-	tx_log_once(gfx, "UpdateSurfaces");
-	return CHANNEL_RC_OK;
-}
-
 static void tx_OnChannelConnected(void* context, const ChannelConnectedEventArgs* e)
 {
-	termixContext* ctx = (termixContext*)context;
-
 	if (strcmp(e->name, RDPGFX_DVC_CHANNEL_NAME) == 0)
 	{
-		/* A/B switch: BRIDGE_GFX_MODE=gdi hands the channel to FreeRDP's own
-		 * pipeline instead of ours. It decodes, so no frames reach the browser
-		 * -- but if a session survives in that mode and not in ours, the fault
-		 * is in this callback set rather than anywhere else. */
-		const char* mode = getenv("BRIDGE_GFX_MODE");
-		if (mode && strcmp(mode, "gdi") == 0)
-		{
-			fprintf(stderr, "[%s] BRIDGE_GFX_MODE=gdi: using FreeRDP's own pipeline\n", TAG);
-			fflush(stderr);
-			freerdp_client_OnChannelConnectedEventHandler(context, e);
-			return;
-		}
+		/* Let the GDI take the channel first, then take back only what the
+		 * pass-through needs. */
+		freerdp_client_OnChannelConnectedEventHandler(context, e);
 
 		RdpgfxClientContext* gfx = (RdpgfxClientContext*)e->pInterface;
-		ctx->gfx = gfx;
-		gfx->custom = ctx;
+		if (g_session)
+			g_session->gfx = gfx;
 
-		/* Deliberately NOT calling gdi_graphics_pipeline_init: that is what
-		 * installs the decoding callbacks this bridge exists to bypass. */
+		gdi_ResetGraphicsFn = gfx->ResetGraphics;
+		gdi_CreateSurfaceFn = gfx->CreateSurface;
+		gdi_DeleteSurfaceFn = gfx->DeleteSurface;
+		gdi_MapSurfaceToOutputFn = gfx->MapSurfaceToOutput;
+		gdi_StartFrameFn = gfx->StartFrame;
+		gdi_EndFrameFn = gfx->EndFrame;
+
 		gfx->ResetGraphics = tx_ResetGraphics;
 		gfx->CreateSurface = tx_CreateSurface;
 		gfx->DeleteSurface = tx_DeleteSurface;
 		gfx->MapSurfaceToOutput = tx_MapSurfaceToOutput;
 		gfx->StartFrame = tx_StartFrame;
 		gfx->EndFrame = tx_EndFrame;
+
+		/* DeactivateClientDecoding leaves this null, which is why the frames
+		 * can be taken without the library ever decoding one. */
 		gfx->SurfaceCommand = tx_SurfaceCommand;
 
-		gfx->DeleteEncodingContext = tx_DeleteEncodingContext;
-		gfx->SolidFill = tx_SolidFill;
-		gfx->SurfaceToSurface = tx_SurfaceToSurface;
-		gfx->SurfaceToCache = tx_SurfaceToCache;
-		gfx->CacheToSurface = tx_CacheToSurface;
-		gfx->CacheImportReply = tx_CacheImportReply;
-		gfx->ImportCacheEntry = tx_ImportCacheEntry;
-		gfx->ExportCacheEntry = tx_ExportCacheEntry;
-		gfx->EvictCacheEntry = tx_EvictCacheEntry;
-		gfx->MapSurfaceToWindow = tx_MapSurfaceToWindow;
-		gfx->MapSurfaceToScaledOutput = tx_MapSurfaceToScaledOutput;
-		gfx->MapSurfaceToScaledWindow = tx_MapSurfaceToScaledWindow;
-		gfx->UpdateSurfaces = tx_UpdateSurfaces;
-
-		fprintf(stderr, "[%s] graphics pipeline attached\n", TAG);
+		fprintf(stderr, "[%s] graphics pipeline attached (gdi bookkeeping + avc420 passthrough)\n",
+		        TAG);
 		fflush(stderr);
 	}
 	else
@@ -401,12 +363,10 @@ static void tx_OnChannelConnected(void* context, const ChannelConnectedEventArgs
 
 static void tx_OnChannelDisconnected(void* context, const ChannelDisconnectedEventArgs* e)
 {
-	termixContext* ctx = (termixContext*)context;
+	if (strcmp(e->name, RDPGFX_DVC_CHANNEL_NAME) == 0 && g_session)
+		g_session->gfx = NULL;
 
-	if (strcmp(e->name, RDPGFX_DVC_CHANNEL_NAME) == 0)
-		ctx->gfx = NULL;
-	else
-		freerdp_client_OnChannelDisconnectedEventHandler(context, e);
+	freerdp_client_OnChannelDisconnectedEventHandler(context, e);
 }
 
 /* ------------------------------------------------------------------ */
@@ -696,6 +656,7 @@ static int run_session(int sock, const char* json)
 
 	termixContext* ctx = (termixContext*)context;
 	ctx->sock = sock;
+	g_session = ctx;
 
 	rdpSettings* settings = context->settings;
 	char buffer[512];

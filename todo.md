@@ -220,8 +220,11 @@ guacd olmadan gerçek RDP, 60fps hedefi. Riskli.
 - [x] Binary wire format (magic header deseni)
 - [x] Yeni WS modülü, JWT + `canAccessHost` (Faz 2 gateway'i örnek)
 - [ ] Jump host tüneli — mevcut mekanizma yeniden kullanılacak (**yapılmadı**)
-- [ ] **Gerçek bir RDP sunucusuna karşı hiç denenmedi** — köprü ayakta ve protokol
-      çerçeveleme iki yönde doğrulandı, ama H.264 karesi henüz akmadı
+- [x] Gerçek RDP sunucusuna bağlanıyor — kimlik doğrulama, GFX kanalı ve
+      `ResetGraphics` çalışıyor; oturum ayakta kalıyor
+- [ ] **Sunucu grafik göndermiyor** — `CreateSurface` / `SurfaceCommand` gelmiyor,
+      yani tek bir H.264 karesi henüz akmadı. Devir notu ve sıradaki adımlar:
+      [`docs/phase3-handoff.md`](docs/phase3-handoff.md)
 
 ### Frontend
 

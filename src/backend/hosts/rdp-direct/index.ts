@@ -5,6 +5,7 @@ import { DataCrypto } from "../../utils/data-crypto.js";
 import { PermissionManager } from "../../utils/permission-manager.js";
 import { sshLogger } from "../../utils/logger.js";
 import { resolveRdpBridgeOptions } from "../../utils/rdp-bridge-config.js";
+import { resolveDisplaySize } from "./display-size.js";
 import {
   createCurrentHostResolutionRepository,
   createCurrentSettingsRepository,
@@ -167,8 +168,19 @@ wss.on("connection", async (ws: WebSocket, req) => {
       return;
     }
 
-    const width = Number.parseInt(urlObj.searchParams.get("width") ?? "", 10);
-    const height = Number.parseInt(urlObj.searchParams.get("height") ?? "", 10);
+    const { width, height, pinned } = resolveDisplaySize({
+      hostConfig: record.guacamoleConfig,
+      requestedWidth: urlObj.searchParams.get("width"),
+      requestedHeight: urlObj.searchParams.get("height"),
+    });
+
+    if (pinned) {
+      sshLogger.info("Direct RDP using the host's pinned resolution", {
+        operation: "rdp_direct_pinned_resolution",
+        hostId,
+        userId,
+      });
+    }
 
     const connectRequest = {
       host: String(record.ip ?? ""),
@@ -176,8 +188,8 @@ wss.on("connection", async (ws: WebSocket, req) => {
       username: String(record.rdpUser ?? record.username ?? ""),
       password: String(record.rdpPassword ?? record.password ?? ""),
       domain: String(record.rdpDomain ?? record.domain ?? ""),
-      width: Number.isInteger(width) && width > 0 ? width : 1920,
-      height: Number.isInteger(height) && height > 0 ? height : 1080,
+      width,
+      height,
       ignoreCert: record.rdpIgnoreCert !== false,
     };
 

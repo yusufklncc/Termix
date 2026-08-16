@@ -18,11 +18,16 @@ Not Configured). Yani sunucu yazılımla encode ediyor.
 
 ## Sonuçlar
 
-| Hedef ayarı                | Köprü FPS   | Tarayıcı FPS | Codec dağılımı  |
-| -------------------------- | ----------- | ------------ | --------------- |
-| Varsayılan                 | 26.0 – 27.5 | ölçülmedi    | `avc444v2` %100 |
-| `DWMFRAMEINTERVAL=15`      | 45.9 – 47.2 | 46.2         | `avc444v2` %100 |
-| + `BRIDGE_RDP_NETWORK=lan` | 46.9 – 47.0 | ölçülmedi    | `avc444v2` %100 |
+| Hedef ayarı                | Köprü FPS   | Tarayıcı FPS    | Codec dağılımı  |
+| -------------------------- | ----------- | --------------- | --------------- |
+| Varsayılan                 | 26.0 – 27.5 | ölçülmedi       | `avc444v2` %100 |
+| `DWMFRAMEINTERVAL=15`      | 45.9 – 47.2 | 46.2            | `avc444v2` %100 |
+| + `BRIDGE_RDP_NETWORK=lan` | 46.9 – 47.0 | ölçülmedi       | `avc444v2` %100 |
+| **`DWMFRAMEINTERVAL=10`**  | ölçülmedi   | **60.1 – 60.7** | `avc444v2` %100 |
+
+`DWMFRAMEINTERVAL=10` ile hedefteki TestUFO `61 fps / 62 Hz` gösteriyor ve
+tarayıcı 60.1 – 60.7 çiziyor; arada 42 – 49'a düşüyor. **60 FPS hedefine
+ulaşıldı.**
 
 2428 karelik ölçümde `chroma-only skipped=0`.
 
@@ -57,9 +62,11 @@ darboğaz değil. (Sonraki 34.5 fps okumaları hedefte Görev Yöneticisi açık
 ve pencere yeniden boyutlanırken alındı; uzak oturumun kendisi de o an 33
 gösteriyordu, yani sunucu daha az üretiyordu. Temiz ölçüm değiller.)
 
-**47 ↔ 60 farkının sebebi hâlâ bilinmiyor.** İlk tahmin — yazılım H.264
-encode'unun CPU tavanı — ölçümle **desteklenmedi**: CPU %6, GPU %14, video
-motorları boşta. Sunucu kaynak sıkışmasında değil.
+**47 ↔ 60 farkı dört turda çözüldü.** Üç tahmin ölçümle elendi, dördüncüsü
+tuttu. Sırayla:
+
+İlk tahmin — yazılım H.264 encode'unun CPU tavanı — **desteklenmedi**: CPU %6,
+GPU %14, video motorları boşta. Sunucu kaynak sıkışmasında değil.
 
 Toplam CPU'nun %6 olması tek çekirdek doygunluğunu elemiyor (16 thread'de bir
 çekirdeğin tamamı ≈ %6), bu yüzden çekirdek bazında bakılması gerekiyor.
@@ -84,16 +91,27 @@ ile 28, köprüyle 47 fps üretiyordu, yani 47 hedefin sabit tavanı değil. Ona
 elenince o gözlemin daha basit bir açıklaması kalıyor — guacd %85.9 CPU ile
 kendi sınırındaydı, yani 28'i belirleyen guacd'nin kendisiydi.
 
-Geriye kalanlar, hiçbiri ölçülmedi:
+**Cevap: `DWMFRAMEINTERVAL` tavanıydı.** Değer 15'ten 10'a indirilince ölçüm
+47'den **60**'a çıktı, tarayıcı da 60.1 – 60.7 çizdi. Yani 47 bir kaynak
+sınırı değil, hedefin kendine koyduğu bir tavandı — CPU'nun %6, GPU'nun %14'te
+boşta durması da bununla tutarlıydı: sunucu yavaş değil, bekliyordu.
 
-- **Çözünürlük.** Sekmeyi küçültüp ölçmek, aggregate CPU'nun gizlediği tek
-  çekirdek doygunluğunu da sınar. En ucuz deney.
-- **`DWMFRAMEINTERVAL=10`** — tavanı ~100 fps'e çıkarır. 47 tavana dayanıyorsa
-  yükselir; yükselmezse tavan kesin olarak elenir.
-- Hedefin kendi kompozisyon hızı: TestUFO uzak oturumda `Refresh Rate 47 Hz`
-  gösteriyor. Bu döngüsel bir gözlem (rAF kompozisyonu takip eder,
-  kompozisyonu ne belirliyor bilinmiyor) ama sınırın oturumun içinde olduğuna
-  işaret ediyor.
+### Değerin birimi hakkında uyarı
+
+`1000 / değer` **teslim edilen kare hızını öngörmüyor**:
+
+| Değer | ms varsayımı | Ölçülen |
+| ----- | ------------ | ------- |
+| 15    | ~66 fps      | 47      |
+| 10    | ~100 fps     | 60      |
+
+Microsoft bu değerin semantiğini belgelemiyor. Ölçümle bilinen tek şey: değer
+küçüldükçe tavan yükseliyor. Aradaki ilişkiyi formülle tahmin etmeye çalışmak
+bu ölçümde iki kez yanlış sonuç verdi, o yüzden burada formül verilmiyor.
+
+Kalan tek ölçülmemiş kalem, 60'taki ara düşüşler (42 – 49). Çözünürlüğü
+düşürüp ölçmek bunu sınar; düşüşler kayboluyorsa encode tarafı 60'ta zorlanıyor
+demektir.
 
 ## Ölçüm nasıl alınır
 
@@ -127,10 +145,14 @@ Kare hızı tavanı için registry:
 
 ```
 HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations
-  DWMFRAMEINTERVAL  (DWORD)  = 15 (ondalık)
+  DWMFRAMEINTERVAL  (DWORD)  = 10 (ondalık)
 ```
 
-Yeniden başlatma gerekiyor. Bu yalnızca tavanı belirler.
+Yeniden başlatma gerekiyor. Bu yalnızca tavanı belirler; gerçek hız hedefin
+donanımına ve içeriğe bağlı kalır.
+
+Ölçülen: `15` → 47 fps, `10` → 60 fps. CLAUDE.md'deki not `15` için 60 FPS
+diyordu ama bu makinede 47 çıktı, o yüzden **10** öneriliyor.
 
 ## Kalite / FPS / bitrate ne kadar ayarlanabilir
 
@@ -143,7 +165,7 @@ mimarisinin doğrudan sonucu. Dolaylı kaldıraçlar, etkisi ölçülmüş hâli
 | Çözünürlük                 | Sekme boyutu             | Ölçülmedi, en büyük aday    |
 | `ConnectionType`           | `BRIDGE_RDP_NETWORK`     | **Yok** — 47 fps değişmedi  |
 | Kare onayı askıya alma     | `BRIDGE_GFX_SUSPEND_ACK` | **Yok** — 47 fps değişmedi  |
-| `DWMFRAMEINTERVAL`         | Hedef registry           | 27 → 47 fps                 |
+| `DWMFRAMEINTERVAL`         | Hedef registry           | 27 → 47 → **60 fps**        |
 | `Prioritize H.264/AVC 444` | Hedef GPO                | H.264'ü hiç yoktan var etti |
 
 FreeRDP varsayılanları ölçüm sırasında loglandı: `connection=7`
@@ -172,4 +194,4 @@ içerik üretiyor ve rakamı düşürüyor.
 - Bant genişliği
 - LAN / WAN ayrımı
 - Guacamole ile karşılaştırma → Faz 4
-- 47 ↔ 60 farkının sebebi
+- 60 fps'teki ara düşüşlerin (42 – 49) sebebi

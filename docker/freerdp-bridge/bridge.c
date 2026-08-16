@@ -351,6 +351,19 @@ static void tx_OnChannelConnected(void* context, const ChannelConnectedEventArgs
 
 	if (strcmp(e->name, RDPGFX_DVC_CHANNEL_NAME) == 0)
 	{
+		/* A/B switch: BRIDGE_GFX_MODE=gdi hands the channel to FreeRDP's own
+		 * pipeline instead of ours. It decodes, so no frames reach the browser
+		 * -- but if a session survives in that mode and not in ours, the fault
+		 * is in this callback set rather than anywhere else. */
+		const char* mode = getenv("BRIDGE_GFX_MODE");
+		if (mode && strcmp(mode, "gdi") == 0)
+		{
+			fprintf(stderr, "[%s] BRIDGE_GFX_MODE=gdi: using FreeRDP's own pipeline\n", TAG);
+			fflush(stderr);
+			freerdp_client_OnChannelConnectedEventHandler(context, e);
+			return;
+		}
+
 		RdpgfxClientContext* gfx = (RdpgfxClientContext*)e->pInterface;
 		ctx->gfx = gfx;
 		gfx->custom = ctx;
@@ -509,20 +522,9 @@ static void handle_input(termixContext* ctx, const char magic[4], const BYTE* pa
 	else if (memcmp(magic, "EMOU", 4) == 0 && length >= 6)
 		freerdp_input_send_extended_mouse_event(input, read_u16(payload), read_u16(payload + 2),
 		                                        read_u16(payload + 4));
-	else if (memcmp(magic, "FACK", 4) == 0 && length >= 4)
-	{
-		/* Acknowledging frames is what keeps the server sending them; it also
-		 * gives natural back-pressure when the browser falls behind. */
-		if (ctx->gfx && ctx->gfx->SetSurfaceData)
-		{
-			RDPGFX_FRAME_ACKNOWLEDGE_PDU ack = { 0 };
-			ack.queueDepth = SUSPEND_FRAME_ACKNOWLEDGEMENT;
-			ack.frameId = read_u32(payload);
-			ack.totalFramesDecoded = ack.frameId;
-			if (ctx->gfx->FrameAcknowledge)
-				ctx->gfx->FrameAcknowledge(ctx->gfx, &ack);
-		}
-	}
+	/* FACK is accepted and ignored: rdpgfx_recv_end_frame_pdu acknowledges
+	 * frames itself, so sending a second one from here would be wrong. The
+	 * browser still sends it, and it still marks how far it has decoded. */
 }
 
 static void* input_thread(void* arg)

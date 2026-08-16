@@ -32,6 +32,7 @@
 #include <freerdp/client.h>
 #include <freerdp/client/channels.h>
 #include <freerdp/client/rdpgfx.h>
+#include <freerdp/gdi/gdi.h>
 #include <freerdp/channels/channels.h>
 #include <freerdp/channels/rdpgfx.h>
 #include <freerdp/settings.h>
@@ -343,6 +344,23 @@ static BOOL tx_post_connect(freerdp* instance)
 {
 	termixContext* ctx = (termixContext*)instance->context;
 	rdpSettings* settings = instance->context->settings;
+
+	/* The core needs a GDI even though nothing here draws into it: without one
+	 * the update path is unset and the transport read loop spins until it gives
+	 * up with "BIO_read retries exceeded".
+	 *
+	 * DeactivateClientDecoding then stops the library allocating codecs and
+	 * decoding anything, which is FreeRDP's own supported way to parse the
+	 * protocol without processing graphics. gdi_graphics_pipeline_init is still
+	 * never called, so the gfx callbacks stay ours and the H.264 passes through
+	 * untouched. */
+	if (!gdi_init(instance, PIXEL_FORMAT_XRGB32))
+	{
+		wire_error(ctx, "gdi_init failed");
+		return FALSE;
+	}
+	if (!freerdp_settings_set_bool(settings, FreeRDP_DeactivateClientDecoding, TRUE))
+		return FALSE;
 
 	ctx->desktopWidth = freerdp_settings_get_uint32(settings, FreeRDP_DesktopWidth);
 	ctx->desktopHeight = freerdp_settings_get_uint32(settings, FreeRDP_DesktopHeight);

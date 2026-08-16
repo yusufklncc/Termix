@@ -55,6 +55,13 @@ typedef struct
 	UINT32 desktopWidth;
 	UINT32 desktopHeight;
 	UINT32 frameCount;
+
+	/* Surface commands per codec id, indexed by the id itself. RDPGFX ids stop
+	 * at 0x0F, so this covers every one of them without a lookup. A server
+	 * mixes codecs freely -- knowing the mix is what says whether the
+	 * passthrough is carrying the session or only a corner of it. */
+	UINT32 codecCounts[16];
+	UINT32 codecOther;
 } termixContext;
 
 /* ------------------------------------------------------------------ */
@@ -141,6 +148,83 @@ static void wire_error(termixContext* ctx, const char* message)
  */
 
 static termixContext* g_session = NULL;
+
+static const char* codec_name(UINT16 codecId)
+{
+	switch (codecId)
+	{
+		case RDPGFX_CODECID_UNCOMPRESSED:
+			return "uncompressed";
+		case RDPGFX_CODECID_CAVIDEO:
+			return "remotefx";
+		case RDPGFX_CODECID_CLEARCODEC:
+			return "clearcodec";
+		case RDPGFX_CODECID_CAPROGRESSIVE:
+			return "progressive";
+		case RDPGFX_CODECID_PLANAR:
+			return "planar";
+		case RDPGFX_CODECID_AVC420:
+			return "avc420";
+		case RDPGFX_CODECID_ALPHA:
+			return "alpha";
+		case RDPGFX_CODECID_CAPROGRESSIVE_V2:
+			return "progressive-v2";
+		case RDPGFX_CODECID_AVC444:
+			return "avc444";
+		case RDPGFX_CODECID_AVC444v2:
+			return "avc444v2";
+		default:
+			return "unknown";
+	}
+}
+
+/* Writes the per-codec tally as "avc420=120 clearcodec=8". Silence is the
+ * symptom when a server accepts a session and sends nothing, but a session
+ * that is busy in the wrong codec looks identical from a frame counter alone. */
+static void log_codec_mix(termixContext* ctx)
+{
+	char line[256];
+	size_t used = 0;
+
+	for (UINT16 id = 0; id < ARRAYSIZE(ctx->codecCounts); id++)
+	{
+		if (ctx->codecCounts[id] == 0 || used >= sizeof(line))
+			continue;
+		const int n = snprintf(line + used, sizeof(line) - used, "%s%s=%u", used ? " " : "",
+		                       codec_name(id), ctx->codecCounts[id]);
+		if (n < 0)
+			break;
+		used += (size_t)n;
+	}
+
+	fprintf(stderr, "[%s] codec mix: %s\n", TAG, used ? line : "(nothing yet)");
+	fflush(stderr);
+}
+
+static pcRdpgfxCapsConfirm gdi_CapsConfirmFn = NULL;
+
+/* Which capset the server picked decides everything downstream: AVC420 is only
+ * on the table in 8.1 with AVC420_ENABLED, so a server that confirms 8.0, or
+ * 8.1 without the flag, will never send H.264 no matter what the bridge does.
+ * Reading it beats inferring it from which codecs happen to show up. */
+static UINT tx_CapsConfirm(RdpgfxClientContext* gfx, const RDPGFX_CAPS_CONFIRM_PDU* pdu)
+{
+	if (pdu && pdu->capsSet)
+	{
+		const UINT32 version = pdu->capsSet->version;
+		const UINT32 flags = pdu->capsSet->flags;
+		fprintf(stderr, "[%s] caps confirmed: version=0x%08X flags=0x%08X avc420=%s\n", TAG,
+		        version, flags,
+		        (flags & RDPGFX_CAPS_FLAG_AVC420_ENABLED)
+		            ? "enabled"
+		            : ((version >= RDPGFX_CAPVERSION_10 &&
+		                !(flags & RDPGFX_CAPS_FLAG_AVC_DISABLED))
+		                   ? "implied"
+		                   : "no"));
+		fflush(stderr);
+	}
+	return gdi_CapsConfirmFn ? gdi_CapsConfirmFn(gfx, pdu) : CHANNEL_RC_OK;
+}
 
 static pcRdpgfxResetGraphics gdi_ResetGraphicsFn = NULL;
 static pcRdpgfxCreateSurface gdi_CreateSurfaceFn = NULL;
@@ -240,28 +324,26 @@ static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COM
 	if (!ctx)
 		return CHANNEL_RC_OK;
 
-	static BOOL loggedFirstFrame = FALSE;
-	if (!loggedFirstFrame)
+	if (cmd->codecId < ARRAYSIZE(ctx->codecCounts))
 	{
-		loggedFirstFrame = TRUE;
-		fprintf(stderr, "[%s] first surface command: codecId=%u %ux%u\n", TAG,
-		        (unsigned)cmd->codecId, (unsigned)cmd->width, (unsigned)cmd->height);
-		fflush(stderr);
-	}
-
-	if (cmd->codecId != RDPGFX_CODECID_AVC420)
-	{
-		static BOOL loggedWrongCodec = FALSE;
-		if (!loggedWrongCodec)
+		if (ctx->codecCounts[cmd->codecId]++ == 0)
 		{
-			loggedWrongCodec = TRUE;
-			char message[128];
-			(void)snprintf(message, sizeof(message), "unsupported codecId %u, expected AVC420",
-			               (unsigned)cmd->codecId);
-			wire_error(ctx, message);
+			fprintf(stderr, "[%s] first %s surface command: %ux%u\n", TAG,
+			        codec_name(cmd->codecId), (unsigned)cmd->width, (unsigned)cmd->height);
+			fflush(stderr);
 		}
-		return CHANNEL_RC_OK;
 	}
+	else
+		ctx->codecOther++;
+
+	/* A non-AVC420 command is skipped, not fatal. Windows mixes codecs: small
+	 * non-video updates arrive as ClearCodec or Planar even when H.264 is
+	 * negotiated, so failing the session on the first one kills it on the lock
+	 * screen before the desktop ever draws. Those regions simply do not update
+	 * yet -- what to do about them is a decision for the measured mix, which
+	 * the periodic histogram now reports. */
+	if (cmd->codecId != RDPGFX_CODECID_AVC420)
+		return CHANNEL_RC_OK;
 
 	const RDPGFX_AVC420_BITMAP_STREAM* avc = (const RDPGFX_AVC420_BITMAP_STREAM*)cmd->extra;
 	if (!avc || !avc->data || avc->length == 0)
@@ -335,7 +417,9 @@ static void tx_OnChannelConnected(void* context, const ChannelConnectedEventArgs
 		gdi_MapSurfaceToOutputFn = gfx->MapSurfaceToOutput;
 		gdi_StartFrameFn = gfx->StartFrame;
 		gdi_EndFrameFn = gfx->EndFrame;
+		gdi_CapsConfirmFn = gfx->CapsConfirm;
 
+		gfx->CapsConfirm = tx_CapsConfirm;
 		gfx->ResetGraphics = tx_ResetGraphics;
 		gfx->CreateSurface = tx_CreateSurface;
 		gfx->DeleteSurface = tx_DeleteSurface;
@@ -386,6 +470,12 @@ static BOOL tx_pre_connect(freerdp* instance)
 
 	if (!freerdp_settings_set_uint32(settings, FreeRDP_ColorDepth, 32))
 		return FALSE;
+
+	/* A non-zero filter would drop capsets before they are ever advertised,
+	 * which would look identical to a server refusing them. */
+	fprintf(stderr, "[%s] gfx caps filter=0x%08X\n", TAG,
+	        freerdp_settings_get_uint32(settings, FreeRDP_GfxCapsFilter));
+	fflush(stderr);
 
 	/* These return an int and signal failure with a negative value; treating
 	 * the result as a boolean rejects the success case. */
@@ -771,6 +861,7 @@ static int run_session(int sock, const char* json)
 				fprintf(stderr, "[%s] idle %us, frames=%u\n", TAG, idleSeconds,
 				        ctx->frameCount);
 				fflush(stderr);
+				log_codec_mix(ctx);
 			}
 			if (freerdp_shall_disconnect_context(context))
 			{

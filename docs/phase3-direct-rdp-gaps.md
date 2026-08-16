@@ -189,6 +189,23 @@ Yukarıdakiler ışığında, "çalışan prototip" için en dar ve en dürüst 
   Chromium dışında API yok, orada sessizce devre dışı kalıyor ve ayrılmış
   kısayollar tarayıcı anlamını koruyor.
 
+  **Tarayıcı desteği ölçüldü.** Termix'ten bağımsız, tek sayfalık bir test ile
+  (tam ekran + `navigator.keyboard.lock()`):
+
+  | Tarayıcı | `navigator.keyboard` | `lock()`                                                     |
+  | -------- | -------------------- | ------------------------------------------------------------ |
+  | Chrome   | var                  | **alınıyor** — `Ctrl+W` ve `Alt+Tab` yakalanıyor             |
+  | Vivaldi  | var                  | `InvalidStateError: lock() request could not be registered.` |
+
+  Vivaldi API'yi gösteriyor ama kaydı reddediyor. Muhtemel sebep, sekmeleri
+  kendi arayüzünün içinde guest view olarak barındırması: Keyboard Lock en dış
+  ana çerçeveden istenmek zorunda. Bu bir Termix hatası değil — aynı test
+  sayfası Termix hiç devrede değilken de aynı sonucu veriyor.
+
+  Vivaldi'de `Ctrl+W` hâlâ sekmeyi kapatmaya çalışıyor, ama sessizce oturum
+  kaybettirmiyor: `AppShell` aktif bağlantı varken `beforeunload` uyarısı
+  çıkarıyor (`AppShell.tsx:1358`), kullanıcı onaylamadan kapanmıyor.
+
   Modül paylaşılan `lib/` altında, çünkü **Guacamole yolunda da aynı sorun
   var** (repoda başka `navigator.keyboard` kullanımı yok). O yol henüz
   bağlanmadı — mevcut davranışı değiştirmemek için bilinçli olarak.

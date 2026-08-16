@@ -1573,6 +1573,7 @@ const migrateSchema = () => {
     { column: "stream_auth_type", sql: "ALTER TABLE ssh_data ADD COLUMN stream_auth_type TEXT" },
     { column: "stream_mode", sql: "ALTER TABLE ssh_data ADD COLUMN stream_mode TEXT" },
     { column: "stream_publisher", sql: "ALTER TABLE ssh_data ADD COLUMN stream_publisher TEXT" },
+    { column: "rdp_render_engine", sql: "ALTER TABLE ssh_data ADD COLUMN rdp_render_engine TEXT" },
   ];
 
   for (const migration of sshDataMigrations) {

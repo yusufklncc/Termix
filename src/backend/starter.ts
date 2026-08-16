@@ -262,6 +262,15 @@ async function provisionLocalDesktopUserIfNeeded(): Promise<void> {
       });
     });
 
+    // Direct RDP renderer. Its FreeRDP bridge is an optional sidecar, so a
+    // deployment without one simply never has a host configured for it.
+    import("./hosts/rdp-direct/index.js").catch((error) => {
+      systemLogger.warn("Failed to initialize direct RDP gateway", {
+        operation: "rdp_direct_init_skip",
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    });
+
     const { startAnalyticsHeartbeat } = await import("./utils/analytics.js");
     startAnalyticsHeartbeat();
 

@@ -257,6 +257,9 @@ export const hosts = pgTable("ssh_data", {
   streamPassword: text("stream_password"),
   streamAuthType: text("stream_auth_type"),
 
+  // "guacamole" (default, null included) keeps the guacd path; "direct"
+  // sends the host through the FreeRDP bridge instead.
+  rdpRenderEngine: text("rdp_render_engine"),
   rdpAuthType: text("rdp_auth_type"),
   vncAuthType: text("vnc_auth_type"),
   telnetAuthType: text("telnet_auth_type"),

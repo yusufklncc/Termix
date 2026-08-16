@@ -155,6 +155,7 @@ Yukarıdakiler ışığında, "çalışan prototip" için en dar ve en dürüst 
 - Binary wire format (referansın magic header deseni)
 - WebCodecs `VideoDecoder` + OffscreenCanvas worker
 - Klavye + fare (RDP scan code eşlemesi)
+- Uzak imleç şekli (`CURS` → CSS `cursor`)
 - Host formunda render motoru seçimi, varsayılan Guacamole
 
 **Dışında (bilinçli):**
@@ -162,5 +163,23 @@ Yukarıdakiler ışığında, "çalışan prototip" için en dar ve en dürüst 
 - Ses, clipboard, RDPDR, yazıcı, RemoteApp, çoklu monitör
 - Session recording, session sharing
 - Progressive/ClearCodec (AVC420 zorlandığı için gerekmiyor)
+
+### Canlı testte ortaya çıkan, bu listede olmayan eksikler
+
+İlk gerçek oturumda görülenler. İlk ikisi giderildi, üçüncüsü duruyor:
+
+- **Uzak imleç şekli.** Köprü imleç güncellemelerini hiç işlemiyordu; kullanıcı
+  yalnızca kendi yerel okunu görüyordu. Tıklamalar doğru yere gittiği hâlde
+  pencere kenarlarındaki boyutlandırma tutamağı, metin I-beam'i ve bekleme
+  imleci görünmüyordu — yani "kenarlar çalışmıyor" izlenimi. Eklendi.
+- **Sunucunun codec karışımı.** AVC420 dışı komutlar oturumu öldürüyordu.
+  Ölçüldüğünde 10.7 capset'iyle oturumun %100'ü H.264 çıktı, ama bu sunucuya
+  göre değişebilir; artık ölümcül değil, sayılıyor.
+- **Tarayıcı kısayolları.** `Ctrl+W` gibi ayrılmış kombinasyonlar
+  `preventDefault()` ile engellenemiyor ve Termix sekmesini kapatıyor. Çözümü
+  Keyboard Lock API (`navigator.keyboard.lock()`), o da tam ekran gerektiriyor.
+  **Mevcut Guacamole yolunda da aynı** — repoda `navigator.keyboard` kullanımı
+  yok — yani bu bir regresyon değil, ortak bir platform sınırı. Düzeltilecekse
+  iki yolda birden düzeltilmeli.
 
 Bu kapsam COOP/COEP gerektirmez, dolayısıyla Faz 1'i bozmaz.

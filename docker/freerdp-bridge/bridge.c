@@ -33,6 +33,8 @@
 #include <freerdp/client/channels.h>
 #include <freerdp/client/rdpgfx.h>
 #include <freerdp/gdi/gdi.h>
+#include <freerdp/graphics.h>
+#include <freerdp/codec/color.h>
 #include <freerdp/channels/channels.h>
 #include <freerdp/channels/rdpgfx.h>
 #include <freerdp/settings.h>
@@ -70,6 +72,8 @@ typedef struct
 	UINT32 keyEvents;
 	UINT32 pointerEvents;
 	UINT32 inputRejected;
+
+	UINT32 cursorsSent;
 } termixContext;
 
 /* ------------------------------------------------------------------ */
@@ -556,6 +560,131 @@ static BOOL tx_pre_connect(freerdp* instance)
 	return TRUE;
 }
 
+/* ------------------------------------------------------------------ */
+/* pointer                                                             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The remote cursor is sent as its own update, not composited into the video,
+ * so a client that ignores it shows nothing but the local arrow. That loses
+ * every shape the desktop uses to say what a spot does -- resize handles at a
+ * window edge, the text I-beam, the busy spinner -- while clicks still land
+ * correctly, which makes it look like the window borders are dead.
+ *
+ * Cursors are converted to BGRA here and sent whole. They are small and change
+ * rarely, so caching them by id would add bookkeeping for very little.
+ */
+#define MAX_CURSOR_EDGE 384u
+
+static BOOL tx_pointer_send(rdpContext* context, const rdpPointer* pointer)
+{
+	termixContext* ctx = g_session;
+	if (!ctx || !pointer)
+		return TRUE;
+
+	const UINT32 width = pointer->width;
+	const UINT32 height = pointer->height;
+	if (width == 0 || height == 0 || width > MAX_CURSOR_EDGE || height > MAX_CURSOR_EDGE)
+		return TRUE;
+
+	const size_t pixels = (size_t)width * height * 4u;
+	BYTE* payload = (BYTE*)malloc(8 + pixels);
+	if (!payload)
+		return FALSE;
+
+	put_u16(payload, (UINT16)width);
+	put_u16(payload + 2, (UINT16)height);
+	put_u16(payload + 4, (UINT16)pointer->xPos);
+	put_u16(payload + 6, (UINT16)pointer->yPos);
+
+	/* A cursor that cannot be converted is skipped rather than sent as noise:
+	 * the previous one stays, which beats painting garbage over the pointer. */
+	if (!freerdp_image_copy_from_pointer_data(
+	        payload + 8, PIXEL_FORMAT_BGRA32, 0, 0, 0, width, height, pointer->xorMaskData,
+	        pointer->lengthXorMask, pointer->andMaskData, pointer->lengthAndMask, pointer->xorBpp,
+	        &context->gdi->palette))
+	{
+		free(payload);
+		return TRUE;
+	}
+
+	if (ctx->cursorsSent++ == 0)
+	{
+		fprintf(stderr, "[%s] first cursor: %ux%u hotspot %u,%u\n", TAG, width, height,
+		        pointer->xPos, pointer->yPos);
+		fflush(stderr);
+	}
+
+	wire_send(ctx, "CURS", payload, (UINT32)(8 + pixels));
+	free(payload);
+	return TRUE;
+}
+
+static BOOL tx_Pointer_New(rdpContext* context, rdpPointer* pointer)
+{
+	WINPR_UNUSED(context);
+	WINPR_UNUSED(pointer);
+	return TRUE;
+}
+
+static void tx_Pointer_Free(rdpContext* context, rdpPointer* pointer)
+{
+	WINPR_UNUSED(context);
+	WINPR_UNUSED(pointer);
+}
+
+static BOOL tx_Pointer_Set(rdpContext* context, rdpPointer* pointer)
+{
+	return tx_pointer_send(context, pointer);
+}
+
+/* Hiding the cursor is a shape like any other, so it travels as a zero-sized
+ * one rather than needing its own frame type. */
+static BOOL tx_Pointer_SetNull(rdpContext* context)
+{
+	WINPR_UNUSED(context);
+	termixContext* ctx = g_session;
+	if (ctx)
+	{
+		BYTE payload[8] = { 0 };
+		wire_send(ctx, "CURS", payload, sizeof(payload));
+	}
+	return TRUE;
+}
+
+static BOOL tx_Pointer_SetDefault(rdpContext* context)
+{
+	WINPR_UNUSED(context);
+	termixContext* ctx = g_session;
+	if (ctx)
+		wire_send(ctx, "CURD", NULL, 0);
+	return TRUE;
+}
+
+/* The server also tells the client where to warp the cursor. Honouring that
+ * would fight the physical mouse, so it is accepted and dropped -- the same
+ * choice the browser forces on every web client. */
+static BOOL tx_Pointer_SetPosition(rdpContext* context, UINT32 x, UINT32 y)
+{
+	WINPR_UNUSED(context);
+	WINPR_UNUSED(x);
+	WINPR_UNUSED(y);
+	return TRUE;
+}
+
+static void tx_register_pointer(rdpContext* context)
+{
+	rdpPointer pointer = { 0 };
+	pointer.size = sizeof(rdpPointer);
+	pointer.New = tx_Pointer_New;
+	pointer.Free = tx_Pointer_Free;
+	pointer.Set = tx_Pointer_Set;
+	pointer.SetNull = tx_Pointer_SetNull;
+	pointer.SetDefault = tx_Pointer_SetDefault;
+	pointer.SetPosition = tx_Pointer_SetPosition;
+	graphics_register_pointer(context->graphics, &pointer);
+}
+
 /* gdi_ResetGraphics calls update->DesktopResize unconditionally and asserts
  * that it is set (libfreerdp/gdi/gfx.c:121). Leaving it NULL aborts the whole
  * process from the channel thread on the server's first ResetGraphics PDU --
@@ -610,6 +739,7 @@ static BOOL tx_post_connect(freerdp* instance)
 		return FALSE;
 
 	instance->context->update->DesktopResize = tx_desktop_resize;
+	tx_register_pointer(instance->context);
 
 	ctx->desktopWidth = freerdp_settings_get_uint32(settings, FreeRDP_DesktopWidth);
 	ctx->desktopHeight = freerdp_settings_get_uint32(settings, FreeRDP_DesktopHeight);

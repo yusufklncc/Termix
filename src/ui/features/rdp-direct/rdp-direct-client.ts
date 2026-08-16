@@ -140,6 +140,66 @@ export function connectRdpDirect({
     return out;
   };
 
+  /* ---- cursor ---- */
+
+  /*
+   * The remote cursor arrives as its own update rather than baked into the
+   * video, so it has to be drawn here or the desktop loses every shape it uses
+   * to say what a spot does -- resize handles, the text I-beam, the spinner.
+   *
+   * It becomes a CSS cursor on the surface rather than a sprite on the canvas:
+   * the browser then moves it at the mouse's rate instead of the stream's, so
+   * it stays responsive at any frame rate, and it cannot lag behind the pointer
+   * the way a painted one would.
+   */
+  const cursorCanvas = document.createElement("canvas");
+
+  const applyCursor = (payload: Uint8Array) => {
+    if (payload.length < 8) return;
+    const view = new DataView(
+      payload.buffer,
+      payload.byteOffset,
+      payload.length,
+    );
+    const width = view.getUint16(0, true);
+    const height = view.getUint16(2, true);
+    const hotX = view.getUint16(4, true);
+    const hotY = view.getUint16(6, true);
+
+    // A zero-sized cursor is how the bridge says "hide it".
+    if (width === 0 || height === 0) {
+      surface.style.cursor = "none";
+      return;
+    }
+    if (payload.length < 8 + width * height * 4) return;
+
+    const context = cursorCanvas.getContext("2d");
+    if (!context) return;
+    cursorCanvas.width = width;
+    cursorCanvas.height = height;
+
+    const image = context.createImageData(width, height);
+    // BGRA on the wire, RGBA in an ImageData.
+    for (let i = 0; i < width * height; i++) {
+      const src = 8 + i * 4;
+      const dst = i * 4;
+      image.data[dst] = payload[src + 2];
+      image.data[dst + 1] = payload[src + 1];
+      image.data[dst + 2] = payload[src];
+      image.data[dst + 3] = payload[src + 3];
+    }
+    context.putImageData(image, 0, 0);
+
+    try {
+      // The keyword fallback matters: a browser that rejects the image (too
+      // large, or a hotspot outside it) drops the whole declaration otherwise.
+      const url = cursorCanvas.toDataURL("image/png");
+      surface.style.cursor = `url(${url}) ${hotX} ${hotY}, default`;
+    } catch {
+      surface.style.cursor = "default";
+    }
+  };
+
   /* ---- input ---- */
 
   const toRemote = (clientX: number, clientY: number) => {
@@ -283,6 +343,16 @@ export function connectRdpDirect({
           break;
         }
 
+        case "CURS": {
+          applyCursor(frame.payload);
+          break;
+        }
+
+        case "CURD": {
+          surface.style.cursor = "default";
+          break;
+        }
+
         case "ERRR": {
           onState("failed", new TextDecoder().decode(frame.payload));
           break;
@@ -327,6 +397,9 @@ export function connectRdpDirect({
       surface.removeEventListener("keyup", onKeyUp);
       surface.removeEventListener("blur", releaseAll);
       window.removeEventListener("blur", releaseAll);
+
+      // The cursor lives on the surface, which outlives this session.
+      surface.style.cursor = "";
 
       worker.postMessage({ type: "close" });
       worker.terminate();

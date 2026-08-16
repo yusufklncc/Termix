@@ -27,6 +27,8 @@ Bütün sayısal alanlar **little-endian**.
 | `FBEG` | `u32 frameId`                                                | Kare başlangıcı                             |
 | `FEND` | `u32 frameId`                                                | Kare sonu — tarayıcı burada `FACK` gönderir |
 | `AVCF` | aşağıya bak                                                  | **AVC420 H.264 karesi**                     |
+| `CURS` | aşağıya bak                                                  | İmleç şekli                                 |
+| `CURD` | boş                                                          | Varsayılan imlece dön                       |
 | `ERRR` | UTF-8 metin                                                  | Hata                                        |
 | `BYE ` | `u32 reason`                                                 | Oturum kapandı                              |
 
@@ -72,6 +74,28 @@ kopyalanır. Köprüde decode veya yeniden encode **yoktur** — Faz 3'ün büt�
 
 Kimlik bilgileri yalnızca Termix backend'inden köprüye gider; tarayıcı bunları
 hiç görmez.
+
+### `CURS` payload'ı
+
+```
+u16 width
+u16 height
+u16 hotspotX
+u16 hotspotY
+BGRA piksel verisi   (width * height * 4 bayt)
+```
+
+`width` ve `height` sıfırsa imleç gizlenir; piksel verisi gelmez.
+
+Uzak imleç videonun içine gömülmüyor, ayrı bir güncelleme olarak geliyor.
+Çizilmezse masaüstünün "burada ne yapılabilir" bilgisini veren bütün şekiller
+kaybolur: pencere kenarındaki boyutlandırma oku, metin I-beam'i, bekleme
+imleci. Tıklamalar doğru yere gitmeye devam ettiği için bu, pencere
+kenarlarının çalışmadığı izlenimi yaratır.
+
+Tarayıcı bunu canvas'a sprite olarak değil **CSS `cursor`** olarak uyguluyor:
+böylece imleç akışın değil farenin hızında hareket eder, kare hızı ne olursa
+olsun tepkisel kalır.
 
 ## Neden `FACK`
 

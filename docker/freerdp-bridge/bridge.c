@@ -121,9 +121,12 @@ static void wire_error(termixContext* ctx, const char* message)
 /* graphics pipeline callbacks                                         */
 /* ------------------------------------------------------------------ */
 
+static void tx_log_once(RdpgfxClientContext* gfx, const char* name);
+
 static UINT tx_ResetGraphics(RdpgfxClientContext* gfx, const RDPGFX_RESET_GRAPHICS_PDU* pdu)
 {
 	termixContext* ctx = (termixContext*)gfx->custom;
+	tx_log_once(gfx, "tx_ResetGraphics");
 	BYTE payload[8];
 	put_u32(payload, pdu->width);
 	put_u32(payload + 4, pdu->height);
@@ -136,6 +139,7 @@ static UINT tx_ResetGraphics(RdpgfxClientContext* gfx, const RDPGFX_RESET_GRAPHI
 static UINT tx_CreateSurface(RdpgfxClientContext* gfx, const RDPGFX_CREATE_SURFACE_PDU* pdu)
 {
 	termixContext* ctx = (termixContext*)gfx->custom;
+	tx_log_once(gfx, "tx_CreateSurface");
 	BYTE payload[7];
 	put_u16(payload, pdu->surfaceId);
 	put_u16(payload + 2, pdu->width);
@@ -148,6 +152,7 @@ static UINT tx_CreateSurface(RdpgfxClientContext* gfx, const RDPGFX_CREATE_SURFA
 static UINT tx_DeleteSurface(RdpgfxClientContext* gfx, const RDPGFX_DELETE_SURFACE_PDU* pdu)
 {
 	termixContext* ctx = (termixContext*)gfx->custom;
+	tx_log_once(gfx, "tx_DeleteSurface");
 	BYTE payload[2];
 	put_u16(payload, pdu->surfaceId);
 	wire_send(ctx, "DELS", payload, sizeof(payload));
@@ -158,6 +163,7 @@ static UINT tx_MapSurfaceToOutput(RdpgfxClientContext* gfx,
                                   const RDPGFX_MAP_SURFACE_TO_OUTPUT_PDU* pdu)
 {
 	termixContext* ctx = (termixContext*)gfx->custom;
+	tx_log_once(gfx, "tx_MapSurfaceToOutput");
 	BYTE payload[10];
 	put_u16(payload, pdu->surfaceId);
 	put_u32(payload + 2, pdu->outputOriginX);
@@ -169,6 +175,7 @@ static UINT tx_MapSurfaceToOutput(RdpgfxClientContext* gfx,
 static UINT tx_StartFrame(RdpgfxClientContext* gfx, const RDPGFX_START_FRAME_PDU* pdu)
 {
 	termixContext* ctx = (termixContext*)gfx->custom;
+	tx_log_once(gfx, "tx_StartFrame");
 	BYTE payload[4];
 	put_u32(payload, pdu->frameId);
 	wire_send(ctx, "FBEG", payload, sizeof(payload));
@@ -178,6 +185,7 @@ static UINT tx_StartFrame(RdpgfxClientContext* gfx, const RDPGFX_START_FRAME_PDU
 static UINT tx_EndFrame(RdpgfxClientContext* gfx, const RDPGFX_END_FRAME_PDU* pdu)
 {
 	termixContext* ctx = (termixContext*)gfx->custom;
+	tx_log_once(gfx, "tx_EndFrame");
 	BYTE payload[4];
 	put_u32(payload, pdu->frameId);
 	wire_send(ctx, "FEND", payload, sizeof(payload));
@@ -269,6 +277,74 @@ static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COM
 	return CHANNEL_RC_OK;
 }
 
+
+/*
+ * Every callback gdi_graphics_pipeline_init installs, stubbed.
+ *
+ * Leaving them NULL is not equivalent: the channel invokes them, and a gap in
+ * the set is indistinguishable from a client that cannot speak the protocol.
+ * These accept and ignore the operations this path does not render, and log the
+ * first of each so the negotiation sequence is visible.
+ */
+#define TX_GFX_STUB(fn, type)                                                     \
+	static UINT fn(RdpgfxClientContext* gfx, const type* pdu)                     \
+	{                                                                             \
+		WINPR_UNUSED(pdu);                                                        \
+		tx_log_once(gfx, #fn);                                                    \
+		return CHANNEL_RC_OK;                                                     \
+	}
+
+static void tx_log_once(RdpgfxClientContext* gfx, const char* name)
+{
+	WINPR_UNUSED(gfx);
+	static const char* seen[32];
+	static size_t seenCount = 0;
+	for (size_t i = 0; i < seenCount; i++)
+	{
+		if (strcmp(seen[i], name) == 0)
+			return;
+	}
+	if (seenCount < ARRAYSIZE(seen))
+		seen[seenCount++] = name;
+	fprintf(stderr, "[%s] gfx: %s\n", TAG, name);
+	fflush(stderr);
+}
+
+TX_GFX_STUB(tx_DeleteEncodingContext, RDPGFX_DELETE_ENCODING_CONTEXT_PDU)
+TX_GFX_STUB(tx_SolidFill, RDPGFX_SOLID_FILL_PDU)
+TX_GFX_STUB(tx_SurfaceToSurface, RDPGFX_SURFACE_TO_SURFACE_PDU)
+TX_GFX_STUB(tx_SurfaceToCache, RDPGFX_SURFACE_TO_CACHE_PDU)
+TX_GFX_STUB(tx_CacheToSurface, RDPGFX_CACHE_TO_SURFACE_PDU)
+TX_GFX_STUB(tx_CacheImportReply, RDPGFX_CACHE_IMPORT_REPLY_PDU)
+TX_GFX_STUB(tx_EvictCacheEntry, RDPGFX_EVICT_CACHE_ENTRY_PDU)
+TX_GFX_STUB(tx_MapSurfaceToWindow, RDPGFX_MAP_SURFACE_TO_WINDOW_PDU)
+TX_GFX_STUB(tx_MapSurfaceToScaledOutput, RDPGFX_MAP_SURFACE_TO_SCALED_OUTPUT_PDU)
+TX_GFX_STUB(tx_MapSurfaceToScaledWindow, RDPGFX_MAP_SURFACE_TO_SCALED_WINDOW_PDU)
+
+static UINT tx_ImportCacheEntry(RdpgfxClientContext* gfx, UINT16 cacheSlot,
+                                const PERSISTENT_CACHE_ENTRY* entry)
+{
+	WINPR_UNUSED(cacheSlot);
+	WINPR_UNUSED(entry);
+	tx_log_once(gfx, "ImportCacheEntry");
+	return CHANNEL_RC_OK;
+}
+
+static UINT tx_ExportCacheEntry(RdpgfxClientContext* gfx, UINT16 cacheSlot,
+                                PERSISTENT_CACHE_ENTRY* entry)
+{
+	WINPR_UNUSED(cacheSlot);
+	WINPR_UNUSED(entry);
+	tx_log_once(gfx, "ExportCacheEntry");
+	return CHANNEL_RC_OK;
+}
+
+static UINT tx_UpdateSurfaces(RdpgfxClientContext* gfx)
+{
+	tx_log_once(gfx, "UpdateSurfaces");
+	return CHANNEL_RC_OK;
+}
+
 static void tx_OnChannelConnected(void* context, const ChannelConnectedEventArgs* e)
 {
 	termixContext* ctx = (termixContext*)context;
@@ -288,6 +364,20 @@ static void tx_OnChannelConnected(void* context, const ChannelConnectedEventArgs
 		gfx->StartFrame = tx_StartFrame;
 		gfx->EndFrame = tx_EndFrame;
 		gfx->SurfaceCommand = tx_SurfaceCommand;
+
+		gfx->DeleteEncodingContext = tx_DeleteEncodingContext;
+		gfx->SolidFill = tx_SolidFill;
+		gfx->SurfaceToSurface = tx_SurfaceToSurface;
+		gfx->SurfaceToCache = tx_SurfaceToCache;
+		gfx->CacheToSurface = tx_CacheToSurface;
+		gfx->CacheImportReply = tx_CacheImportReply;
+		gfx->ImportCacheEntry = tx_ImportCacheEntry;
+		gfx->ExportCacheEntry = tx_ExportCacheEntry;
+		gfx->EvictCacheEntry = tx_EvictCacheEntry;
+		gfx->MapSurfaceToWindow = tx_MapSurfaceToWindow;
+		gfx->MapSurfaceToScaledOutput = tx_MapSurfaceToScaledOutput;
+		gfx->MapSurfaceToScaledWindow = tx_MapSurfaceToScaledWindow;
+		gfx->UpdateSurfaces = tx_UpdateSurfaces;
 
 		fprintf(stderr, "[%s] graphics pipeline attached\n", TAG);
 		fflush(stderr);

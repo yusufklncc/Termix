@@ -215,25 +215,30 @@ guacd olmadan gerçek RDP, 60fps hedefi. Riskli.
 
 ### Backend
 
-- [ ] FreeRDP3 yardımcı process (native addon değil — çökme izolasyonu için)
-- [ ] AVC420 zorla, H.264 NAL'ları **decode etmeden** geçir
-- [ ] Binary wire format (magic header deseni)
-- [ ] Yeni WS modülü, JWT + `canAccessHost` (Faz 2 gateway'i örnek)
-- [ ] Jump host tüneli — mevcut mekanizma yeniden kullanılacak
+- [x] FreeRDP3 yardımcı process (native addon değil — çökme izolasyonu için)
+- [x] AVC420 zorla, H.264 NAL'ları **decode etmeden** geçir
+- [x] Binary wire format (magic header deseni)
+- [x] Yeni WS modülü, JWT + `canAccessHost` (Faz 2 gateway'i örnek)
+- [ ] Jump host tüneli — mevcut mekanizma yeniden kullanılacak (**yapılmadı**)
+- [ ] **Gerçek bir RDP sunucusuna karşı hiç denenmedi** — köprü ayakta ve protokol
+      çerçeveleme iki yönde doğrulandı, ama H.264 karesi henüz akmadı
 
 ### Frontend
 
-- [ ] WebCodecs `VideoDecoder` + `OffscreenCanvas` worker'da (ana thread'de çizim yok)
-- [ ] RDP **scan code** eşlemesi (Faz 2'deki X11 keysym tablosu burada işe yaramıyor)
-- [ ] Fare + tekerlek
-- [ ] Host formunda render motoru seçimi, **varsayılan Guacamole**
+- [x] WebCodecs `VideoDecoder` + `OffscreenCanvas` worker'da (ana thread'de çizim yok)
+- [x] RDP **scan code** eşlemesi (Faz 2'deki X11 keysym tablosu burada işe yaramıyor)
+- [x] Fare + tekerlek
+- [x] Host formunda render motoru seçimi, **varsayılan Guacamole**
 
 ### Sonraya
 
 - [ ] WebTransport (HTTP/3 datagram) — WebSocket HOL blocking için
 - [ ] Ses, clipboard, RDPDR — COOP/COEP kararı ile birlikte
 
-**Çıktı:** prototip + eksik özellik listesi + ölçüm → **DUR, onay bekle**
+**Çıktı:** eksik özellik listesi verildi (`docs/phase3-direct-rdp-gaps.md`),
+prototip yazıldı ve derleniyor. **Ölçüm yok — gerçek bir RDP host'una bağlanmadı.**
+
+**DUR, onay bekle**
 
 ---
 

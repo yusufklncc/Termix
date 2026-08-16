@@ -151,18 +151,12 @@ static pcRdpgfxEndFrame gdi_EndFrameFn = NULL;
 
 static UINT tx_ResetGraphics(RdpgfxClientContext* gfx, const RDPGFX_RESET_GRAPHICS_PDU* pdu)
 {
-	termixContext* ctx = g_session;
-	if (ctx)
-	{
-		BYTE payload[8];
-		put_u32(payload, pdu->width);
-		put_u32(payload + 4, pdu->height);
-		ctx->desktopWidth = pdu->width;
-		ctx->desktopHeight = pdu->height;
-		wire_send(ctx, "HELO", payload, sizeof(payload));
-		fprintf(stderr, "[%s] reset graphics %ux%u\n", TAG, pdu->width, pdu->height);
-		fflush(stderr);
-	}
+	fprintf(stderr, "[%s] reset graphics %ux%u\n", TAG, pdu->width, pdu->height);
+	fflush(stderr);
+
+	/* No HELO from here: gdi_ResetGraphics calls update->DesktopResize, and
+	 * tx_desktop_resize sends it. Sending one here as well would resize the
+	 * browser canvas twice, and assigning a canvas size clears it. */
 	return gdi_ResetGraphicsFn ? gdi_ResetGraphicsFn(gfx, pdu) : CHANNEL_RC_OK;
 }
 
@@ -403,6 +397,36 @@ static BOOL tx_pre_connect(freerdp* instance)
 	return TRUE;
 }
 
+/* gdi_ResetGraphics calls update->DesktopResize unconditionally and asserts
+ * that it is set (libfreerdp/gdi/gfx.c:121). Leaving it NULL aborts the whole
+ * process from the channel thread on the server's first ResetGraphics PDU --
+ * before a single surface is created -- which looks exactly like a server that
+ * connects and then never sends graphics. It is the one update callback gfx.c
+ * touches; the sample client registers the same handler.
+ *
+ * This owns the HELO for both resize paths: the gfx one above, and a
+ * server-initiated deactivate/reactivate, which never reaches ResetGraphics. */
+static BOOL tx_desktop_resize(rdpContext* context)
+{
+	termixContext* ctx = (termixContext*)context;
+	rdpSettings* settings = context->settings;
+	const UINT32 width = freerdp_settings_get_uint32(settings, FreeRDP_DesktopWidth);
+	const UINT32 height = freerdp_settings_get_uint32(settings, FreeRDP_DesktopHeight);
+
+	ctx->desktopWidth = width;
+	ctx->desktopHeight = height;
+
+	BYTE payload[8];
+	put_u32(payload, width);
+	put_u32(payload + 4, height);
+	wire_send(ctx, "HELO", payload, sizeof(payload));
+
+	fprintf(stderr, "[%s] desktop resize %ux%u\n", TAG, width, height);
+	fflush(stderr);
+
+	return gdi_resize(context->gdi, width, height);
+}
+
 static BOOL tx_post_connect(freerdp* instance)
 {
 	termixContext* ctx = (termixContext*)instance->context;
@@ -414,9 +438,10 @@ static BOOL tx_post_connect(freerdp* instance)
 	 *
 	 * DeactivateClientDecoding then stops the library allocating codecs and
 	 * decoding anything, which is FreeRDP's own supported way to parse the
-	 * protocol without processing graphics. gdi_graphics_pipeline_init is still
-	 * never called, so the gfx callbacks stay ours and the H.264 passes through
-	 * untouched. */
+	 * protocol without processing graphics. The gdi does own the gfx channel
+	 * and its surface bookkeeping, but DeactivateClientDecoding leaves its
+	 * SurfaceCommand NULL, which is the slot the H.264 passes through
+	 * untouched. This mirrors the sample client's post_connect. */
 	if (!gdi_init(instance, PIXEL_FORMAT_XRGB32))
 	{
 		wire_error(ctx, "gdi_init failed");
@@ -424,6 +449,8 @@ static BOOL tx_post_connect(freerdp* instance)
 	}
 	if (!freerdp_settings_set_bool(settings, FreeRDP_DeactivateClientDecoding, TRUE))
 		return FALSE;
+
+	instance->context->update->DesktopResize = tx_desktop_resize;
 
 	ctx->desktopWidth = freerdp_settings_get_uint32(settings, FreeRDP_DesktopWidth);
 	ctx->desktopHeight = freerdp_settings_get_uint32(settings, FreeRDP_DesktopHeight);
@@ -436,8 +463,6 @@ static BOOL tx_post_connect(freerdp* instance)
 	        ctx->desktopHeight);
 	fflush(stderr);
 
-	/* No gdi_init here on purpose: without a GDI there is no surface to decode
-	 * into, which is the point. */
 	return TRUE;
 }
 

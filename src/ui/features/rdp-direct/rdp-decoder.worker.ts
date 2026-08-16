@@ -120,7 +120,12 @@ self.onmessage = async (event: MessageEvent<InboundMessage>) => {
     }
 
     case "resize": {
-      if (canvas) {
+      // Assigning a canvas dimension clears it even when the value is
+      // unchanged, so a repeated size must not reach the canvas.
+      if (
+        canvas &&
+        (canvas.width !== message.width || canvas.height !== message.height)
+      ) {
         canvas.width = message.width;
         canvas.height = message.height;
       }

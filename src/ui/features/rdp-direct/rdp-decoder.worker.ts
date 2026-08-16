@@ -19,7 +19,7 @@ type InboundMessage =
 
 type OutboundMessage =
   | { type: "ready" }
-  | { type: "decoded"; count: number }
+  | { type: "stats"; decoded: number; painted: number; elapsedMs: number }
   | { type: "error"; message: string };
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -68,10 +68,39 @@ function paint(frame: VideoFrame) {
       }
     }
     decodedCount++;
-    post({ type: "decoded", count: decodedCount });
   } finally {
     frame.close();
   }
+}
+
+/*
+ * The bridge reports how fast the server produces frames; this reports how fast
+ * they actually reach the canvas. The two differ when the decoder falls behind,
+ * which is the failure a frame counter on the server side cannot show.
+ *
+ * Sampled on a timer rather than posted per frame: at 60fps a message per frame
+ * is pure overhead on the thread whose latency this path exists to protect.
+ */
+let statsAt = 0;
+let statsPainted = 0;
+
+function reportStats(now: number) {
+  if (statsAt === 0) {
+    statsAt = now;
+    statsPainted = decodedCount;
+    return;
+  }
+  const elapsed = now - statsAt;
+  if (elapsed < 5000) return;
+
+  post({
+    type: "stats",
+    decoded: decodedCount,
+    painted: decodedCount - statsPainted,
+    elapsedMs: elapsed,
+  });
+  statsAt = now;
+  statsPainted = decodedCount;
 }
 
 function ensureDecoder() {
@@ -133,6 +162,8 @@ self.onmessage = async (event: MessageEvent<InboundMessage>) => {
     }
 
     case "avc": {
+      reportStats(performance.now());
+
       const parsed = parseAvcFrame(new Uint8Array(message.payload));
       if (!parsed || parsed.bitstream.length === 0) return;
       if (!decoder || decoder.state !== "configured") return;

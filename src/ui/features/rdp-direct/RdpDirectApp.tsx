@@ -10,6 +10,7 @@ import { AlertCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/button.tsx";
 import { SimpleLoader } from "@/lib/SimpleLoader.tsx";
 import { logActivity } from "@/main-axios.ts";
+import { statsLogger } from "@/lib/frontend-logger";
 import {
   connectRdpDirect,
   type RdpDirectHandle,
@@ -64,6 +65,18 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
           onState: (next, message) => {
             setState(next);
             if (message) setDetail(message);
+          },
+          // The bridge logs the rate the server produced; this is the rate that
+          // reached the canvas. Comparing the two is how a decoder falling
+          // behind is told apart from a server that is simply slow.
+          onStats: (stats) => {
+            statsLogger.debug("Direct RDP paint rate", {
+              operation: "rdp_direct_stats",
+              hostId: numericHostId,
+              fps: Number(stats.fps.toFixed(1)),
+              painted: stats.painted,
+              decoded: stats.decoded,
+            });
           },
         });
       } catch (error) {

@@ -25,6 +25,16 @@ import {
 
 export type RdpDirectState = "connecting" | "connected" | "closed" | "failed";
 
+/** Frames painted in the last sampling window, measured in the worker. */
+export interface RdpDirectStats {
+  /** Frames painted since the session began. */
+  decoded: number;
+  /** Frames painted during this window. */
+  painted: number;
+  elapsedMs: number;
+  fps: number;
+}
+
 export interface RdpDirectOptions {
   hostId: number;
   /** The canvas is created inside this element; see connectRdpDirect. */
@@ -32,6 +42,12 @@ export interface RdpDirectOptions {
   token?: string | null;
   onState(state: RdpDirectState, detail?: string): void;
   onResize?(width: number, height: number): void;
+  /**
+   * Painted frame rate, sampled roughly every five seconds. The bridge reports
+   * what the server produced; this reports what actually reached the canvas,
+   * and the gap between them is the decoder falling behind.
+   */
+  onStats?(stats: RdpDirectStats): void;
 }
 
 export interface RdpDirectHandle {
@@ -58,6 +74,7 @@ export function connectRdpDirect({
   token,
   onState,
   onResize,
+  onStats,
 }: RdpDirectOptions): RdpDirectHandle {
   const base = buildRdpDirectUrl({
     isDev: import.meta.env.DEV,
@@ -92,6 +109,15 @@ export function connectRdpDirect({
 
   worker.onmessage = (event: MessageEvent) => {
     if (event.data?.type === "error") onState("failed", event.data.message);
+    else if (event.data?.type === "stats" && onStats) {
+      const { decoded, painted, elapsedMs } = event.data;
+      onStats({
+        decoded,
+        painted,
+        elapsedMs,
+        fps: elapsedMs > 0 ? (painted * 1000) / elapsedMs : 0,
+      });
+    }
   };
 
   const socket = new WebSocket(url.toString());

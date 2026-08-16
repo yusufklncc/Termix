@@ -69,14 +69,18 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
           // The bridge logs the rate the server produced; this is the rate that
           // reached the canvas. Comparing the two is how a decoder falling
           // behind is told apart from a server that is simply slow.
+          //
+          // The numbers go in the message rather than the context: the logger
+          // only renders a fixed set of context keys, so anything else is
+          // silently dropped. Level is info because console.debug is hidden
+          // unless the console is switched to verbose.
           onStats: (stats) => {
-            statsLogger.debug("Direct RDP paint rate", {
-              operation: "rdp_direct_stats",
-              hostId: numericHostId,
-              fps: Number(stats.fps.toFixed(1)),
-              painted: stats.painted,
-              decoded: stats.decoded,
-            });
+            statsLogger.info(
+              `Direct RDP painted ${stats.fps.toFixed(1)} fps ` +
+                `(${stats.painted} frames in ${Math.round(stats.elapsedMs)}ms, ` +
+                `${stats.decoded} total)`,
+              { operation: "rdp_direct_stats", hostId: numericHostId },
+            );
           },
         });
       } catch (error) {

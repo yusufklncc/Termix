@@ -18,10 +18,11 @@ Not Configured). Yani sunucu yazılımla encode ediyor.
 
 ## Sonuçlar
 
-| Hedef ayarı           | Köprü FPS   | Tarayıcı FPS | Codec dağılımı  |
-| --------------------- | ----------- | ------------ | --------------- |
-| Varsayılan            | 26.0 – 27.5 | ölçülmedi    | `avc444v2` %100 |
-| `DWMFRAMEINTERVAL=15` | 45.9 – 47.2 | 46.2         | `avc444v2` %100 |
+| Hedef ayarı                | Köprü FPS   | Tarayıcı FPS | Codec dağılımı  |
+| -------------------------- | ----------- | ------------ | --------------- |
+| Varsayılan                 | 26.0 – 27.5 | ölçülmedi    | `avc444v2` %100 |
+| `DWMFRAMEINTERVAL=15`      | 45.9 – 47.2 | 46.2         | `avc444v2` %100 |
+| + `BRIDGE_RDP_NETWORK=lan` | 46.9 – 47.0 | ölçülmedi    | `avc444v2` %100 |
 
 2428 karelik ölçümde `chroma-only skipped=0`.
 
@@ -63,11 +64,22 @@ motorları boşta. Sunucu kaynak sıkışmasında değil.
 Toplam CPU'nun %6 olması tek çekirdek doygunluğunu elemiyor (16 thread'de bir
 çekirdeğin tamamı ≈ %6), bu yüzden çekirdek bazında bakılması gerekiyor.
 
-Daha güçlü aday: hedef **Wi-Fi** üzerinde ve yalnızca ~2.5 Mbps gönderiyor.
-1682x962 @ 47fps için kare başına ~6.6 KB — bu, encoder'ın hesaplama değil
-**bit hızı** sınırında çalıştığını gösteriyor. RDP grafik hattı ağ koşullarına
-göre kendini adapte eder. Kablolu bağlantıyla tekrar ölçmek bunu ayırt eder;
-**yapılmadı.**
+İkinci tahmin — hedefin Wi-Fi'da yalnızca ~2.5 Mbps göndermesi, yani encoder'ın
+bit hızı sınırında olması — de **desteklenmedi**. RDP'de istemcinin bit hızı
+söyleme yolu yok ama "ne kadar ağım var" diyebildiği bir alan var
+(`ConnectionType`). `lan` ipucuyla ölçüm **46.9 – 47.0** çıktı, yani
+ipucusuzken alınan 45.9 – 47.2 ile aynı. Ağ ipucu bu kurulumda bir kaldıraç
+değil.
+
+Geriye kalanlar, hiçbiri ölçülmedi:
+
+- `DWMFRAMEINTERVAL=15` ondalık 15 → tavan ~66 fps. Daha küçük bir değer
+  (ör. 10) tavanı yükseltir; 47'nin bu tavana mı yoksa DWM'in gerçek
+  kompozisyon hızına mı dayandığı bilinmiyor.
+- Hedefin kendi render hızı: TestUFO uzak oturumda `Refresh Rate 47 Hz`
+  gösteriyor, yani Windows oturumu 47 Hz'de dönüyor ve biz onun ürettiği her
+  kareyi taşıyoruz. Sınır oturumun kendisinde.
+- Tek çekirdek doygunluğu (yukarıdaki uyarı).
 
 ## Ölçüm nasıl alınır
 
@@ -106,16 +118,31 @@ HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations
 
 Yeniden başlatma gerekiyor. Bu yalnızca tavanı belirler.
 
+## Kalite / FPS / bitrate ne kadar ayarlanabilir
+
+RDP GFX'te istemcinin bit hızı ya da hedef kare hızı söyleyeceği bir alan
+**yok**. Encoder sunucuda ve parametrelerini Windows seçiyor — pass-through
+mimarisinin doğrudan sonucu. Dolaylı kaldıraçlar, etkisi ölçülmüş hâliyle:
+
+| Kaldıraç                   | Nerede               | Ölçülen etki                |
+| -------------------------- | -------------------- | --------------------------- |
+| Çözünürlük                 | Sekme boyutu         | Ölçülmedi, en büyük aday    |
+| `ConnectionType`           | `BRIDGE_RDP_NETWORK` | **Yok** — 47 fps değişmedi  |
+| `DWMFRAMEINTERVAL`         | Hedef registry       | 27 → 47 fps                 |
+| `Prioritize H.264/AVC 444` | Hedef GPO            | H.264'ü hiç yoktan var etti |
+
+Yani bugüne kadar işe yarayan iki ayarın **ikisi de hedef makinede**.
+
 ## 47 → 60 için sıradaki adımlar
 
 Sırayla, çünkü her biri bir sonrakini gereksiz kılabilir:
 
 1. **Çekirdek bazında CPU** — Görev Yöneticisi → CPU grafiğine sağ tık →
    _Change graph to_ → Logical processors. Tek çekirdek %100'de mi?
-2. **GPU Video Encode sayacı** — grafiklerden birini Video Encode'a çevir. %0
-   bekleniyor; değilse donanım encode devrede demektir.
-3. **Kablolu Ethernet** — en belirleyici deney. Wi-Fi pacing'i sebepse FPS
-   burada yükselir.
+2. **Çözünürlüğü düşür** — sekmeyi küçültüp aynı ölçümü al. FPS yükseliyorsa
+   sınır encode tarafında ve çözünürlükle ölçekleniyor demektir.
+3. **`DWMFRAMEINTERVAL`'i 10 yap** — tavanı ~100 fps'e çıkarır. 47 tavana
+   dayanıyorsa yükselir, dayanmıyorsa değişmez ve tavan elenir.
 
 Ölçüm alırken hedefte Görev Yöneticisi kapalı olmalı: kendisi de encode edilen
 içerik üretiyor ve rakamı düşürüyor.

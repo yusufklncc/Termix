@@ -23,7 +23,7 @@ Not Configured). Yani sunucu yazılımla encode ediyor.
 | Varsayılan                 | 26.0 – 27.5 | ölçülmedi       | `avc444v2` %100 |
 | `DWMFRAMEINTERVAL=15`      | 45.9 – 47.2 | 46.2            | `avc444v2` %100 |
 | + `BRIDGE_RDP_NETWORK=lan` | 46.9 – 47.0 | ölçülmedi       | `avc444v2` %100 |
-| **`DWMFRAMEINTERVAL=10`**  | ölçülmedi   | **60.1 – 60.7** | `avc444v2` %100 |
+| **`DWMFRAMEINTERVAL=10`**  | 35.2 – 36.4 | **60.1 – 60.7** | `avc444v2` %100 |
 
 `DWMFRAMEINTERVAL=10` ile hedefteki TestUFO `61 fps / 62 Hz` gösteriyor ve
 tarayıcı 60.1 – 60.7 çiziyor; arada 42 – 49'a düşüyor. **60 FPS hedefine
@@ -96,22 +96,47 @@ kendi sınırındaydı, yani 28'i belirleyen guacd'nin kendisiydi.
 sınırı değil, hedefin kendine koyduğu bir tavandı — CPU'nun %6, GPU'nun %14'te
 boşta durması da bununla tutarlıydı: sunucu yavaş değil, bekliyordu.
 
-### Değerin birimi hakkında uyarı
+### Değerin anlamı — Microsoft ne diyor, ölçüm ne diyor
 
-`1000 / değer` **teslim edilen kare hızını öngörmüyor**:
+Microsoft'un [KB 2885213](https://learn.microsoft.com/en-us/troubleshoot/windows-server/remote/frame-rate-limited-to-30-fps)
+belgesinde **yalnızca `15` değeri** tanımlı ve şöyle:
 
-| Değer | ms varsayımı | Ölçülen |
-| ----- | ------------ | ------- |
-| 15    | ~66 fps      | 47      |
-| 10    | ~100 fps     | 60      |
+> The registry entry ... sets the maximum frame rate limit that the remote
+> display protocol can deliver to the remote session client **to 60 FPS**.
+> This setting **does not set the actual frame rate** for the remote session
+> client. The actual frame rate ... depends on other factors such as
+> application and computer hardware resources.
 
-Microsoft bu değerin semantiğini belgelemiyor. Ölçümle bilinen tek şey: değer
-küçüldükçe tavan yükseliyor. Aradaki ilişkiyi formülle tahmin etmeye çalışmak
-bu ölçümde iki kez yanlış sonuç verdi, o yüzden burada formül verilmiyor.
+Yani belgelenen tek şey: `15` → tavan 60 FPS, ve bunun gerçek kare hızını
+belirlemediği. **Milisaniye olduğu, `1000 / değer` formülü, ya da 15 dışında
+herhangi bir değerin ne yaptığı Microsoft tarafından belgelenmiyor.**
 
-Kalan tek ölçülmemiş kalem, 60'taki ara düşüşler (42 – 49). Çözünürlüğü
-düşürüp ölçmek bunu sınar; düşüşler kayboluyorsa encode tarafı 60'ta zorlanıyor
-demektir.
+Bu dokümanda daha önce `1000 / değer` üzerinden yapılan çıkarım
+(15 → ~66 fps, 10 → ~100 fps) **kaynaksızdı ve ölçümle de tutmadı**:
+
+| Değer | Belgelenen    | Ölçülen |
+| ----- | ------------- | ------- |
+| 15    | tavan 60      | 47      |
+| 10    | belgelenmemiş | 60      |
+
+Burada çözülmemiş bir çelişki var: `15` tavanı 60 yapıyorsa, 47 zaten tavanın
+altındaydı ve değeri düşürmenin bir etkisi olmaması gerekirdi. Oldu. Bu, değerin
+basit bir üst sınır olmadığını gösteriyor ama nasıl çalıştığını **bilmiyoruz**.
+Üçüncü bir teori uydurulmuyor.
+
+**Pratik sonuç:** bu makinede `10` ölçülerek `15`'ten iyi çıktı. Aradaki
+değerler (14, 12 …) denenmedi ve sonucu tahmin edilemez.
+
+### 60 sabit değil
+
+Sonraki bir oturumda aynı ayarla 35 fps ölçüldü — üstelik çözünürlük daha
+düşükken (1174x962, 60 fps ölçümü 1716x962'deydi). Yani daha az piksel, daha
+az kare. Bu, sınırın piksel sayısında olmadığını gösteriyor ve Microsoft'un
+"gerçek kare hızı uygulamaya ve donanıma bağlıdır" uyarısını doğruluyor:
+hedefin o anki durumu (güç profili, termal, oturumda çalışan diğer şeyler)
+sonucu belirliyor.
+
+Bu yol hedefin ürettiğini taşıyor; hedef 60 üretirse 60, 35 üretirse 35.
 
 ## Ölçüm nasıl alınır
 
@@ -151,8 +176,9 @@ HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations
 Yeniden başlatma gerekiyor. Bu yalnızca tavanı belirler; gerçek hız hedefin
 donanımına ve içeriğe bağlı kalır.
 
-Ölçülen: `15` → 47 fps, `10` → 60 fps. CLAUDE.md'deki not `15` için 60 FPS
-diyordu ama bu makinede 47 çıktı, o yüzden **10** öneriliyor.
+Microsoft yalnızca `15`'i belgeliyor (tavan 60 FPS). Bu makinede `15` → 47,
+`10` → 60 ölçüldü, o yüzden **10** öneriliyor — ama `10` belgelenmemiş bir
+değer ve etkisi ölçüme dayanıyor, garantiye değil.
 
 ## Kalite / FPS / bitrate ne kadar ayarlanabilir
 

@@ -222,9 +222,14 @@ guacd olmadan gerçek RDP, 60fps hedefi. Riskli.
 - [ ] Jump host tüneli — mevcut mekanizma yeniden kullanılacak (**yapılmadı**)
 - [x] Gerçek RDP sunucusuna bağlanıyor — kimlik doğrulama, GFX kanalı ve
       `ResetGraphics` çalışıyor; oturum ayakta kalıyor
-- [ ] **Sunucu grafik göndermiyor** — `CreateSurface` / `SurfaceCommand` gelmiyor,
-      yani tek bir H.264 karesi henüz akmadı. Devir notu ve sıradaki adımlar:
+- [x] **H.264 akıyor ve ekrana çiziliyor** — Windows 11 hedefinde oturumun
+      %100'ü pass-through üzerinden geçiyor. Teşhis süreci:
       [`docs/phase3-handoff.md`](docs/phase3-handoff.md)
+- [x] `update->DesktopResize` kaydı — GDI assert edip süreci `abort()` ediyordu
+- [x] AVC420 dışı codec'te oturum ölmüyor; codec histogramı loglanıyor
+- [x] **10.x capset reklamı** — "sadece AVC420" istemek 8.0'a düşürüyordu ve
+      8.0'da H.264 yok. Şimdi 10.7 onaylanıyor
+- [x] AVC444 luma pass-through (`LC=2` atlanıyor) — 4:2:0'a düşüş, decode yok
 
 ### Frontend
 
@@ -238,8 +243,23 @@ guacd olmadan gerçek RDP, 60fps hedefi. Riskli.
 - [ ] WebTransport (HTTP/3 datagram) — WebSocket HOL blocking için
 - [ ] Ses, clipboard, RDPDR — COOP/COEP kararı ile birlikte
 
-**Çıktı:** eksik özellik listesi verildi (`docs/phase3-direct-rdp-gaps.md`),
-prototip yazıldı ve derleniyor. **Ölçüm yok — gerçek bir RDP host'una bağlanmadı.**
+### Ölçüm
+
+- [x] Köprü tarafı FPS + codec dağılımı (5 sn'de bir)
+- [x] Tarayıcı tarafı çizilen FPS (`onStats` → `statsLogger`)
+- [x] İlk rakamlar → [`docs/phase3-measurements.md`](docs/phase3-measurements.md)
+- [ ] Uçtan uca gecikme
+- [ ] Sunucu CPU / bant genişliği
+- [ ] Guacamole karşılaştırması → Faz 4
+
+### Doğrulanmamış
+
+- [ ] Rect konumlandırma — tam ekran karede görünmez, kısmi güncellemede sapabilir
+- [ ] Klavye / fare uçtan uca (birim testli, canlı denenmedi)
+
+**Çıktı:** eksik özellik listesi (`docs/phase3-direct-rdp-gaps.md`), çalışan
+prototip ve ilk ölçümler (`docs/phase3-measurements.md`). Faz 3'ün ana sorusu
+— guacd'siz, sunucuda decode/re-encode olmadan RDP — **cevaplandı.**
 
 **DUR, onay bekle**
 

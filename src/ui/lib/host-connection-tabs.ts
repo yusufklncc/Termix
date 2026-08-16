@@ -45,3 +45,24 @@ export function resolveHostTabType(
   if (isConnectionEnabled(host, preferredType)) return preferredType;
   return getDefaultConnectionTab(host);
 }
+
+/** Tab types that can be shared at all. `stream` is not one of them. */
+const SHAREABLE_TAB_TYPES: TabType[] = ["terminal", "rdp", "vnc", "telnet"];
+
+/**
+ * Whether a live session can be handed to someone else.
+ *
+ * Sharing a remote desktop is guacd's `join`, so it exists only where guacd is
+ * in the picture. An RDP host on the direct renderer has no guacd connection to
+ * join, and offering the button anyway would produce a link that resolves to
+ * "session is no longer active" -- a failure that looks like a bug rather than
+ * a missing feature.
+ */
+export function isTabShareable(
+  type: TabType,
+  host?: Pick<Host, "rdpRenderEngine">,
+): boolean {
+  if (!SHAREABLE_TAB_TYPES.includes(type)) return false;
+  if (type === "rdp" && host?.rdpRenderEngine === "direct") return false;
+  return true;
+}

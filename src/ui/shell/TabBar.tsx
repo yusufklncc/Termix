@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { tabIcon } from "@/shell/tabUtils";
 import { isElectron } from "@/lib/electron";
+import { isTabShareable } from "@/lib/host-connection-tabs";
 import type { Tab, TabType, SplitMode } from "@/types/ui-types";
 import { SPLIT_MODES, PANE_COUNTS } from "@/lib/theme";
 
@@ -33,9 +34,6 @@ const CONNECTION_TAB_TYPES: TabType[] = [
   "telnet",
   "stream",
 ];
-// A stream tab embeds a page Termix does not serve, so there is no session to
-// hand a second viewer. Sharing stays off for it while refresh stays on.
-const SHAREABLE_TAB_TYPES: TabType[] = ["terminal", "rdp", "vnc", "telnet"];
 
 export function TabBar({
   tabs,
@@ -364,7 +362,7 @@ export function TabBar({
                         <RefreshCw className="size-3" />
                       </button>
                     )}
-                    {SHAREABLE_TAB_TYPES.includes(tab.type) && onOpenShare && (
+                    {isTabShareable(tab.type, tab.host) && onOpenShare && (
                       <button
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={(e) => {

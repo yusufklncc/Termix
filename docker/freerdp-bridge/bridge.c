@@ -65,6 +65,11 @@ typedef struct
 	UINT32 codecOther;
 	/* AVC444 updates that carried only chroma, so had no picture to forward. */
 	UINT32 chromaOnlySkipped;
+
+	/* Input is written from the reader thread; only ever read for logging. */
+	UINT32 keyEvents;
+	UINT32 pointerEvents;
+	UINT32 inputRejected;
 } termixContext;
 
 /* ------------------------------------------------------------------ */
@@ -202,6 +207,8 @@ static void log_codec_mix(termixContext* ctx)
 
 	fprintf(stderr, "[%s] codec mix: %s (chroma-only skipped=%u)\n", TAG,
 	        used ? line : "(nothing yet)", ctx->chromaOnlySkipped);
+	fprintf(stderr, "[%s] input: keys=%u pointer=%u rejected=%u\n", TAG, ctx->keyEvents,
+	        ctx->pointerEvents, ctx->inputRejected);
 	fflush(stderr);
 }
 
@@ -643,25 +650,67 @@ static UINT32 read_u32(const BYTE* p)
 	return (UINT32)p[0] | ((UINT32)p[1] << 8) | ((UINT32)p[2] << 16) | ((UINT32)p[3] << 24);
 }
 
+/*
+ * Input that goes nowhere is silent by nature: a browser that never sends and a
+ * FreeRDP that rejects what arrives look identical from the remote desktop. The
+ * first event of each kind is logged with its values, and failures are counted,
+ * so the two can be told apart without guessing.
+ */
 static void handle_input(termixContext* ctx, const char magic[4], const BYTE* payload, UINT32 length)
 {
 	rdpInput* input = ctx->context.input;
 	if (!input)
 		return;
 
+	BOOL handled = TRUE;
+	BOOL sent = TRUE;
+
 	if (memcmp(magic, "KEYE", 4) == 0 && length >= 4)
-		freerdp_input_send_keyboard_event(input, read_u16(payload), read_u16(payload + 2));
+	{
+		const UINT16 flags = read_u16(payload);
+		const UINT16 code = read_u16(payload + 2);
+		if (ctx->keyEvents++ == 0)
+		{
+			fprintf(stderr, "[%s] first key event: flags=0x%04X code=0x%02X\n", TAG, flags, code);
+			fflush(stderr);
+		}
+		sent = freerdp_input_send_keyboard_event(input, flags, code);
+	}
 	else if (memcmp(magic, "UNIC", 4) == 0 && length >= 4)
-		freerdp_input_send_unicode_keyboard_event(input, read_u16(payload), read_u16(payload + 2));
+	{
+		ctx->keyEvents++;
+		sent = freerdp_input_send_unicode_keyboard_event(input, read_u16(payload),
+		                                                 read_u16(payload + 2));
+	}
 	else if (memcmp(magic, "MOUS", 4) == 0 && length >= 6)
-		freerdp_input_send_mouse_event(input, read_u16(payload), read_u16(payload + 2),
-		                               read_u16(payload + 4));
+	{
+		const UINT16 flags = read_u16(payload);
+		const UINT16 x = read_u16(payload + 2);
+		const UINT16 y = read_u16(payload + 4);
+		if (ctx->pointerEvents++ == 0)
+		{
+			fprintf(stderr, "[%s] first pointer event: flags=0x%04X at %u,%u\n", TAG, flags, x, y);
+			fflush(stderr);
+		}
+		sent = freerdp_input_send_mouse_event(input, flags, x, y);
+	}
 	else if (memcmp(magic, "EMOU", 4) == 0 && length >= 6)
-		freerdp_input_send_extended_mouse_event(input, read_u16(payload), read_u16(payload + 2),
-		                                        read_u16(payload + 4));
+	{
+		ctx->pointerEvents++;
+		sent = freerdp_input_send_extended_mouse_event(input, read_u16(payload),
+		                                               read_u16(payload + 2), read_u16(payload + 4));
+	}
+	else
+		handled = FALSE;
+
 	/* FACK is accepted and ignored: rdpgfx_recv_end_frame_pdu acknowledges
 	 * frames itself, so sending a second one from here would be wrong. The
 	 * browser still sends it, and it still marks how far it has decoded. */
+	if (handled && !sent && ctx->inputRejected++ == 0)
+	{
+		fprintf(stderr, "[%s] FreeRDP rejected an input event (%.4s)\n", TAG, magic);
+		fflush(stderr);
+	}
 }
 
 static void* input_thread(void* arg)

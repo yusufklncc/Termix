@@ -1,4 +1,5 @@
 import { getBasePath } from "@/lib/base-path.ts";
+import { attachKeyboardLock } from "@/lib/keyboard-lock.ts";
 import {
   encodeRdpFrame,
   readFrameId,
@@ -294,6 +295,12 @@ export function connectRdpDirect({
     heldKeys.clear();
   };
 
+  // Reserved browser shortcuts -- Ctrl+W above all -- cannot be stopped with
+  // preventDefault, so Ctrl+W in a remote session closes the Termix tab. The
+  // lock claims them, but only while fullscreen, which the app already has a
+  // control for.
+  const keyboardLock = attachKeyboardLock();
+
   surface.addEventListener("pointermove", onPointerMove);
   surface.addEventListener("pointerdown", onPointerDown);
   surface.addEventListener("pointerup", onPointerUp);
@@ -397,6 +404,8 @@ export function connectRdpDirect({
       surface.removeEventListener("keyup", onKeyUp);
       surface.removeEventListener("blur", releaseAll);
       window.removeEventListener("blur", releaseAll);
+
+      keyboardLock.release();
 
       // The cursor lives on the surface, which outlives this session.
       surface.style.cursor = "";

@@ -166,7 +166,7 @@ Yukarıdakiler ışığında, "çalışan prototip" için en dar ve en dürüst 
 
 ### Canlı testte ortaya çıkan, bu listede olmayan eksikler
 
-İlk gerçek oturumda görülenler. İlk ikisi giderildi, üçüncüsü duruyor:
+İlk gerçek oturumda görülenler, üçü de giderildi:
 
 - **Uzak imleç şekli.** Köprü imleç güncellemelerini hiç işlemiyordu; kullanıcı
   yalnızca kendi yerel okunu görüyordu. Tıklamalar doğru yere gittiği hâlde
@@ -176,10 +176,21 @@ Yukarıdakiler ışığında, "çalışan prototip" için en dar ve en dürüst 
   Ölçüldüğünde 10.7 capset'iyle oturumun %100'ü H.264 çıktı, ama bu sunucuya
   göre değişebilir; artık ölümcül değil, sayılıyor.
 - **Tarayıcı kısayolları.** `Ctrl+W` gibi ayrılmış kombinasyonlar
-  `preventDefault()` ile engellenemiyor ve Termix sekmesini kapatıyor. Çözümü
-  Keyboard Lock API (`navigator.keyboard.lock()`), o da tam ekran gerektiriyor.
-  **Mevcut Guacamole yolunda da aynı** — repoda `navigator.keyboard` kullanımı
-  yok — yani bu bir regresyon değil, ortak bir platform sınırı. Düzeltilecekse
-  iki yolda birden düzeltilmeli.
+  `preventDefault()` ile engellenemiyor ve Termix sekmesini kapatıyordu.
+  Keyboard Lock API ile çözüldü (`src/ui/lib/keyboard-lock.ts`). API yalnızca
+  tam ekranda geçerli olduğu için modül kendi düğmesini sunmuyor,
+  `fullscreenchange` olayını dinliyor ve uygulamanın mevcut tam ekran
+  anahtarıyla çalışıyor.
+
+  Escape dahil **her tuş** kilitleniyor, çünkü uzak masaüstünün Escape'e
+  ihtiyacı var; tarayıcı bu durumda tam ekrandan çıkmak için basılı tutmayı
+  şart koşuyor ve bunu kendisi bildiriyor.
+
+  Chromium dışında API yok, orada sessizce devre dışı kalıyor ve ayrılmış
+  kısayollar tarayıcı anlamını koruyor.
+
+  Modül paylaşılan `lib/` altında, çünkü **Guacamole yolunda da aynı sorun
+  var** (repoda başka `navigator.keyboard` kullanımı yok). O yol henüz
+  bağlanmadı — mevcut davranışı değiştirmemek için bilinçli olarak.
 
 Bu kapsam COOP/COEP gerektirmez, dolayısıyla Faz 1'i bozmaz.

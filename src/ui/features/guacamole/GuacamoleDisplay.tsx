@@ -11,6 +11,7 @@ import { useTranslation } from "react-i18next";
 import { getGuacamoleToken, isElectron } from "@/main-axios.ts";
 import { SimpleLoader } from "@/lib/SimpleLoader.tsx";
 import { getBasePath } from "@/lib/base-path.ts";
+import { statsLogger } from "@/lib/frontend-logger";
 import { buildGuacamoleWebSocketBaseUrl } from "./guacamole-websocket-url.ts";
 import {
   resolveConnectionOrigin,
@@ -526,6 +527,40 @@ export const GuacamoleDisplay = forwardRef<
           onDisconnect?.();
           break;
       }
+    };
+
+    /*
+     * Frame rate, for comparing this path against the direct H.264 one.
+     *
+     * A `sync` instruction marks a finished frame, which makes it the guacd
+     * equivalent of the direct path's end-of-frame message, so both report the
+     * same thing and the numbers can be read side by side. Purely passive: the
+     * callback was unused, and nothing here feeds back into rendering.
+     */
+    let syncCount = 0;
+    let syncWindowStart = 0;
+    let syncWindowCount = 0;
+
+    client.onsync = (timestamp: number) => {
+      syncCount++;
+      const now = performance.now();
+      if (syncWindowStart === 0) {
+        syncWindowStart = now;
+        syncWindowCount = syncCount;
+        return;
+      }
+
+      const elapsed = now - syncWindowStart;
+      if (elapsed < 5000) return;
+
+      const frames = syncCount - syncWindowCount;
+      statsLogger.info(
+        `Guacamole painted ${((frames * 1000) / elapsed).toFixed(1)} fps ` +
+          `(${frames} frames in ${Math.round(elapsed)}ms, ${syncCount} total)`,
+        { operation: "guacamole_stats", sessionId: String(timestamp) },
+      );
+      syncWindowStart = now;
+      syncWindowCount = syncCount;
     };
 
     client.onerror = (error: Guacamole.Status) => {

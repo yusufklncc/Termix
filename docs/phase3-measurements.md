@@ -71,15 +71,29 @@ söyleme yolu yok ama "ne kadar ağım var" diyebildiği bir alan var
 ipucusuzken alınan 45.9 – 47.2 ile aynı. Ağ ipucu bu kurulumda bir kaldıraç
 değil.
 
+Üçüncü tahmin — kare onaylarının hızı sınırlaması — de **desteklenmedi**.
+Varsayılanda her kare ayrı ayrı onaylanıyor, yani sunucu her karede onayın
+dönmesini bekliyor; 47 fps = kare başına 21.3 ms, bir Wi-Fi RTT'siyle çok
+uyumlu bir sayı. `FreeRDP_GfxSuspendFrameAck` ile onaylar askıya alındığında
+(`suspendack=yes` loglandı, ayar uygulandı) ölçüm **47.0** çıktı — hiç
+değişmedi. Onaylar aynı zamanda geri basınç olduğu için varsayılan kapalı
+bırakıldı; hiçbir şey kazandırmadan bir güvenlik ağını feda etmenin anlamı yok.
+
+Bu tahmin, karşılaştırma ölçümündeki bir gözlemden doğmuştu: aynı hedef guacd
+ile 28, köprüyle 47 fps üretiyordu, yani 47 hedefin sabit tavanı değil. Onaylar
+elenince o gözlemin daha basit bir açıklaması kalıyor — guacd %85.9 CPU ile
+kendi sınırındaydı, yani 28'i belirleyen guacd'nin kendisiydi.
+
 Geriye kalanlar, hiçbiri ölçülmedi:
 
-- `DWMFRAMEINTERVAL=15` ondalık 15 → tavan ~66 fps. Daha küçük bir değer
-  (ör. 10) tavanı yükseltir; 47'nin bu tavana mı yoksa DWM'in gerçek
-  kompozisyon hızına mı dayandığı bilinmiyor.
-- Hedefin kendi render hızı: TestUFO uzak oturumda `Refresh Rate 47 Hz`
-  gösteriyor, yani Windows oturumu 47 Hz'de dönüyor ve biz onun ürettiği her
-  kareyi taşıyoruz. Sınır oturumun kendisinde.
-- Tek çekirdek doygunluğu (yukarıdaki uyarı).
+- **Çözünürlük.** Sekmeyi küçültüp ölçmek, aggregate CPU'nun gizlediği tek
+  çekirdek doygunluğunu da sınar. En ucuz deney.
+- **`DWMFRAMEINTERVAL=10`** — tavanı ~100 fps'e çıkarır. 47 tavana dayanıyorsa
+  yükselir; yükselmezse tavan kesin olarak elenir.
+- Hedefin kendi kompozisyon hızı: TestUFO uzak oturumda `Refresh Rate 47 Hz`
+  gösteriyor. Bu döngüsel bir gözlem (rAF kompozisyonu takip eder,
+  kompozisyonu ne belirliyor bilinmiyor) ama sınırın oturumun içinde olduğuna
+  işaret ediyor.
 
 ## Ölçüm nasıl alınır
 
@@ -124,12 +138,16 @@ RDP GFX'te istemcinin bit hızı ya da hedef kare hızı söyleyeceği bir alan
 **yok**. Encoder sunucuda ve parametrelerini Windows seçiyor — pass-through
 mimarisinin doğrudan sonucu. Dolaylı kaldıraçlar, etkisi ölçülmüş hâliyle:
 
-| Kaldıraç                   | Nerede               | Ölçülen etki                |
-| -------------------------- | -------------------- | --------------------------- |
-| Çözünürlük                 | Sekme boyutu         | Ölçülmedi, en büyük aday    |
-| `ConnectionType`           | `BRIDGE_RDP_NETWORK` | **Yok** — 47 fps değişmedi  |
-| `DWMFRAMEINTERVAL`         | Hedef registry       | 27 → 47 fps                 |
-| `Prioritize H.264/AVC 444` | Hedef GPO            | H.264'ü hiç yoktan var etti |
+| Kaldıraç                   | Nerede                   | Ölçülen etki                |
+| -------------------------- | ------------------------ | --------------------------- |
+| Çözünürlük                 | Sekme boyutu             | Ölçülmedi, en büyük aday    |
+| `ConnectionType`           | `BRIDGE_RDP_NETWORK`     | **Yok** — 47 fps değişmedi  |
+| Kare onayı askıya alma     | `BRIDGE_GFX_SUSPEND_ACK` | **Yok** — 47 fps değişmedi  |
+| `DWMFRAMEINTERVAL`         | Hedef registry           | 27 → 47 fps                 |
+| `Prioritize H.264/AVC 444` | Hedef GPO                | H.264'ü hiç yoktan var etti |
+
+FreeRDP varsayılanları ölçüm sırasında loglandı: `connection=7`
+(`CONNECTION_TYPE_AUTODETECT`), `autodetect=on`, `suspendack=no`.
 
 Yani bugüne kadar işe yarayan iki ayarın **ikisi de hedef makinede**.
 

@@ -273,7 +273,13 @@ prototip ve ilk ölçümler (`docs/phase3-measurements.md`). Faz 3'ün ana sorus
 - [ ] Uçtan uca gecikme (fiziksel ölçüm gerekiyor)
 - [x] `stream` yolu aynı hedefe bağlanamadığı için üç yollu tablo mümkün değil;
       kendi ölçümü Faz 2'de alındı
-- [ ] Yeni yol başarısız olursa Guacamole'e otomatik geri düşme
+- [x] ~~Yeni yol başarısız olursa Guacamole'e otomatik geri düşme~~ —
+      **yapılmayacak, kullanıcı kararı.** Direct yol çalışmıyorsa hata
+      gösterilecek. Gerekçe: sessiz geri düşme "neden yavaş" sorusunu görünmez
+      kılar ve host bazlı seçimin anlamını ortadan kaldırır. Faz 3'ün teşhis
+      süreci (capset pazarlığı, AVC444, imleç) sessiz bir geri düşme olsaydı
+      hiç fark edilmezdi. Kullanıcı hangi yolu istediğini host formunda zaten
+      açıkça seçiyor.
 - [ ] Belgeleme: kurulum, gereksinimler, hangi host tipinde hangi yol
 - [ ] Upstream PR hazırlığı (`CONTRIBUTING.md`)
 

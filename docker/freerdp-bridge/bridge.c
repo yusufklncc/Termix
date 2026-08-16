@@ -581,12 +581,32 @@ static BOOL tx_pre_connect(freerdp* instance)
 		fflush(stderr);
 	}
 
+	/* Frame acknowledgement is the other thing that paces a session. By default
+	 * every frame is acknowledged, so the server waits for the round trip
+	 * before it gets far ahead, and the ceiling becomes a function of latency
+	 * rather than of encoder speed. Suspending acks tells the server to stop
+	 * waiting.
+	 *
+	 * That is a trade, not a free win: acks are also the back-pressure. With
+	 * them suspended a browser that cannot keep up gets frames queued at it
+	 * instead of the server slowing down, which trades frame rate for latency.
+	 * Off by default until measured. */
+	if (getenv("BRIDGE_GFX_SUSPEND_ACK"))
+	{
+		if (!freerdp_settings_set_bool(settings, FreeRDP_GfxSuspendFrameAck, TRUE))
+			return FALSE;
+		fprintf(stderr, "[%s] frame acks suspended\n", TAG);
+		fflush(stderr);
+	}
+
 	/* A non-zero filter would drop capsets before they are ever advertised,
 	 * which would look identical to a server refusing them. */
-	fprintf(stderr, "[%s] gfx caps filter=0x%08X avc444=%s connection=%u autodetect=%s\n", TAG,
+	fprintf(stderr,
+	        "[%s] gfx caps filter=0x%08X avc444=%s connection=%u autodetect=%s suspendack=%s\n", TAG,
 	        freerdp_settings_get_uint32(settings, FreeRDP_GfxCapsFilter), wantAvc444 ? "yes" : "no",
 	        freerdp_settings_get_uint32(settings, FreeRDP_ConnectionType),
-	        freerdp_settings_get_bool(settings, FreeRDP_NetworkAutoDetect) ? "on" : "off");
+	        freerdp_settings_get_bool(settings, FreeRDP_NetworkAutoDetect) ? "on" : "off",
+	        freerdp_settings_get_bool(settings, FreeRDP_GfxSuspendFrameAck) ? "yes" : "no");
 	fflush(stderr);
 
 	/* These return an int and signal failure with a negative value; treating

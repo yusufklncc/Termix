@@ -580,6 +580,19 @@ static BOOL json_bool(const char* json, const char* key, BOOL fallback)
 	return strncmp(at, "true", 4) == 0;
 }
 
+/*
+ * RDP desktop dimensions must be even and within 200..8192; a browser surface
+ * is neither by nature. An odd size is accepted at connect time and then the
+ * server drops the session a couple of seconds later, which surfaces as a
+ * clean EOF on the transport rather than anything that names the real cause.
+ */
+static UINT32 sanitize_dimension(UINT32 value, UINT32 fallback)
+{
+	if (value < 200 || value > 8192)
+		value = fallback;
+	return value & ~1u;
+}
+
 static int run_session(int sock, const char* json)
 {
 	RDP_CLIENT_ENTRY_POINTS entry = { 0 };
@@ -605,8 +618,10 @@ static int run_session(int sock, const char* json)
 		freerdp_settings_set_string(settings, FreeRDP_Domain, buffer);
 
 	freerdp_settings_set_uint32(settings, FreeRDP_ServerPort, json_number(json, "port", 3389));
-	freerdp_settings_set_uint32(settings, FreeRDP_DesktopWidth, json_number(json, "width", 1920));
-	freerdp_settings_set_uint32(settings, FreeRDP_DesktopHeight, json_number(json, "height", 1080));
+	freerdp_settings_set_uint32(settings, FreeRDP_DesktopWidth,
+	                            sanitize_dimension(json_number(json, "width", 1920), 1920));
+	freerdp_settings_set_uint32(settings, FreeRDP_DesktopHeight,
+	                            sanitize_dimension(json_number(json, "height", 1080), 1080));
 
 	const BOOL ignoreCert = json_bool(json, "ignoreCert", TRUE);
 	freerdp_settings_set_bool(settings, FreeRDP_IgnoreCertificate, ignoreCert);

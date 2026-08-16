@@ -37,6 +37,7 @@
 #include <freerdp/channels/rdpgfx.h>
 #include <freerdp/settings.h>
 #include <winpr/synch.h>
+#include <winpr/sysinfo.h>
 
 #define TAG "termix-rdp-bridge"
 
@@ -533,8 +534,9 @@ static BOOL tx_pre_connect(freerdp* instance)
 
 	/* A non-zero filter would drop capsets before they are ever advertised,
 	 * which would look identical to a server refusing them. */
-	fprintf(stderr, "[%s] gfx caps filter=0x%08X\n", TAG,
-	        freerdp_settings_get_uint32(settings, FreeRDP_GfxCapsFilter));
+	fprintf(stderr, "[%s] gfx caps filter=0x%08X avc444=%s\n", TAG,
+	        freerdp_settings_get_uint32(settings, FreeRDP_GfxCapsFilter),
+	        wantAvc444 ? "yes" : "no");
 	fflush(stderr);
 
 	/* These return an int and signal failure with a negative value; treating
@@ -893,8 +895,26 @@ static int run_session(int sock, const char* json)
 	 * connecting, so each exit path says which one it was. */
 	const char* reason = "unknown";
 	UINT32 idleSeconds = 0;
+	UINT64 statsTick = GetTickCount64();
+	UINT32 statsFrames = 0;
 	for (;;)
 	{
+		/* A busy session never goes idle, so the frame rate has to be reported
+		 * on a clock rather than off the idle branch -- and the frame rate is
+		 * the number this whole path exists to move. */
+		const UINT64 now = GetTickCount64();
+		if (now - statsTick >= 5000)
+		{
+			const UINT32 delta = ctx->frameCount - statsFrames;
+			fprintf(stderr, "[%s] %.1f fps (%u frames in %llums)\n", TAG,
+			        (double)delta * 1000.0 / (double)(now - statsTick), delta,
+			        (unsigned long long)(now - statsTick));
+			fflush(stderr);
+			log_codec_mix(ctx);
+			statsTick = now;
+			statsFrames = ctx->frameCount;
+		}
+
 		HANDLE handles[64];
 		const DWORD count =
 		    freerdp_get_event_handles(context, handles, ARRAYSIZE(handles));
@@ -921,7 +941,6 @@ static int run_session(int sock, const char* json)
 				fprintf(stderr, "[%s] idle %us, frames=%u\n", TAG, idleSeconds,
 				        ctx->frameCount);
 				fflush(stderr);
-				log_codec_mix(ctx);
 			}
 			if (freerdp_shall_disconnect_context(context))
 			{

@@ -267,7 +267,12 @@ prototip ve ilk ölçümler (`docs/phase3-measurements.md`). Faz 3'ün ana sorus
 
 ## Faz 4 — Ölçüm ve sertleştirme
 
-- [ ] Üç yol karşılaştırması: FPS, gecikme, sunucu CPU, bant genişliği
+- [x] Guacamole yolunda FPS ölçümü (`client.onsync`, pasif)
+- [x] Guacamole ↔ direct karşılaştırması: FPS, sunucu CPU, bant genişliği
+      → [`docs/phase4-comparison.md`](docs/phase4-comparison.md)
+- [ ] Uçtan uca gecikme (fiziksel ölçüm gerekiyor)
+- [x] `stream` yolu aynı hedefe bağlanamadığı için üç yollu tablo mümkün değil;
+      kendi ölçümü Faz 2'de alındı
 - [ ] Yeni yol başarısız olursa Guacamole'e otomatik geri düşme
 - [ ] Belgeleme: kurulum, gereksinimler, hangi host tipinde hangi yol
 - [ ] Upstream PR hazırlığı (`CONTRIBUTING.md`)

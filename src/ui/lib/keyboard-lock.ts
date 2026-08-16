@@ -17,6 +17,8 @@
  * keep their browser meaning.
  */
 
+import { systemLogger } from "@/lib/frontend-logger";
+
 interface KeyboardLockApi {
   lock(keyCodes?: string[]): Promise<void>;
   unlock(): void;
@@ -42,7 +44,14 @@ export function getKeyboardLockApi(): KeyboardLockApi | null {
  */
 export function attachKeyboardLock(): KeyboardLockHandle {
   const keyboard = getKeyboardLockApi();
-  if (!keyboard) return { release() {} };
+  if (!keyboard) {
+    // Whether the browser has the API at all is the first thing worth knowing
+    // when a shortcut still escapes to the browser.
+    systemLogger.warn(
+      "Keyboard lock unavailable: navigator.keyboard is missing, reserved shortcuts stay with the browser",
+    );
+    return { release() {} };
+  }
 
   let locked = false;
 
@@ -52,13 +61,22 @@ export function attachKeyboardLock(): KeyboardLockHandle {
 
     if (wantLock && !locked) {
       locked = true;
-      // Rejects when something else holds the lock, or when fullscreen went
-      // away between the event and this call. Neither is worth reporting: the
-      // session keeps working, only the reserved shortcuts stay with the
-      // browser.
-      keyboard.lock().catch(() => {
-        locked = false;
-      });
+      // Two-argument then, not then().catch(): the rejection handler has to
+      // clear `locked` on the same tick the promise settles, or a release in
+      // between would unlock a lock that was never taken.
+      keyboard.lock().then(
+        () => {
+          systemLogger.info("Keyboard lock engaged");
+        },
+        (error: unknown) => {
+          // Rejects when something else holds the lock, or when fullscreen
+          // went away between the event and this call. The session keeps
+          // working either way -- only the reserved shortcuts stay with the
+          // browser, which is exactly the symptom worth naming.
+          locked = false;
+          systemLogger.warn(`Keyboard lock refused: ${String(error)}`);
+        },
+      );
       return;
     }
 

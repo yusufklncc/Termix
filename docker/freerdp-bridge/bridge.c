@@ -37,6 +37,9 @@
 #include <freerdp/codec/color.h>
 #include <freerdp/channels/channels.h>
 #include <freerdp/channels/rdpgfx.h>
+#include <freerdp/channels/cliprdr.h>
+#include <freerdp/client/cliprdr.h>
+#include <winpr/string.h>
 #include <freerdp/settings.h>
 #include <winpr/synch.h>
 #include <winpr/sysinfo.h>
@@ -74,6 +77,13 @@ typedef struct
 	UINT32 inputRejected;
 
 	UINT32 cursorsSent;
+
+	/* Clipboard. `outgoing` is what the browser last copied, held until the
+	 * server asks for it -- RDP pushes a format list first and pulls the bytes
+	 * only if something actually pastes. */
+	CliprdrClientContext* cliprdr;
+	char* outgoingClipboard;
+	pthread_mutex_t clipboardLock;
 } termixContext;
 
 /* ------------------------------------------------------------------ */
@@ -454,8 +464,202 @@ static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COM
 	return CHANNEL_RC_OK;
 }
 
+/* ------------------------------------------------------------------ */
+/* clipboard                                                           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Text only, both directions.
+ *
+ * RDP does not push clipboard contents. Whoever copies announces which formats
+ * they have, and the other side pulls the bytes only when something actually
+ * pastes. So each direction is two exchanges:
+ *
+ *   remote copy  -> ServerFormatList -> we request CF_UNICODETEXT
+ *                -> ServerFormatDataResponse -> CLIP frame to the browser
+ *   browser copy -> CLIP frame -> we announce CF_UNICODETEXT
+ *                -> ServerFormatDataRequest -> we answer with the text
+ *
+ * CF_UNICODETEXT is UTF-16 with a terminator; the wire format carries UTF-8,
+ * so the conversion happens here rather than in the browser.
+ *
+ * Files and images are deliberately out of scope: they need CLIPRDR's file
+ * contents protocol, which is a different feature, not a bigger buffer.
+ */
+#define MAX_CLIPBOARD_BYTES (2u * 1024u * 1024u)
+
+static UINT tx_cliprdr_send_format_list(termixContext* ctx)
+{
+	if (!ctx->cliprdr || !ctx->cliprdr->ClientFormatList)
+		return CHANNEL_RC_OK;
+
+	CLIPRDR_FORMAT format = { 0 };
+	format.formatId = CF_UNICODETEXT;
+	format.formatName = NULL;
+
+	CLIPRDR_FORMAT_LIST list = { 0 };
+	list.common.msgType = CB_FORMAT_LIST;
+	list.numFormats = 1;
+	list.formats = &format;
+
+	return ctx->cliprdr->ClientFormatList(ctx->cliprdr, &list);
+}
+
+/* The server is ready to talk. Announce what this client can do, then say the
+ * clipboard is currently empty -- announcing text we do not have would make a
+ * paste on the remote side hang waiting for bytes. */
+static UINT tx_cliprdr_MonitorReady(CliprdrClientContext* context,
+                                    const CLIPRDR_MONITOR_READY* ready)
+{
+	WINPR_UNUSED(ready);
+
+	CLIPRDR_GENERAL_CAPABILITY_SET general = { 0 };
+	general.capabilitySetType = CB_CAPSTYPE_GENERAL;
+	general.capabilitySetLength = 12;
+	general.version = CB_CAPS_VERSION_2;
+	general.generalFlags = CB_USE_LONG_FORMAT_NAMES;
+
+	CLIPRDR_CAPABILITIES caps = { 0 };
+	caps.cCapabilitiesSets = 1;
+	caps.capabilitySets = (CLIPRDR_CAPABILITY_SET*)&general;
+
+	if (context->ClientCapabilities)
+	{
+		const UINT rc = context->ClientCapabilities(context, &caps);
+		if (rc != CHANNEL_RC_OK)
+			return rc;
+	}
+
+	CLIPRDR_FORMAT_LIST empty = { 0 };
+	empty.common.msgType = CB_FORMAT_LIST;
+	empty.numFormats = 0;
+	empty.formats = NULL;
+	return context->ClientFormatList ? context->ClientFormatList(context, &empty)
+	                                 : CHANNEL_RC_OK;
+}
+
+/* Something was copied on the remote side. Acknowledge the list, then ask for
+ * the text if it is on offer. */
+static UINT tx_cliprdr_ServerFormatList(CliprdrClientContext* context,
+                                        const CLIPRDR_FORMAT_LIST* formatList)
+{
+	CLIPRDR_FORMAT_LIST_RESPONSE response = { 0 };
+	response.common.msgType = CB_FORMAT_LIST_RESPONSE;
+	response.common.msgFlags = CB_RESPONSE_OK;
+
+	if (context->ClientFormatListResponse)
+	{
+		const UINT rc = context->ClientFormatListResponse(context, &response);
+		if (rc != CHANNEL_RC_OK)
+			return rc;
+	}
+
+	UINT32 wanted = 0;
+	for (UINT32 i = 0; i < formatList->numFormats; i++)
+	{
+		const UINT32 id = formatList->formats[i].formatId;
+		if (id == CF_UNICODETEXT)
+		{
+			wanted = id;
+			break;
+		}
+		/* CF_TEXT is the fallback: still text, just in the server's codepage. */
+		if (id == CF_TEXT && wanted == 0)
+			wanted = id;
+	}
+
+	if (wanted == 0 || !context->ClientFormatDataRequest)
+		return CHANNEL_RC_OK;
+
+	CLIPRDR_FORMAT_DATA_REQUEST request = { 0 };
+	request.common.msgType = CB_FORMAT_DATA_REQUEST;
+	request.requestedFormatId = wanted;
+	return context->ClientFormatDataRequest(context, &request);
+}
+
+/* The remote text arrived. */
+static UINT tx_cliprdr_ServerFormatDataResponse(
+    CliprdrClientContext* context, const CLIPRDR_FORMAT_DATA_RESPONSE* response)
+{
+	WINPR_UNUSED(context);
+	termixContext* ctx = g_session;
+	if (!ctx || !response || (response->common.msgFlags & CB_RESPONSE_FAIL))
+		return CHANNEL_RC_OK;
+
+	const UINT32 length = response->common.dataLen;
+	if (length == 0 || length > MAX_CLIPBOARD_BYTES || !response->requestedFormatData)
+		return CHANNEL_RC_OK;
+
+	/* dataLen counts bytes; CF_UNICODETEXT is UTF-16, terminator included. */
+	char* utf8 = ConvertWCharNToUtf8Alloc((const WCHAR*)response->requestedFormatData,
+	                                      length / sizeof(WCHAR), NULL);
+	if (!utf8)
+		return CHANNEL_RC_OK;
+
+	wire_send(ctx, "CLIP", utf8, (UINT32)strlen(utf8));
+	free(utf8);
+	return CHANNEL_RC_OK;
+}
+
+/* Something on the remote side is pasting and wants what the browser copied. */
+static UINT tx_cliprdr_ServerFormatDataRequest(CliprdrClientContext* context,
+                                               const CLIPRDR_FORMAT_DATA_REQUEST* request)
+{
+	termixContext* ctx = g_session;
+	CLIPRDR_FORMAT_DATA_RESPONSE response = { 0 };
+	response.common.msgType = CB_FORMAT_DATA_RESPONSE;
+
+	WCHAR* wide = NULL;
+	size_t wideLength = 0;
+
+	if (ctx && request->requestedFormatId == CF_UNICODETEXT)
+	{
+		pthread_mutex_lock(&ctx->clipboardLock);
+		if (ctx->outgoingClipboard)
+			wide = ConvertUtf8ToWCharAlloc(ctx->outgoingClipboard, &wideLength);
+		pthread_mutex_unlock(&ctx->clipboardLock);
+	}
+
+	if (!wide)
+	{
+		response.common.msgFlags = CB_RESPONSE_FAIL;
+		response.common.dataLen = 0;
+		response.requestedFormatData = NULL;
+	}
+	else
+	{
+		response.common.msgFlags = CB_RESPONSE_OK;
+		/* The terminator travels with the data; a paste target that trusts
+		 * dataLen alone would otherwise read one character short. */
+		response.common.dataLen = (UINT32)((wideLength + 1) * sizeof(WCHAR));
+		response.requestedFormatData = (const BYTE*)wide;
+	}
+
+	const UINT rc = context->ClientFormatDataResponse
+	                    ? context->ClientFormatDataResponse(context, &response)
+	                    : CHANNEL_RC_OK;
+	free(wide);
+	return rc;
+}
+
 static void tx_OnChannelConnected(void* context, const ChannelConnectedEventArgs* e)
 {
+	if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0)
+	{
+		CliprdrClientContext* cliprdr = (CliprdrClientContext*)e->pInterface;
+		if (g_session)
+			g_session->cliprdr = cliprdr;
+
+		cliprdr->MonitorReady = tx_cliprdr_MonitorReady;
+		cliprdr->ServerFormatList = tx_cliprdr_ServerFormatList;
+		cliprdr->ServerFormatDataRequest = tx_cliprdr_ServerFormatDataRequest;
+		cliprdr->ServerFormatDataResponse = tx_cliprdr_ServerFormatDataResponse;
+
+		fprintf(stderr, "[%s] clipboard channel attached (text only)\n", TAG);
+		fflush(stderr);
+		return;
+	}
+
 	if (strcmp(e->name, RDPGFX_DVC_CHANNEL_NAME) == 0)
 	{
 		/* Let the GDI take the channel first, then take back only what the
@@ -541,6 +745,11 @@ static BOOL tx_pre_connect(freerdp* instance)
 		return FALSE;
 
 	if (!freerdp_settings_set_uint32(settings, FreeRDP_ColorDepth, 32))
+		return FALSE;
+
+	/* Text clipboard. Files and images need CLIPRDR's file contents protocol,
+	 * which is a separate feature rather than a larger buffer. */
+	if (!freerdp_settings_set_bool(settings, FreeRDP_RedirectClipboard, TRUE))
 		return FALSE;
 
 	/* There is no client-side bitrate or frame rate knob in RDP: the server's
@@ -889,6 +1098,27 @@ static void handle_input(termixContext* ctx, const char magic[4], const BYTE* pa
 		sent = freerdp_input_send_extended_mouse_event(input, read_u16(payload),
 		                                               read_u16(payload + 2), read_u16(payload + 4));
 	}
+	else if (memcmp(magic, "CLIP", 4) == 0)
+	{
+		/* Held, not pushed: the server pulls the bytes only if something
+		 * pastes, so all that goes out now is the announcement. */
+		if (length <= MAX_CLIPBOARD_BYTES)
+		{
+			char* copy = (char*)malloc((size_t)length + 1);
+			if (copy)
+			{
+				memcpy(copy, payload, length);
+				copy[length] = '\0';
+
+				pthread_mutex_lock(&ctx->clipboardLock);
+				free(ctx->outgoingClipboard);
+				ctx->outgoingClipboard = copy;
+				pthread_mutex_unlock(&ctx->clipboardLock);
+
+				tx_cliprdr_send_format_list(ctx);
+			}
+		}
+	}
 	else
 		handled = FALSE;
 
@@ -958,6 +1188,7 @@ static BOOL tx_client_new(freerdp* instance, rdpContext* context)
 	instance->PostConnect = tx_post_connect;
 	instance->PostDisconnect = tx_post_disconnect;
 	pthread_mutex_init(&ctx->writeLock, NULL);
+	pthread_mutex_init(&ctx->clipboardLock, NULL);
 	return TRUE;
 }
 
@@ -967,6 +1198,8 @@ static void tx_client_free(freerdp* instance, rdpContext* context)
 		return;
 	termixContext* ctx = (termixContext*)context;
 	pthread_mutex_destroy(&ctx->writeLock);
+	pthread_mutex_destroy(&ctx->clipboardLock);
+	free(ctx->outgoingClipboard);
 }
 
 static int tx_client_start(rdpContext* context)

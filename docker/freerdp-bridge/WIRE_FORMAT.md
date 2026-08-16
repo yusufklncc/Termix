@@ -29,6 +29,7 @@ Bütün sayısal alanlar **little-endian**.
 | `AVCF` | aşağıya bak                                                  | **AVC420 H.264 karesi**                     |
 | `CURS` | aşağıya bak                                                  | İmleç şekli                                 |
 | `CURD` | boş                                                          | Varsayılan imlece dön                       |
+| `CLIP` | UTF-8 metin                                                  | Pano — **çift yönlü**                       |
 | `ERRR` | UTF-8 metin                                                  | Hata                                        |
 | `BYE ` | `u32 reason`                                                 | Oturum kapandı                              |
 
@@ -104,3 +105,34 @@ akışı yavaşlatır. Tarayıcı decode ettiği kareyi onayladığında Termix 
 köprüye geçirir, köprü de RDP sunucusuna `RDPGFX_FRAME_ACKNOWLEDGE` yollar.
 Bu aynı zamanda doğal bir geri basınç mekanizması: tarayıcı yetişemezse
 onaylar gecikir ve sunucu kendiliğinden yavaşlar.
+
+## `CLIP` — pano
+
+Tek mesaj, iki yön. Payload düz **UTF-8 metin**, sonlandırıcı yok.
+
+- **Köprü → tarayıcı:** uzak tarafta bir şey kopyalandı.
+- **Tarayıcı → köprü:** yerel panodaki metin. Köprü bunu saklar ve sunucuya
+  yalnızca "metnim var" duyurusu yapar.
+
+RDP pano içeriğini itmez. Kopyalayan taraf hangi formatlara sahip olduğunu
+duyurur, karşı taraf **bir şey yapıştırıldığında** baytları ister. Yani her
+yön iki tur:
+
+```
+uzakta kopyala   → ServerFormatList        → CF_UNICODETEXT iste
+                 → ServerFormatDataResponse → CLIP (tarayıcıya)
+
+tarayıcıda kopyala → CLIP (köprüye)         → CF_UNICODETEXT duyur
+                   → ServerFormatDataRequest → metni yanıtla
+```
+
+`CF_UNICODETEXT` UTF-16'dır; dönüşüm köprüde yapılır, tarayıcı hep UTF-8 görür.
+
+Üst sınır 2 MB. Dosya ve görsel **kapsam dışı** — onlar CLIPRDR'ın file
+contents protokolünü gerektiriyor, daha büyük bir tampon değil.
+
+Tarayıcı tarafında bir kısıt var: bir sayfa panoyu yalnızca odaktayken ve izinle
+okuyabilir, ve "kullanıcı kopyaladı" diyen bir olay yok. Bu yüzden yerel pano
+oturuma **tıklandığında** okunur — yapıştırmadan hemen önceki an. Firefox'ta
+okuma atlanır; izin modeli sormak yerine hata veriyor. Mevcut guacd yolu da
+aynı şeyi yapıyor.

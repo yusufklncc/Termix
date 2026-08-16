@@ -3,6 +3,7 @@ import {
   attachKeyboardLock,
   type KeyboardLockState,
 } from "@/lib/keyboard-lock.ts";
+import { isFirefoxBrowser } from "@/features/guacamole/guacamole-clipboard.ts";
 import {
   encodeRdpFrame,
   readFrameId,
@@ -151,6 +152,38 @@ export function connectRdpDirect({
     return out;
   };
 
+  /* ---- clipboard ---- */
+
+  /*
+   * Text both ways.
+   *
+   * Incoming is simple: the bridge sends what was copied on the remote side and
+   * it goes to the local clipboard.
+   *
+   * Outgoing cannot be: a page may only read the clipboard while focused and
+   * with permission, so there is no event that says "the user copied
+   * something". The guacd path solves this by reading on focus, and this
+   * follows it -- including skipping Firefox, where the read is gated in a way
+   * that makes it fail rather than prompt.
+   */
+  const sendClipboardToRemote = () => {
+    if (isFirefoxBrowser() || !navigator.clipboard?.readText) return;
+    navigator.clipboard
+      .readText()
+      .then((text) => {
+        if (text) send("CLIP", new TextEncoder().encode(text));
+      })
+      // Denied permission or an unfocused document. Neither is worth
+      // reporting: the session works, this one direction does not.
+      .catch(() => {});
+  };
+
+  const receiveClipboard = (payload: Uint8Array) => {
+    const text = new TextDecoder().decode(payload);
+    if (!text || !navigator.clipboard?.writeText) return;
+    navigator.clipboard.writeText(text).catch(() => {});
+  };
+
   /* ---- cursor ---- */
 
   /*
@@ -242,6 +275,9 @@ export function connectRdpDirect({
 
   const onPointerDown = (event: PointerEvent) => {
     surface.focus();
+    // Clicking into the session is the moment before a paste, and the moment
+    // the document is certainly focused enough to read the clipboard.
+    sendClipboardToRemote();
     const point = toRemote(event.clientX, event.clientY) ?? last;
     last = point;
 
@@ -367,6 +403,11 @@ export function connectRdpDirect({
 
         case "CURD": {
           surface.style.cursor = "default";
+          break;
+        }
+
+        case "CLIP": {
+          receiveClipboard(frame.payload);
           break;
         }
 

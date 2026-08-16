@@ -89,7 +89,7 @@ Kapsam dışı: signaling, medya, transcode.
 - [x] `tsc --build` hata sayısı baseline ile karşılaştırıldı: 317 → 318
       (+1 = `StreamApp.tsx`'te `@/types` importu, GuacamoleApp/tabUtils ile aynı mevcut desen)
 - [x] Biome + Prettier temiz
-- [ ] Conventional commit'ler, küçük parçalar hâlinde — commit atılmadı, onay bekliyor
+- [x] Conventional commit'ler, küçük parçalar hâlinde
 
 **Çıktı:** çalışan demo + ne test edildiğinin özeti → **DUR, onay bekle**
 
@@ -133,7 +133,7 @@ CLAUDE.md'nin **Faz 3** tarifine denk düşüyor. Selkies adapter'ı hangi moda 
 - [x] neko adapter — `src/backend/hosts/webrtc/neko-adapter.ts`
 - [x] Selkies adapter — `src/backend/hosts/webrtc/selkies-adapter.ts` (**WebRTC opt-in modu** seçildi)
 - [x] Credential'lar backend'de kalır — tarayıcı yayıncının parolasını hiç görmez
-- [ ] Medya Termix üzerinden geçmiyor — Node CPU maliyeti ~sıfır (ölçülecek)
+- [x] Medya Termix üzerinden geçmiyor — Termix backend'i %0.30 CPU ölçüldü
 
 ### Şema
 
@@ -248,14 +248,17 @@ guacd olmadan gerçek RDP, 60fps hedefi. Riskli.
 - [x] Köprü tarafı FPS + codec dağılımı (5 sn'de bir)
 - [x] Tarayıcı tarafı çizilen FPS (`onStats` → `statsLogger`)
 - [x] İlk rakamlar → [`docs/phase3-measurements.md`](docs/phase3-measurements.md)
-- [ ] Uçtan uca gecikme
-- [ ] Sunucu CPU / bant genişliği
-- [ ] Guacamole karşılaştırması → Faz 4
+- [x] Sunucu CPU / bant genişliği → Faz 4 karşılaştırması
+- [x] Guacamole karşılaştırması → [`docs/phase4-comparison.md`](docs/phase4-comparison.md)
+- [x] Sabit çözünürlük — ölçümü tekrarlanabilir kılmak için
+- [ ] Uçtan uca gecikme (fiziksel ölçüm gerekiyor)
 
-### Doğrulanmamış
+### Canlı doğrulananlar
 
-- [ ] Rect konumlandırma — tam ekran karede görünmez, kısmi güncellemede sapabilir
-- [ ] Klavye / fare uçtan uca (birim testli, canlı denenmedi)
+- [x] Rect konumlandırma — tıklanan yere gidiyor, yazılan harf doğru yerde
+- [x] Klavye / fare uçtan uca — `Ctrl+A`, `Ctrl+C`, ok tuşları, tekerlek
+- [x] Uzak imleç şekli (boyutlandırma oku, I-beam)
+- [x] Ayrılmış kısayollar (Keyboard Lock, Chrome'da)
 
 **Çıktı:** eksik özellik listesi (`docs/phase3-direct-rdp-gaps.md`), çalışan
 prototip ve ilk ölçümler (`docs/phase3-measurements.md`). Faz 3'ün ana sorusu
@@ -289,8 +292,13 @@ prototip ve ilk ölçümler (`docs/phase3-measurements.md`). Faz 3'ün ana sorus
 
 Faz 2 veya 3'e geçmeden önce durumu sorulacak:
 
-- [ ] Windows `DWMFRAMEINTERVAL` DWORD = 15 (60 FPS tavanı)
-- [ ] GPO: H.264/AVC 444 önceliği, donanım encode, UDP+TCP (port 3391)
+- [x] Windows `DWMFRAMEINTERVAL` — `15` → 47 fps, **`10` → 60 fps** ölçüldü.
+      Microsoft yalnızca `15`'i belgeliyor; ayrıntı ve uyarılar
+      [`docs/phase3-measurements.md`](docs/phase3-measurements.md)
+- [x] GPO: `Prioritize H.264/AVC 444` **Enabled** — bu olmadan sunucu H.264'ü
+      hiç kullanmıyor. Donanım encode **Not Configured** kalmalı: açıldığında
+      bu makinede mstsc bile bağlanamadı
+- [ ] GPO: RDP transport UDP+TCP (port 3391) — denenmedi
 - [ ] Headless makinede sanal ekran (IddSampleDriver/VDD, dummy Xorg, headless Wayland)
 
 ---

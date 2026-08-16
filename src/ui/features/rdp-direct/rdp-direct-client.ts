@@ -1,5 +1,8 @@
 import { getBasePath } from "@/lib/base-path.ts";
-import { attachKeyboardLock } from "@/lib/keyboard-lock.ts";
+import {
+  attachKeyboardLock,
+  type KeyboardLockState,
+} from "@/lib/keyboard-lock.ts";
 import {
   encodeRdpFrame,
   readFrameId,
@@ -49,6 +52,12 @@ export interface RdpDirectOptions {
    * and the gap between them is the decoder falling behind.
    */
   onStats?(stats: RdpDirectStats): void;
+  /**
+   * Whether reserved browser shortcuts reach the remote desktop. Only some
+   * browsers grant the lock, and a viewer whose Ctrl+W closes the tab deserves
+   * to know why.
+   */
+  onKeyboardLock?(state: KeyboardLockState, detail?: string): void;
 }
 
 export interface RdpDirectHandle {
@@ -76,6 +85,7 @@ export function connectRdpDirect({
   onState,
   onResize,
   onStats,
+  onKeyboardLock,
 }: RdpDirectOptions): RdpDirectHandle {
   const base = buildRdpDirectUrl({
     isDev: import.meta.env.DEV,
@@ -299,7 +309,7 @@ export function connectRdpDirect({
   // preventDefault, so Ctrl+W in a remote session closes the Termix tab. The
   // lock claims them, but only while fullscreen, which the app already has a
   // control for.
-  const keyboardLock = attachKeyboardLock();
+  const keyboardLock = attachKeyboardLock({ onState: onKeyboardLock });
 
   surface.addEventListener("pointermove", onPointerMove);
   surface.addEventListener("pointerdown", onPointerDown);

@@ -118,6 +118,46 @@ describe("attachKeyboardLock", () => {
     expect(api.lock).not.toHaveBeenCalled();
   });
 
+  it("reports unsupported so the viewer can be told, not left guessing", () => {
+    removeKeyboardApi();
+    const onState = vi.fn();
+    attachKeyboardLock({ onState }).release();
+    expect(onState).toHaveBeenCalledWith("unsupported");
+  });
+
+  it("reports engaged and released around fullscreen", async () => {
+    const api = installKeyboardApi();
+    const onState = vi.fn();
+    setFullscreen(document.body);
+
+    const handle = attachKeyboardLock({ onState });
+    await Promise.resolve();
+    expect(onState).toHaveBeenCalledWith("engaged");
+
+    setFullscreen(null);
+    document.dispatchEvent(new Event("fullscreenchange"));
+    expect(onState).toHaveBeenCalledWith("released");
+
+    handle.release();
+    void api;
+  });
+
+  it("reports refused with the reason", async () => {
+    const api = installKeyboardApi();
+    api.lock.mockRejectedValueOnce(new Error("denied"));
+    const onState = vi.fn();
+    setFullscreen(document.body);
+
+    const handle = attachKeyboardLock({ onState });
+    await Promise.resolve();
+
+    expect(onState).toHaveBeenCalledWith(
+      "refused",
+      expect.stringContaining("denied"),
+    );
+    handle.release();
+  });
+
   it("recovers when the lock is refused, so a later attempt still works", async () => {
     const api = installKeyboardApi();
     api.lock.mockRejectedValueOnce(new Error("denied"));

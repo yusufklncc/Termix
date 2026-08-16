@@ -43,6 +43,12 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
     const [state, setState] = useState<RdpDirectState>("connecting");
     const [detail, setDetail] = useState<string | null>(null);
     const [attempt, setAttempt] = useState(0);
+    // Only browsers that grant the keyboard lock can hand over reserved
+    // shortcuts. Dismissed by the viewer, not on a timer: it explains why
+    // Ctrl+W just closed a tab, which is worth reading at leisure.
+    const [shortcutsEscape, setShortcutsEscape] = useState(false);
+    const [shortcutNoticeDismissed, setShortcutNoticeDismissed] =
+      useState(false);
 
     const numericHostId = hostId ? parseInt(hostId, 10) : NaN;
 
@@ -74,6 +80,11 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
           // only renders a fixed set of context keys, so anything else is
           // silently dropped. Level is info because console.debug is hidden
           // unless the console is switched to verbose.
+          onKeyboardLock: (lockState) => {
+            setShortcutsEscape(
+              lockState === "unsupported" || lockState === "refused",
+            );
+          },
           onStats: (stats) => {
             statsLogger.info(
               `Direct RDP painted ${stats.fps.toFixed(1)} fps ` +
@@ -126,6 +137,35 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
         className="relative w-full h-full outline-none"
         style={{ backgroundColor: "var(--bg-base)" }}
       >
+        {state === "connected" && shortcutsEscape && !shortcutNoticeDismissed && (
+          <div
+            className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-start gap-2 rounded-md border px-3 py-2 shadow-md max-w-lg"
+            style={{
+              backgroundColor: "var(--bg-elevated, var(--bg-base))",
+              borderColor: "var(--border)",
+            }}
+          >
+            <AlertCircle
+              className="size-4 shrink-0 mt-0.5"
+              style={{ color: "var(--foreground-secondary)" }}
+            />
+            <p
+              className="text-xs leading-relaxed"
+              style={{ color: "var(--foreground-secondary)" }}
+            >
+              {t("rdpDirect.shortcutsEscapeNotice")}
+            </p>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 -mt-0.5 shrink-0"
+              onClick={() => setShortcutNoticeDismissed(true)}
+            >
+              {t("rdpDirect.dismiss")}
+            </Button>
+          </div>
+        )}
+
         {state !== "connected" && (
           <div
             className="absolute inset-0 flex flex-col items-center justify-center gap-4"

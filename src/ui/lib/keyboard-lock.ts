@@ -24,8 +24,33 @@ interface KeyboardLockApi {
   unlock(): void;
 }
 
+/**
+ * `unsupported` - the browser has no Keyboard Lock API at all (Firefox, Safari).
+ * `refused`     - the API is there and would not register the lock. Vivaldi
+ *                 does this: it hosts tabs as guest views, and the lock has to
+ *                 come from the outermost main frame.
+ * `engaged`     - reserved shortcuts now reach the remote desktop.
+ * `released`    - left fullscreen, so they belong to the browser again.
+ */
+export type KeyboardLockState =
+  | "unsupported"
+  | "refused"
+  | "engaged"
+  | "released";
+
 export interface KeyboardLockHandle {
   release(): void;
+}
+
+export interface KeyboardLockOptions {
+  /**
+   * Reported whenever the state changes. `unsupported` and `refused` are what a
+   * viewer needs told: a handful of reserved combinations -- Ctrl+W, Ctrl+T,
+   * Alt+Tab -- will keep going to the browser. Everything else already reaches
+   * the remote through preventDefault, so this is a small loss, not a broken
+   * keyboard.
+   */
+  onState?(state: KeyboardLockState, detail?: string): void;
 }
 
 export function getKeyboardLockApi(): KeyboardLockApi | null {
@@ -42,7 +67,9 @@ export function getKeyboardLockApi(): KeyboardLockApi | null {
  * Safe to call when the API is missing or already in fullscreen: it picks up
  * the current state rather than waiting for the next change.
  */
-export function attachKeyboardLock(): KeyboardLockHandle {
+export function attachKeyboardLock({
+  onState,
+}: KeyboardLockOptions = {}): KeyboardLockHandle {
   const keyboard = getKeyboardLockApi();
   if (!keyboard) {
     // Whether the browser has the API at all is the first thing worth knowing
@@ -50,6 +77,7 @@ export function attachKeyboardLock(): KeyboardLockHandle {
     systemLogger.warn(
       "Keyboard lock unavailable: navigator.keyboard is missing, reserved shortcuts stay with the browser",
     );
+    onState?.("unsupported");
     return { release() {} };
   }
 
@@ -67,6 +95,7 @@ export function attachKeyboardLock(): KeyboardLockHandle {
       keyboard.lock().then(
         () => {
           systemLogger.info("Keyboard lock engaged");
+          onState?.("engaged");
         },
         (error: unknown) => {
           // Rejects when something else holds the lock, or when fullscreen
@@ -75,6 +104,7 @@ export function attachKeyboardLock(): KeyboardLockHandle {
           // browser, which is exactly the symptom worth naming.
           locked = false;
           systemLogger.warn(`Keyboard lock refused: ${String(error)}`);
+          onState?.("refused", String(error));
         },
       );
       return;
@@ -87,6 +117,7 @@ export function attachKeyboardLock(): KeyboardLockHandle {
       } catch {
         // Already released by leaving fullscreen.
       }
+      onState?.("released");
     }
   };
 

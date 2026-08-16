@@ -3800,6 +3800,8 @@
   "rdpDirect": {
     "connecting": "Starting direct RDP session...",
     "connectionFailed": "Direct RDP session failed",
-    "reconnect": "Reconnect"
+    "reconnect": "Reconnect",
+    "shortcutsEscapeNotice": "This browser will not hand over reserved shortcuts such as Ctrl+W and Alt+Tab, even in fullscreen — they still act on the browser. Every other key reaches the remote desktop.",
+    "dismiss": "Dismiss"
   }
 }

@@ -193,6 +193,15 @@ static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COM
 {
 	termixContext* ctx = (termixContext*)gfx->custom;
 
+	static BOOL loggedFirstFrame = FALSE;
+	if (!loggedFirstFrame)
+	{
+		loggedFirstFrame = TRUE;
+		fprintf(stderr, "[%s] first surface command: codecId=%u %ux%u\n", TAG,
+		        (unsigned)cmd->codecId, (unsigned)cmd->width, (unsigned)cmd->height);
+		fflush(stderr);
+	}
+
 	if (cmd->codecId != RDPGFX_CODECID_AVC420)
 	{
 		/* AVC420 is negotiated exclusively; anything else means the server
@@ -276,6 +285,9 @@ static void tx_OnChannelConnected(void* context, const ChannelConnectedEventArgs
 		gfx->StartFrame = tx_StartFrame;
 		gfx->EndFrame = tx_EndFrame;
 		gfx->SurfaceCommand = tx_SurfaceCommand;
+
+		fprintf(stderr, "[%s] graphics pipeline attached\n", TAG);
+		fflush(stderr);
 	}
 	else
 		freerdp_client_OnChannelConnectedEventHandler(context, e);
@@ -611,24 +623,48 @@ static int run_session(int sock, const char* json)
 	        freerdp_settings_get_string(settings, FreeRDP_ServerHostname));
 	fflush(stderr);
 
+	/* Why the loop ends is the whole diagnosis when a session drops right after
+	 * connecting, so each exit path says which one it was. */
+	const char* reason = "unknown";
 	for (;;)
 	{
 		HANDLE handles[64];
 		const DWORD count =
 		    freerdp_get_event_handles(context, handles, ARRAYSIZE(handles));
 		if (count == 0)
+		{
+			reason = "freerdp_get_event_handles returned no handles";
 			break;
+		}
 
-		if (WaitForMultipleObjects(count, handles, FALSE, INFINITE) == WAIT_FAILED)
+		const DWORD wait = WaitForMultipleObjects(count, handles, FALSE, INFINITE);
+		if (wait == WAIT_FAILED)
+		{
+			reason = "WaitForMultipleObjects failed";
 			break;
+		}
 
 		if (!freerdp_check_event_handles(context))
 		{
-			if (freerdp_get_last_error(context) == FREERDP_ERROR_SUCCESS)
-				break;
+			const UINT32 code = freerdp_get_last_error(context);
+			static char detail[256];
+			(void)snprintf(detail, sizeof(detail), "check_event_handles failed: %s (%s, 0x%08X)",
+			               freerdp_get_last_error_string(code),
+			               freerdp_get_last_error_name(code), code);
+			reason = detail;
+			break;
+		}
+
+		if (freerdp_shall_disconnect_context(context))
+		{
+			reason = "server requested disconnect";
 			break;
 		}
 	}
+
+	fprintf(stderr, "[%s] session loop ended: %s\n", TAG, reason);
+	fflush(stderr);
+	wire_error(ctx, reason);
 
 	freerdp_disconnect(context->instance);
 

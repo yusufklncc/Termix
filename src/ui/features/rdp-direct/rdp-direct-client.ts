@@ -273,12 +273,19 @@ export function connectRdpDirect({
     }
   });
 
-  socket.addEventListener("close", () => {
-    if (!closed) onState("closed");
+  socket.addEventListener("close", (event) => {
+    // A bare "closed" tells nobody anything; the close code and reason are the
+    // only clue when the session ends without an error frame.
+    if (!closed) {
+      onState(
+        "closed",
+        `websocket closed (${event.code}${event.reason ? `: ${event.reason}` : ""})`,
+      );
+    }
   });
 
   socket.addEventListener("error", () => {
-    if (!closed) onState("failed");
+    if (!closed) onState("failed", "websocket error");
   });
 
   return {

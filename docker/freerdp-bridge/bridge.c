@@ -53,6 +53,7 @@ typedef struct
 
 	UINT32 desktopWidth;
 	UINT32 desktopHeight;
+	UINT32 frameCount;
 } termixContext;
 
 /* ------------------------------------------------------------------ */
@@ -261,6 +262,7 @@ static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COM
 
 	memcpy(p, avc->data, avc->length);
 
+	ctx->frameCount++;
 	wire_send(ctx, "AVCF", payload, (UINT32)total);
 	free(payload);
 	return CHANNEL_RC_OK;
@@ -349,6 +351,9 @@ static BOOL tx_post_connect(freerdp* instance)
 	put_u32(payload, ctx->desktopWidth);
 	put_u32(payload + 4, ctx->desktopHeight);
 	wire_send(ctx, "HELO", payload, sizeof(payload));
+	fprintf(stderr, "[%s] post_connect sent HELO %ux%u\n", TAG, ctx->desktopWidth,
+	        ctx->desktopHeight);
+	fflush(stderr);
 
 	/* No gdi_init here on purpose: without a GDI there is no surface to decode
 	 * into, which is the point. */
@@ -626,6 +631,7 @@ static int run_session(int sock, const char* json)
 	/* Why the loop ends is the whole diagnosis when a session drops right after
 	 * connecting, so each exit path says which one it was. */
 	const char* reason = "unknown";
+	UINT32 idleSeconds = 0;
 	for (;;)
 	{
 		HANDLE handles[64];
@@ -637,12 +643,32 @@ static int run_session(int sock, const char* json)
 			break;
 		}
 
-		const DWORD wait = WaitForMultipleObjects(count, handles, FALSE, INFINITE);
+		const DWORD wait = WaitForMultipleObjects(count, handles, FALSE, 1000);
 		if (wait == WAIT_FAILED)
 		{
 			reason = "WaitForMultipleObjects failed";
 			break;
 		}
+
+		if (wait == WAIT_TIMEOUT)
+		{
+			/* Nothing happened this second. Say so periodically: silence here
+			 * is itself the symptom when a server accepts the session and then
+			 * never sends a frame. */
+			if (++idleSeconds % 5 == 0)
+			{
+				fprintf(stderr, "[%s] idle %us, frames=%u\n", TAG, idleSeconds,
+				        ctx->frameCount);
+				fflush(stderr);
+			}
+			if (freerdp_shall_disconnect_context(context))
+			{
+				reason = "server requested disconnect";
+				break;
+			}
+			continue;
+		}
+		idleSeconds = 0;
 
 		if (!freerdp_check_event_handles(context))
 		{

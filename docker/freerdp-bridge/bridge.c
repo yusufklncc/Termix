@@ -62,6 +62,8 @@ typedef struct
 	 * passthrough is carrying the session or only a corner of it. */
 	UINT32 codecCounts[16];
 	UINT32 codecOther;
+	/* AVC444 updates that carried only chroma, so had no picture to forward. */
+	UINT32 chromaOnlySkipped;
 } termixContext;
 
 /* ------------------------------------------------------------------ */
@@ -197,7 +199,8 @@ static void log_codec_mix(termixContext* ctx)
 		used += (size_t)n;
 	}
 
-	fprintf(stderr, "[%s] codec mix: %s\n", TAG, used ? line : "(nothing yet)");
+	fprintf(stderr, "[%s] codec mix: %s (chroma-only skipped=%u)\n", TAG,
+	        used ? line : "(nothing yet)", ctx->chromaOnlySkipped);
 	fflush(stderr);
 }
 
@@ -311,41 +314,14 @@ static UINT tx_EndFrame(RdpgfxClientContext* gfx, const RDPGFX_END_FRAME_PDU* pd
 }
 
 /*
- * The pass-through. For AVC420, cmd->extra is an RDPGFX_AVC420_BITMAP_STREAM
- * whose data/length are the bitstream exactly as it came off the wire.
+ * Emits one AVC420 bitstream, untouched, with the rects that place it.
  *
- * The metablock is freed by rdpgfx_decode_AVC420 the moment this returns, so
- * the rects are copied into the payload here rather than referenced.
+ * The metablock is freed the moment the surface command returns, so the rects
+ * are copied into the payload here rather than referenced.
  */
-static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COMMAND* cmd)
+static UINT send_avc_frame(termixContext* ctx, const RDPGFX_SURFACE_COMMAND* cmd,
+                           const RDPGFX_AVC420_BITMAP_STREAM* avc)
 {
-	WINPR_UNUSED(gfx);
-	termixContext* ctx = g_session;
-	if (!ctx)
-		return CHANNEL_RC_OK;
-
-	if (cmd->codecId < ARRAYSIZE(ctx->codecCounts))
-	{
-		if (ctx->codecCounts[cmd->codecId]++ == 0)
-		{
-			fprintf(stderr, "[%s] first %s surface command: %ux%u\n", TAG,
-			        codec_name(cmd->codecId), (unsigned)cmd->width, (unsigned)cmd->height);
-			fflush(stderr);
-		}
-	}
-	else
-		ctx->codecOther++;
-
-	/* A non-AVC420 command is skipped, not fatal. Windows mixes codecs: small
-	 * non-video updates arrive as ClearCodec or Planar even when H.264 is
-	 * negotiated, so failing the session on the first one kills it on the lock
-	 * screen before the desktop ever draws. Those regions simply do not update
-	 * yet -- what to do about them is a decision for the measured mix, which
-	 * the periodic histogram now reports. */
-	if (cmd->codecId != RDPGFX_CODECID_AVC420)
-		return CHANNEL_RC_OK;
-
-	const RDPGFX_AVC420_BITMAP_STREAM* avc = (const RDPGFX_AVC420_BITMAP_STREAM*)cmd->extra;
 	if (!avc || !avc->data || avc->length == 0)
 		return CHANNEL_RC_OK;
 
@@ -396,6 +372,73 @@ static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COM
 	ctx->frameCount++;
 	wire_send(ctx, "AVCF", payload, (UINT32)total);
 	free(payload);
+	return CHANNEL_RC_OK;
+}
+
+/*
+ * The pass-through.
+ *
+ * AVC420 is the simple case: cmd->extra is the bitstream exactly as it came off
+ * the wire.
+ *
+ * AVC444 needs one decision. Asking for the 10.x capsets is the only way to get
+ * H.264 out of a current Windows server, and those imply 4:4:4 -- which browser
+ * decoders reject. But a 4:4:4 frame is carried as two ordinary AVC420 streams:
+ * a full 4:2:0 picture plus an auxiliary one holding the extra chroma. Sending
+ * the first and dropping the second yields 4:2:0, which is what CLAUDE.md asks
+ * for, and keeps the bitstream untouched -- no decode, no re-encode.
+ *
+ * LC says which stream is in bitstream[0] (libfreerdp/codec/h264.c:572):
+ *   0 - luma, with chroma in bitstream[1]
+ *   1 - luma alone
+ *   2 - chroma alone, and there is no luma to send
+ *
+ * LC=2 must be skipped rather than passed on: bitstream[0] holds chroma there,
+ * and feeding it to a decoder expecting a picture paints garbage.
+ */
+static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COMMAND* cmd)
+{
+	WINPR_UNUSED(gfx);
+	termixContext* ctx = g_session;
+	if (!ctx)
+		return CHANNEL_RC_OK;
+
+	if (cmd->codecId < ARRAYSIZE(ctx->codecCounts))
+	{
+		if (ctx->codecCounts[cmd->codecId]++ == 0)
+		{
+			fprintf(stderr, "[%s] first %s surface command: %ux%u\n", TAG,
+			        codec_name(cmd->codecId), (unsigned)cmd->width, (unsigned)cmd->height);
+			fflush(stderr);
+		}
+	}
+	else
+		ctx->codecOther++;
+
+	if (cmd->codecId == RDPGFX_CODECID_AVC420)
+		return send_avc_frame(ctx, cmd, (const RDPGFX_AVC420_BITMAP_STREAM*)cmd->extra);
+
+	if (cmd->codecId == RDPGFX_CODECID_AVC444 || cmd->codecId == RDPGFX_CODECID_AVC444v2)
+	{
+		const RDPGFX_AVC444_BITMAP_STREAM* bs = (const RDPGFX_AVC444_BITMAP_STREAM*)cmd->extra;
+		if (!bs)
+			return CHANNEL_RC_OK;
+
+		if (bs->LC == 2)
+		{
+			ctx->chromaOnlySkipped++;
+			return CHANNEL_RC_OK;
+		}
+
+		return send_avc_frame(ctx, cmd, &bs->bitstream[0]);
+	}
+
+	/* Anything else is skipped, not fatal. Windows mixes codecs: small
+	 * non-video updates arrive as ClearCodec or Planar even when H.264 is
+	 * negotiated, so failing the session on the first one kills it on the lock
+	 * screen before the desktop ever draws. Those regions simply do not update
+	 * yet -- what to do about them is a decision for the measured mix, which
+	 * the periodic histogram reports. */
 	return CHANNEL_RC_OK;
 }
 
@@ -456,13 +499,30 @@ static BOOL tx_pre_connect(freerdp* instance)
 	rdpContext* context = instance->context;
 	rdpSettings* settings = context->settings;
 
-	/* AVC420 only. AVC444 is 4:4:4 and browser decoders reject it; the
-	 * alternative is transcoding to 4:2:0 on this side, which would put back
-	 * exactly the CPU cost this path exists to remove. */
+	/* Advertising AVC444 is what puts the CAPVERSION_10.x sets on the wire:
+	 * FreeRDP gates them behind "if (!GfxH264 || GfxAVC444)" (rdpgfx_main.c),
+	 * so asking for AVC420 alone advertises only 8.0 and 8.1. A current Windows
+	 * server answers that with 8.0, which has no H.264 at all -- measured
+	 * against Windows 11: 8.0 confirmed, nothing but ClearCodec and progressive
+	 * arrived. With the 10.x sets it confirms 10.7 and sends H.264.
+	 *
+	 * 4:4:4 is not what gets rendered, though. tx_SurfaceCommand forwards only
+	 * the luma stream of an AVC444 frame, which is an ordinary 4:2:0 picture, so
+	 * the browser still receives something it can decode and the bitstream is
+	 * still never touched. BRIDGE_GFX_AVC444=0 restores AVC420-only for
+	 * servers that do offer H.264 on 8.1. */
+	const char* avc444Env = getenv("BRIDGE_GFX_AVC444");
+	const BOOL wantAvc444 = !(avc444Env && avc444Env[0] == '0');
+	if (!wantAvc444)
+	{
+		fprintf(stderr, "[%s] BRIDGE_GFX_AVC444=0: advertising 8.0/8.1 only\n", TAG);
+		fflush(stderr);
+	}
+
 	if (!freerdp_settings_set_bool(settings, FreeRDP_SupportGraphicsPipeline, TRUE) ||
 	    !freerdp_settings_set_bool(settings, FreeRDP_GfxH264, TRUE) ||
-	    !freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444, FALSE) ||
-	    !freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444v2, FALSE) ||
+	    !freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444, wantAvc444) ||
+	    !freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444v2, wantAvc444) ||
 	    !freerdp_settings_set_bool(settings, FreeRDP_GfxProgressive, FALSE) ||
 	    !freerdp_settings_set_bool(settings, FreeRDP_GfxSmallCache, FALSE) ||
 	    !freerdp_settings_set_bool(settings, FreeRDP_GfxThinClient, FALSE))

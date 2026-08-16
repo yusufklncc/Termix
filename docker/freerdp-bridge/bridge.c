@@ -543,11 +543,52 @@ static BOOL tx_pre_connect(freerdp* instance)
 	if (!freerdp_settings_set_uint32(settings, FreeRDP_ColorDepth, 32))
 		return FALSE;
 
+	/* There is no client-side bitrate or frame rate knob in RDP: the server's
+	 * encoder decides, which is the whole point of a pass-through. What the
+	 * client does get to say is how much network it thinks it has, and Windows
+	 * picks quality and frame rate from that.
+	 *
+	 * Left alone, RDP measures the link and adapts. That is the right default
+	 * over a real WAN, but it also means a link with jitter -- Wi-Fi -- gets a
+	 * cautious answer. BRIDGE_RDP_NETWORK=lan says "assume a LAN" instead, the
+	 * same thing xfreerdp /network:lan does. Unset keeps FreeRDP's behaviour so
+	 * the two can be compared rather than assumed. */
+	const char* networkEnv = getenv("BRIDGE_RDP_NETWORK");
+	if (networkEnv && *networkEnv)
+	{
+		UINT32 connectionType = 0;
+		if (strcmp(networkEnv, "lan") == 0)
+			connectionType = CONNECTION_TYPE_LAN;
+		else if (strcmp(networkEnv, "broadband") == 0)
+			connectionType = CONNECTION_TYPE_BROADBAND_HIGH;
+		else if (strcmp(networkEnv, "wan") == 0)
+			connectionType = CONNECTION_TYPE_WAN;
+		else if (strcmp(networkEnv, "modem") == 0)
+			connectionType = CONNECTION_TYPE_MODEM;
+		else if (strcmp(networkEnv, "auto") == 0)
+			connectionType = CONNECTION_TYPE_AUTODETECT;
+
+		if (connectionType == 0)
+			fprintf(stderr, "[%s] BRIDGE_RDP_NETWORK='%s' not recognised, ignoring\n", TAG,
+			        networkEnv);
+		else
+		{
+			const BOOL autoDetect = connectionType == CONNECTION_TYPE_AUTODETECT;
+			if (!freerdp_settings_set_uint32(settings, FreeRDP_ConnectionType, connectionType) ||
+			    !freerdp_settings_set_bool(settings, FreeRDP_NetworkAutoDetect, autoDetect))
+				return FALSE;
+			fprintf(stderr, "[%s] network hint '%s' (type=%u, autodetect=%s)\n", TAG, networkEnv,
+			        connectionType, autoDetect ? "on" : "off");
+		}
+		fflush(stderr);
+	}
+
 	/* A non-zero filter would drop capsets before they are ever advertised,
 	 * which would look identical to a server refusing them. */
-	fprintf(stderr, "[%s] gfx caps filter=0x%08X avc444=%s\n", TAG,
-	        freerdp_settings_get_uint32(settings, FreeRDP_GfxCapsFilter),
-	        wantAvc444 ? "yes" : "no");
+	fprintf(stderr, "[%s] gfx caps filter=0x%08X avc444=%s connection=%u autodetect=%s\n", TAG,
+	        freerdp_settings_get_uint32(settings, FreeRDP_GfxCapsFilter), wantAvc444 ? "yes" : "no",
+	        freerdp_settings_get_uint32(settings, FreeRDP_ConnectionType),
+	        freerdp_settings_get_bool(settings, FreeRDP_NetworkAutoDetect) ? "on" : "off");
 	fflush(stderr);
 
 	/* These return an int and signal failure with a negative value; treating

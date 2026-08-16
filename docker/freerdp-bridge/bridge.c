@@ -315,9 +315,11 @@ static BOOL tx_pre_connect(freerdp* instance)
 	if (!freerdp_settings_set_uint32(settings, FreeRDP_ColorDepth, 32))
 		return FALSE;
 
-	if (!PubSub_SubscribeChannelConnected(context->pubSub, tx_OnChannelConnected))
+	/* These return an int and signal failure with a negative value; treating
+	 * the result as a boolean rejects the success case. */
+	if (PubSub_SubscribeChannelConnected(context->pubSub, tx_OnChannelConnected) < 0)
 		return FALSE;
-	if (!PubSub_SubscribeChannelDisconnected(context->pubSub, tx_OnChannelDisconnected))
+	if (PubSub_SubscribeChannelDisconnected(context->pubSub, tx_OnChannelDisconnected) < 0)
 		return FALSE;
 
 	return TRUE;
@@ -575,6 +577,15 @@ static int run_session(int sock, const char* json)
 	freerdp_settings_set_bool(settings, FreeRDP_IgnoreCertificate, ignoreCert);
 	freerdp_settings_set_bool(settings, FreeRDP_AutoAcceptCertificate, ignoreCert);
 
+	fprintf(stderr, "[%s] connecting to %s:%u as '%s' domain '%s' %ux%u\n", TAG,
+	        freerdp_settings_get_string(settings, FreeRDP_ServerHostname),
+	        freerdp_settings_get_uint32(settings, FreeRDP_ServerPort),
+	        freerdp_settings_get_string(settings, FreeRDP_Username),
+	        freerdp_settings_get_string(settings, FreeRDP_Domain),
+	        freerdp_settings_get_uint32(settings, FreeRDP_DesktopWidth),
+	        freerdp_settings_get_uint32(settings, FreeRDP_DesktopHeight));
+	fflush(stderr);
+
 	pthread_t reader;
 	pthread_create(&reader, NULL, input_thread, ctx);
 	pthread_detach(reader);
@@ -582,10 +593,23 @@ static int run_session(int sock, const char* json)
 	int rc = 0;
 	if (!freerdp_connect(context->instance))
 	{
-		wire_error(ctx, "freerdp_connect failed");
+		/* "connect failed" on its own is unactionable: the reason is the whole
+		 * diagnosis, so report FreeRDP's own error name and text. */
+		const UINT32 code = freerdp_get_last_error(context);
+		char message[512];
+		(void)snprintf(message, sizeof(message), "freerdp_connect failed: %s (%s, 0x%08X)",
+		               freerdp_get_last_error_string(code), freerdp_get_last_error_name(code),
+		               code);
+		fprintf(stderr, "[%s] %s\n", TAG, message);
+		fflush(stderr);
+		wire_error(ctx, message);
 		rc = 1;
 		goto cleanup;
 	}
+
+	fprintf(stderr, "[%s] connected to %s\n", TAG,
+	        freerdp_settings_get_string(settings, FreeRDP_ServerHostname));
+	fflush(stderr);
 
 	for (;;)
 	{

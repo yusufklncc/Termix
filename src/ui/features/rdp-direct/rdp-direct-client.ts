@@ -27,7 +27,7 @@ export type RdpDirectState = "connecting" | "connected" | "closed" | "failed";
 
 export interface RdpDirectOptions {
   hostId: number;
-  canvas: HTMLCanvasElement;
+  /** The canvas is created inside this element; see connectRdpDirect. */
   surface: HTMLElement;
   token?: string | null;
   onState(state: RdpDirectState, detail?: string): void;
@@ -54,7 +54,6 @@ export function buildRdpDirectUrl({
 
 export function connectRdpDirect({
   hostId,
-  canvas,
   surface,
   token,
   onState,
@@ -78,6 +77,15 @@ export function connectRdpDirect({
     new URL("./rdp-decoder.worker.ts", import.meta.url),
     { type: "module" },
   );
+
+  // The canvas is created here rather than taken from React. A canvas can only
+  // ever be transferred to a worker once, and React reuses the same element
+  // across effect runs -- under StrictMode's double invoke that second transfer
+  // throws, and an exception escaping the effect unmounts the whole app.
+  const canvas = document.createElement("canvas");
+  canvas.className =
+    "absolute inset-0 w-full h-full object-contain pointer-events-none";
+  surface.appendChild(canvas);
 
   const offscreen = canvas.transferControlToOffscreen();
   worker.postMessage({ type: "init", canvas: offscreen }, [offscreen]);
@@ -289,6 +297,7 @@ export function connectRdpDirect({
 
       worker.postMessage({ type: "close" });
       worker.terminate();
+      canvas.remove();
       try {
         socket.close();
       } catch {

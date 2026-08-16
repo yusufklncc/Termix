@@ -37,7 +37,6 @@ export interface RdpDirectAppHandle {
 const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
   function RdpDirectApp({ hostId, hostName }, ref) {
     const { t } = useTranslation();
-    const canvasRef = useRef<HTMLCanvasElement>(null);
     const surfaceRef = useRef<HTMLDivElement>(null);
     const sessionRef = useRef<RdpDirectHandle | null>(null);
     const [state, setState] = useState<RdpDirectState>("connecting");
@@ -47,23 +46,31 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
     const numericHostId = hostId ? parseInt(hostId, 10) : NaN;
 
     useEffect(() => {
-      const canvas = canvasRef.current;
       const surface = surfaceRef.current;
-      if (!canvas || !surface || !Number.isInteger(numericHostId)) return;
+      if (!surface || !Number.isInteger(numericHostId)) return;
 
       setState("connecting");
       setDetail(null);
 
-      const session = connectRdpDirect({
-        hostId: numericHostId,
-        canvas,
-        surface,
-        token: localStorage.getItem("jwt"),
-        onState: (next, message) => {
-          setState(next);
-          if (message) setDetail(message);
-        },
-      });
+      // This renderer is experimental and sits inside the same React tree as
+      // everything else. An exception escaping here would unmount the whole
+      // app, so a failure to even start is reported as a failed session.
+      let session: RdpDirectHandle;
+      try {
+        session = connectRdpDirect({
+          hostId: numericHostId,
+          surface,
+          token: localStorage.getItem("jwt"),
+          onState: (next, message) => {
+            setState(next);
+            if (message) setDetail(message);
+          },
+        });
+      } catch (error) {
+        setState("failed");
+        setDetail(error instanceof Error ? error.message : String(error));
+        return;
+      }
       sessionRef.current = session;
 
       if (hostName) {
@@ -72,11 +79,13 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
       surface.focus();
 
       return () => {
-        session.close();
+        try {
+          session.close();
+        } catch {
+          // Tearing down must not throw either.
+        }
         sessionRef.current = null;
       };
-      // A canvas cannot be re-transferred to a worker, so a reconnect remounts
-      // the whole surface through the key on the wrapper instead.
     }, [numericHostId, hostName, attempt]);
 
     const reconnect = useCallback(() => setAttempt((a) => a + 1), []);
@@ -95,17 +104,11 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
 
     return (
       <div
-        key={attempt}
         ref={surfaceRef}
         tabIndex={0}
         className="relative w-full h-full outline-none"
         style={{ backgroundColor: "var(--bg-base)" }}
       >
-        <canvas
-          ref={canvasRef}
-          className="w-full h-full object-contain pointer-events-none"
-        />
-
         {state !== "connected" && (
           <div
             className="absolute inset-0 flex flex-col items-center justify-center gap-4"

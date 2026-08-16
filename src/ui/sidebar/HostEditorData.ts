@@ -208,6 +208,8 @@ export function createHostEditorForm(
       : (host?.telnetPassword ?? ""),
     telnetCredentialId:
       host?.telnetCredentialId != null ? String(host.telnetCredentialId) : "",
+    rdpRenderEngine: (host?.rdpRenderEngine ?? "guacamole") as
+      "guacamole" | "direct",
     rdpAuthType: (host?.rdpAuthType ??
       (host?.rdpCredentialId ? "credential" : "direct")) as
       "direct" | "credential" | "none",
@@ -393,6 +395,7 @@ export function buildHostEditorPayload(
     vncPort: Number(form.vncPort),
     telnetPort: Number(form.telnetPort),
     forceKeyboardInteractive: form.forceKeyboardInteractive,
+    rdpRenderEngine: protocols.enableRdp ? form.rdpRenderEngine : null,
     rdpAuthType: protocols.enableRdp ? form.rdpAuthType : null,
     rdpCredentialId:
       protocols.enableRdp &&

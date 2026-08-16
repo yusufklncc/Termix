@@ -89,6 +89,8 @@ export function sshHostToHost(h: SSHHostWithStatus): Host {
     rdpPort: h.rdpPort ?? (h.connectionType === "rdp" ? h.port : 3389),
     vncPort: h.vncPort ?? (h.connectionType === "vnc" ? h.port : 5900),
     telnetPort: h.telnetPort ?? (h.connectionType === "telnet" ? h.port : 23),
+    rdpRenderEngine:
+      (h.rdpRenderEngine as "guacamole" | "direct") ?? "guacamole",
     rdpAuthType:
       (h.rdpAuthType as "direct" | "credential") ??
       (h.rdpCredentialId ? "credential" : "direct"),

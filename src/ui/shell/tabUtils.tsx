@@ -25,6 +25,7 @@ import type {
 } from "@/features/terminal/Terminal";
 import type { GuacamoleAppHandle } from "@/features/guacamole/GuacamoleApp";
 import type { StreamAppHandle } from "@/features/stream/StreamApp";
+import type { RdpDirectAppHandle } from "@/features/rdp-direct/RdpDirectApp";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { Tab, TabType, Host } from "@/types/ui-types";
 import type { SSHHost } from "@/types";
@@ -98,6 +99,11 @@ const Serial = lazy(() =>
 );
 const StreamApp = lazy(() =>
   import("@/features/stream/StreamApp").then((m) => ({
+    default: m.default,
+  })),
+);
+const RdpDirectApp = lazy(() =>
+  import("@/features/rdp-direct/RdpDirectApp").then((m) => ({
     default: m.default,
   })),
 );
@@ -392,6 +398,18 @@ export function renderTabContent(
       if (!host)
         return (
           <EmptyState icon={Monitor} messageKey="guacamole.noHostSelected" />
+        );
+      // Guacamole stays the default; only a host explicitly set to the direct
+      // renderer takes the experimental path.
+      if (tab.type === "rdp" && host.rdpRenderEngine === "direct")
+        return withTabSuspense(
+          <RdpDirectApp
+            ref={tab.terminalRef as React.Ref<RdpDirectAppHandle>}
+            hostId={host.id}
+            hostName={host.name}
+            tabId={tab.id}
+            isVisible={isVisible}
+          />,
         );
       return withTabSuspense(
         <GuacamoleApp

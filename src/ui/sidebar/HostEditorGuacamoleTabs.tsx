@@ -56,6 +56,37 @@ export function HostEditorRdpTab({
   return (
     <>
       <SectionCard
+        title={t("hosts.guac.renderEngine")}
+        icon={<Cpu className="size-3.5" />}
+      >
+        <div className="flex flex-col gap-4 py-3">
+          <div className="flex gap-2">
+            {(["guacamole", "direct"] as const).map((engine) => (
+              <button
+                key={engine}
+                type="button"
+                onClick={() => setField("rdpRenderEngine", engine)}
+                className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest border transition-colors ${
+                  form.rdpRenderEngine === engine
+                    ? "border-accent-brand/40 bg-accent-brand/10 text-accent-brand"
+                    : "border-border text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {engine === "guacamole"
+                  ? t("hosts.guac.engineGuacamole")
+                  : t("hosts.guac.engineDirect")}
+              </button>
+            ))}
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            {form.rdpRenderEngine === "direct"
+              ? t("hosts.guac.engineDirectDesc")
+              : t("hosts.guac.engineGuacamoleDesc")}
+          </p>
+        </div>
+      </SectionCard>
+
+      <SectionCard
         title={t("hosts.guac.connection")}
         icon={<Globe className="size-3.5" />}
         action={

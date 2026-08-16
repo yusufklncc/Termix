@@ -163,6 +163,7 @@ export type Host = {
   vncPort: number;
   telnetPort: number;
 
+  rdpRenderEngine?: "guacamole" | "direct";
   rdpAuthType?: "direct" | "credential" | "none";
   rdpCredentialId?: string;
   rdpUser?: string;

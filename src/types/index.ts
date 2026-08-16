@@ -212,6 +212,7 @@ export interface Host {
   telnetUser?: string;
   telnetPassword?: string;
   telnetCredentialId?: number | null;
+  rdpRenderEngine?: "guacamole" | "direct" | null;
   rdpAuthType?: "direct" | "credential" | "none" | null;
   vncAuthType?: "direct" | "credential" | null;
   telnetAuthType?: "direct" | "credential" | null;
@@ -346,6 +347,7 @@ export interface HostData {
   telnetUser?: string;
   telnetPassword?: string;
   telnetCredentialId?: number | null;
+  rdpRenderEngine?: "guacamole" | "direct" | null;
   rdpAuthType?: "direct" | "credential" | "none" | null;
   vncAuthType?: "direct" | "credential" | null;
   telnetAuthType?: "direct" | "credential" | null;

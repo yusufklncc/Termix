@@ -12,8 +12,20 @@ services:
       GUACD_HOST: "guacd"
       GUACD_TUNNEL_HOST: "termix"
       GUACD_RECORDING_PATH: "/termix-data/session_recordings/guacamole"
+      # Optional: only needed for the experimental direct RDP renderer.
+      RDP_BRIDGE_URL: "rdp-bridge:3390"
     depends_on:
       - guacd
+    networks:
+      - termix-net
+
+  # Experimental direct RDP renderer. Remove this service and the RDP_BRIDGE_URL
+  # above to opt out entirely -- hosts stay on the Guacamole path either way.
+  rdp-bridge:
+    build:
+      context: ./freerdp-bridge
+    container_name: termix-rdp-bridge
+    restart: unless-stopped
     networks:
       - termix-net
 

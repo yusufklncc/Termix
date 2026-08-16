@@ -1490,7 +1490,12 @@
       "cancelBtn": "Cancel",
       "savingBtn": "Saving...",
       "updateHostBtn": "Update Host",
-      "addHostBtn": "Add Host"
+      "addHostBtn": "Add Host",
+      "renderEngine": "Render Engine",
+      "engineGuacamole": "Guacamole",
+      "engineDirect": "Direct H.264",
+      "engineGuacamoleDesc": "The compatible path: guacd handles the session and every setting below applies.",
+      "engineDirectDesc": "Experimental. H.264 is passed straight from FreeRDP to the browser with no server-side decoding, which needs the RDP bridge sidecar. Clipboard, audio, drive redirection, session recording and session sharing are not available on this path, and the settings below do not apply."
     },
     "stream": {
       "connection": "Stream Connection",
@@ -3791,5 +3796,10 @@
     "channels": "Notification Channels",
     "noChannelsHint": "Add channels in the Channels tab first",
     "ruleSaveFailed": "Failed to save rule"
+  },
+  "rdpDirect": {
+    "connecting": "Starting direct RDP session...",
+    "connectionFailed": "Direct RDP session failed",
+    "reconnect": "Reconnect"
   }
 }

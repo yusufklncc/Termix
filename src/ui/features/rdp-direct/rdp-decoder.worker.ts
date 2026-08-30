@@ -49,6 +49,10 @@ let decodedCount = 0;
 const pendingChunks: ArrayBuffer[] = [];
 const MAX_PENDING_CHUNKS = 64;
 
+/* How long a first picture may sit undelivered before the decoder is pushed.
+ * Long enough that a session sending frames resolves on its own. */
+const STUCK_FRAME_MS = 150;
+
 /* Why frames do not reach the canvas. Every rejection below is silent by
  * design -- a dropped frame is not an error -- which makes a black screen
  * impossible to explain without counting them. */
@@ -56,6 +60,13 @@ const drops = { unconfigured: 0, unparsed: 0, noKey: 0, decodeError: 0 };
 /* Video frames only. The key-frame gate must not count painted rects: a
  * decoder that has not seen a key frame still cannot take a delta. */
 let videoFrames = 0;
+/*
+ * A decoder accepts nothing but a key frame after configure() and after
+ * flush(). Feeding it a delta there throws DataError and loses the stream, so
+ * the state is tracked rather than inferred from the frame count.
+ */
+let needsKeyFrame = true;
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Rects for the frame currently in flight, in submission order. */
 const pendingRects: RdpRect[][] = [];
@@ -214,7 +225,7 @@ function decodeAvc(payload: ArrayBuffer) {
   const key = isKeyFrame(parsed.bitstream);
   // Until a key frame arrives the decoder has no reference to build on, so
   // delta chunks would only produce errors.
-  if (!key && videoFrames === 0) {
+  if (needsKeyFrame && !key) {
     drops.noKey++;
     return;
   }
@@ -237,28 +248,34 @@ function decodeAvc(payload: ArrayBuffer) {
     }
 
     /*
-     * Nothing has been painted yet, so push the decoder to hand over what it
-     * has.
+     * A Main-profile stream permits frame reordering, so the decoder may hold a
+     * picture until the next one establishes display order. A remote desktop
+     * nobody is touching never sends that next frame, and the first picture
+     * would sit inside the decoder forever.
      *
-     * A Main-profile stream permits frame reordering, so the decoder is
-     * entitled to hold a picture until the next one tells it the display
-     * order. A remote desktop that nobody is touching sends no next one -- the
-     * first frame sits inside the decoder and the screen stays black.
-     *
-     * Only until the first picture arrives: after that, frames are flowing and
-     * flushing every one of them would throw away the pipelining that keeps
-     * this path fast.
+     * Flushing forces it out, but it also resets the decoder: everything after
+     * a flush is refused until another key frame arrives. So it waits to see
+     * whether the stream resolves itself, and only steps in when the picture is
+     * genuinely stuck -- which on a busy session never happens.
      */
-    if (videoFrames === 0) {
-      decoder.flush().catch(() => {
-        // A flush racing a reset is not a failure worth reporting.
-      });
+    if (videoFrames === 0 && flushTimer === null) {
+      flushTimer = setTimeout(() => {
+        flushTimer = null;
+        if (videoFrames > 0 || !decoder || decoder.state !== "configured")
+          return;
+        needsKeyFrame = true;
+        decoder.flush().catch(() => {
+          // A flush racing a reset is not a failure worth reporting.
+        });
+      }, STUCK_FRAME_MS);
     }
   } catch (error) {
     pendingRects.shift();
     drops.decodeError++;
+    // Recoverable: the next key frame restarts the stream. Reporting it as a
+    // session failure would close a session that is about to right itself.
+    needsKeyFrame = true;
     console.log("[rdp-direct] decode threw", String(error));
-    post({ type: "error", message: String(error) });
   }
 }
 

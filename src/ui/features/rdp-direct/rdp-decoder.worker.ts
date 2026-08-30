@@ -30,6 +30,17 @@ let ctx: OffscreenCanvasRenderingContext2D | null = null;
 let decoder: VideoDecoder | null = null;
 let configured = false;
 let decodedCount = 0;
+/*
+ * Frames that arrived before the decoder finished configuring.
+ *
+ * Configuration is asynchronous, and the session's only key frame is its first
+ * one. Dropping what arrives in that window loses the IDR, and every later
+ * frame is a delta the decoder cannot start from -- so an idle desktop, which
+ * sends nothing else for minutes, stays black forever. Held and replayed
+ * instead.
+ */
+const pendingChunks: ArrayBuffer[] = [];
+const MAX_PENDING_CHUNKS = 64;
 /* Video frames only. The key-frame gate must not count painted rects: a
  * decoder that has not seen a key frame still cannot take a delta. */
 let videoFrames = 0;
@@ -108,6 +119,42 @@ function reportStats(now: number) {
   statsPainted = decodedCount;
 }
 
+function decodeAvc(payload: ArrayBuffer) {
+  if (!decoder || decoder.state !== "configured") {
+    // Still configuring. Hold it rather than drop it: the first frame is the
+    // one that makes every later frame decodable.
+    if (pendingChunks.length < MAX_PENDING_CHUNKS) pendingChunks.push(payload);
+    return;
+  }
+
+  const parsed = parseAvcFrame(new Uint8Array(payload));
+  if (!parsed || parsed.bitstream.length === 0) return;
+
+  const key = isKeyFrame(parsed.bitstream);
+  // Until a key frame arrives the decoder has no reference to build on, so
+  // delta chunks would only produce errors.
+  if (!key && videoFrames === 0) return;
+
+  pendingRects.push(parsed.rects);
+  try {
+    decoder.decode(
+      new EncodedVideoChunk({
+        type: key ? "key" : "delta",
+        timestamp: performance.now() * 1000,
+        data: parsed.bitstream,
+      }),
+    );
+  } catch (error) {
+    pendingRects.shift();
+    post({ type: "error", message: String(error) });
+  }
+}
+
+function flushPending() {
+  const held = pendingChunks.splice(0, pendingChunks.length);
+  for (const chunk of held) decodeAvc(chunk);
+}
+
 function ensureDecoder() {
   if (decoder) return;
 
@@ -149,6 +196,7 @@ self.onmessage = async (event: MessageEvent<InboundMessage>) => {
       ctx = canvas.getContext("2d");
       ensureDecoder();
       await configureDecoder();
+      flushPending();
       post({ type: "ready" });
       break;
     }
@@ -201,29 +249,7 @@ self.onmessage = async (event: MessageEvent<InboundMessage>) => {
 
     case "avc": {
       reportStats(performance.now());
-
-      const parsed = parseAvcFrame(new Uint8Array(message.payload));
-      if (!parsed || parsed.bitstream.length === 0) return;
-      if (!decoder || decoder.state !== "configured") return;
-
-      const key = isKeyFrame(parsed.bitstream);
-      // Until a key frame arrives the decoder has no reference to build on, so
-      // delta chunks would only produce errors.
-      if (!key && videoFrames === 0) return;
-
-      pendingRects.push(parsed.rects);
-      try {
-        decoder.decode(
-          new EncodedVideoChunk({
-            type: key ? "key" : "delta",
-            timestamp: performance.now() * 1000,
-            data: parsed.bitstream,
-          }),
-        );
-      } catch (error) {
-        pendingRects.shift();
-        post({ type: "error", message: String(error) });
-      }
+      decodeAvc(message.payload);
       break;
     }
 

@@ -148,6 +148,9 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
       noticeCode === "no-h264"
         ? { key: "no-h264", text: t("rdpDirect.noH264") }
         : null,
+      noticeCode === "server-decode"
+        ? { key: "server-decode", text: t("rdpDirect.serverDecode") }
+        : null,
     ].filter(
       (n): n is { key: string; text: string } =>
         n !== null && !dismissed.has(n.key),

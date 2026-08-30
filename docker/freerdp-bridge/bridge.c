@@ -79,6 +79,9 @@ typedef struct
 
 	UINT32 cursorsSent;
 	UINT32 rectsSent;
+	/* Set when the browser reports it cannot decode this stream. From then on
+	 * the GDI decodes everything and pixels are sent instead. */
+	BOOL serverDecode;
 
 	/* Clipboard. `outgoing` is what the browser last copied, held until the
 	 * server asks for it -- RDP pushes a format list first and pulls the bytes
@@ -526,10 +529,11 @@ static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COM
 	else
 		ctx->codecOther++;
 
-	if (cmd->codecId == RDPGFX_CODECID_AVC420)
+	if (!ctx->serverDecode && cmd->codecId == RDPGFX_CODECID_AVC420)
 		return send_avc_frame(ctx, cmd, (const RDPGFX_AVC420_BITMAP_STREAM*)cmd->extra);
 
-	if (cmd->codecId == RDPGFX_CODECID_AVC444 || cmd->codecId == RDPGFX_CODECID_AVC444v2)
+	if (!ctx->serverDecode &&
+	    (cmd->codecId == RDPGFX_CODECID_AVC444 || cmd->codecId == RDPGFX_CODECID_AVC444v2))
 	{
 		const RDPGFX_AVC444_BITMAP_STREAM* bs = (const RDPGFX_AVC444_BITMAP_STREAM*)cmd->extra;
 		if (!bs)
@@ -1221,6 +1225,18 @@ static void handle_input(termixContext* ctx, const char magic[4], const BYTE* pa
 		ctx->pointerEvents++;
 		sent = freerdp_input_send_extended_mouse_event(input, read_u16(payload),
 		                                               read_u16(payload + 2), read_u16(payload + 4));
+	}
+	else if (memcmp(magic, "NOAV", 4) == 0)
+	{
+		/* The browser cannot decode this stream. The GDI can -- it is already
+		 * decoding every codec the passthrough does not carry -- so everything
+		 * goes that way now. Slower and far more bandwidth, but a picture. */
+		if (!ctx->serverDecode)
+		{
+			ctx->serverDecode = TRUE;
+			fprintf(stderr, "[%s] browser cannot decode; decoding on this side\n", TAG);
+			fflush(stderr);
+		}
 	}
 	else if (memcmp(magic, "CLIP", 4) == 0)
 	{

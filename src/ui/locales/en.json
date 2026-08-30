@@ -3803,6 +3803,7 @@
     "reconnect": "Reconnect",
     "shortcutsEscapeNotice": "This browser will not hand over reserved shortcuts such as Ctrl+W and Alt+Tab, even in fullscreen — they still act on the browser. Every other key reaches the remote desktop.",
     "dismiss": "Dismiss",
-    "noH264": "This host draws without H.264, so the session falls back to decoding on the server — it works, but costs far more CPU and bandwidth. Enable \"Prioritize H.264/AVC 444 graphics mode\" on the target and restart it for the fast path."
+    "noH264": "This host draws without H.264, so the session falls back to decoding on the server — it works, but costs far more CPU and bandwidth. Enable \"Prioritize H.264/AVC 444 graphics mode\" on the target and restart it for the fast path.",
+    "serverDecode": "This browser could not decode this host's video, so the session falls back to decoding on the server — it works, but costs far more CPU and bandwidth than the direct path."
   }
 }

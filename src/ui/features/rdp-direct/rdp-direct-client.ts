@@ -136,7 +136,13 @@ export function connectRdpDirect({
 
   worker.onmessage = (event: MessageEvent) => {
     if (event.data?.type === "error") onState("failed", event.data.message);
-    else if (event.data?.type === "stats" && onStats) {
+    else if (event.data?.type === "decoder-unusable") {
+      // Ask the bridge to decode instead. It already does this for codecs the
+      // passthrough never carried, and the result is a picture rather than a
+      // black screen.
+      send("NOAV", new Uint8Array(0));
+      onNotice?.("server-decode");
+    } else if (event.data?.type === "stats" && onStats) {
       const { decoded, painted, elapsedMs, drops, decoderState } = event.data;
       onStats({
         decoded,

@@ -28,7 +28,10 @@ type OutboundMessage =
       drops: typeof drops;
       decoderState: string;
     }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  /* The browser cannot decode this stream. The bridge can decode it instead
+   * and send pixels -- slower, but a picture. */
+  | { type: "decoder-unusable" };
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -52,6 +55,10 @@ const MAX_PENDING_CHUNKS = 64;
 /* How long a first picture may sit undelivered before the decoder is pushed.
  * Long enough that a session sending frames resolves on its own. */
 const STUCK_FRAME_MS = 150;
+
+/* How long software decoding gets to produce a picture before the session
+ * falls back to letting the bridge decode. */
+const SOFTWARE_GRACE_MS = 2500;
 
 /* Why frames do not reach the canvas. Every rejection below is silent by
  * design -- a dropped frame is not an error -- which makes a black screen
@@ -115,8 +122,30 @@ function sizeLooksWrong(frame: VideoFrame): boolean {
   );
 }
 
+let gaveUp = false;
+let softwareWatchdog: ReturnType<typeof setTimeout> | null = null;
+
+function giveUpOnDecoding(reason: string) {
+  if (gaveUp) return;
+  gaveUp = true;
+  if (softwareWatchdog !== null) {
+    clearTimeout(softwareWatchdog);
+    softwareWatchdog = null;
+  }
+  console.log("[rdp-direct] giving up on browser decoding:", reason);
+  post({ type: "decoder-unusable" });
+}
+
 function paint(frame: VideoFrame) {
   const rects = pendingRects.shift();
+
+  if (softwareFallbackUsed && sizeLooksWrong(frame)) {
+    // Software failed the same way hardware did, so it is not the decoder
+    // implementation -- this browser cannot decode this stream at all.
+    frame.close();
+    giveUpOnDecoding("software decoder also returned a foreign size");
+    return;
+  }
 
   if (!softwareFallbackUsed && lastCodec && sizeLooksWrong(frame)) {
     console.log(
@@ -129,8 +158,14 @@ function paint(frame: VideoFrame) {
     softwareFallbackUsed = true;
     configured = false;
     const codec = lastCodec;
+    const before = videoFrames;
     frame.close();
     queueMicrotask(() => applyConfig(codec));
+    softwareWatchdog = setTimeout(() => {
+      softwareWatchdog = null;
+      if (videoFrames === before)
+        giveUpOnDecoding("software decoder produced nothing");
+    }, SOFTWARE_GRACE_MS);
     return;
   }
 

@@ -64,8 +64,20 @@ function post(message: OutboundMessage) {
   self.postMessage(message);
 }
 
+let loggedFirstPaint = false;
+
 function paint(frame: VideoFrame) {
   const rects = pendingRects.shift();
+  if (!loggedFirstPaint) {
+    loggedFirstPaint = true;
+    console.log("[rdp-direct] decoder output", {
+      frame: `${frame.displayWidth}x${frame.displayHeight}`,
+      canvas: canvas ? `${canvas.width}x${canvas.height}` : "none",
+      ctx: !!ctx,
+      rects: rects ? rects.length : 0,
+      firstRect: rects && rects[0] ? rects[0] : null,
+    });
+  }
   if (!ctx) {
     frame.close();
     return;
@@ -133,18 +145,69 @@ function reportStats(now: number) {
   statsPainted = decodedCount;
 }
 
+/* The 5s stats window says nothing on an idle desktop, where a handful of
+ * frames decide whether anything is ever drawn. This reports the first one
+ * immediately, with the state that decided its fate. */
+function listNalTypes(bitstream: Uint8Array): number[] {
+  const types: number[] = [];
+  for (let i = 0; i + 3 < bitstream.length; i++) {
+    const start3 =
+      bitstream[i] === 0 && bitstream[i + 1] === 0 && bitstream[i + 2] === 1;
+    const start4 =
+      bitstream[i] === 0 &&
+      bitstream[i + 1] === 0 &&
+      bitstream[i + 2] === 0 &&
+      bitstream[i + 3] === 1;
+    if (!start3 && !start4) continue;
+    const at = i + (start4 ? 4 : 3);
+    if (at >= bitstream.length) break;
+    types.push(bitstream[at] & 0x1f);
+    i = at;
+  }
+  return types;
+}
+
+let loggedFirstFrame = false;
+let loggedSubmit = false;
+
 function decodeAvc(payload: ArrayBuffer) {
-  if (!decoder || decoder.state !== "configured") {
-    // Still configuring. Hold it rather than drop it: the first frame is the
-    // one that makes every later frame decodable.
-    if (pendingChunks.length < MAX_PENDING_CHUNKS) pendingChunks.push(payload);
-    else drops.unconfigured++;
-    return;
+  if (!loggedFirstFrame) {
+    loggedFirstFrame = true;
+    const probe = parseAvcFrame(new Uint8Array(payload));
+    console.log("[rdp-direct] first frame", {
+      bytes: payload.byteLength,
+      decoder: decoder ? decoder.state : "none",
+      parsed: !!probe,
+      bitstream: probe ? probe.bitstream.length : 0,
+      key: probe ? isKeyFrame(probe.bitstream) : false,
+      // Which NAL units the stream actually carries. A decoder cannot start
+      // without a sequence parameter set (7) and picture parameter set (8);
+      // an IDR (5) on its own is undecodable and some decoders drop it in
+      // silence rather than reporting an error.
+      nals: probe ? listNalTypes(probe.bitstream) : [],
+      rects: probe ? probe.rects.length : 0,
+      dest: probe ? probe.dest : null,
+    });
   }
 
   const parsed = parseAvcFrame(new Uint8Array(payload));
   if (!parsed || parsed.bitstream.length === 0) {
     drops.unparsed++;
+    return;
+  }
+
+  // The configuration comes out of the stream, so it cannot happen until a
+  // frame carrying an SPS arrives. Anything before that is held, not dropped:
+  // the first frame is the one that makes every later frame decodable.
+  if (!configured && !configureFromStream(parsed.bitstream)) {
+    if (pendingChunks.length < MAX_PENDING_CHUNKS) pendingChunks.push(payload);
+    else drops.unconfigured++;
+    return;
+  }
+
+  if (!decoder || decoder.state !== "configured") {
+    if (pendingChunks.length < MAX_PENDING_CHUNKS) pendingChunks.push(payload);
+    else drops.unconfigured++;
     return;
   }
 
@@ -165,9 +228,17 @@ function decodeAvc(payload: ArrayBuffer) {
         data: parsed.bitstream,
       }),
     );
+    if (!loggedSubmit) {
+      loggedSubmit = true;
+      console.log("[rdp-direct] submitted to decoder", {
+        queue: decoder.decodeQueueSize,
+        state: decoder.state,
+      });
+    }
   } catch (error) {
     pendingRects.shift();
     drops.decodeError++;
+    console.log("[rdp-direct] decode threw", String(error));
     post({ type: "error", message: String(error) });
   }
 }
@@ -182,31 +253,70 @@ function ensureDecoder() {
 
   decoder = new VideoDecoder({
     output: paint,
-    error: (error) => post({ type: "error", message: String(error) }),
+    error: (error) => {
+      console.log("[rdp-direct] decoder error", String(error));
+      post({ type: "error", message: String(error) });
+    },
   });
 }
 
-async function configureDecoder() {
-  if (!decoder || configured) return;
+/**
+ * Builds the codec string from the stream's own sequence parameter set.
+ *
+ * A hardcoded profile is a guess about someone else's encoder, and a wrong one
+ * fails in the worst possible way: Chrome accepts the configuration, then
+ * accepts frames and emits neither a picture nor an error. The three bytes
+ * after the SPS NAL header are exactly what the codec string encodes --
+ * profile, constraint flags, level -- so they are read rather than assumed.
+ */
+function codecFromSps(bitstream: Uint8Array): string | null {
+  for (let i = 0; i + 3 < bitstream.length; i++) {
+    const start3 =
+      bitstream[i] === 0 && bitstream[i + 1] === 0 && bitstream[i + 2] === 1;
+    const start4 =
+      bitstream[i] === 0 &&
+      bitstream[i + 1] === 0 &&
+      bitstream[i + 2] === 0 &&
+      bitstream[i + 3] === 1;
+    if (!start3 && !start4) continue;
 
-  // No description: that tells WebCodecs the stream is Annex B, which is what
-  // the RDP graphics pipeline carries. optimizeForLatency keeps the decoder
-  // from buffering frames it could already have shown.
-  const config: VideoDecoderConfig = {
-    codec: "avc1.42E01E",
-    optimizeForLatency: true,
-  };
+    const at = i + (start4 ? 4 : 3);
+    if (at + 3 >= bitstream.length) break;
+    if ((bitstream[at] & 0x1f) !== 7) {
+      i = at;
+      continue;
+    }
 
-  const support = await VideoDecoder.isConfigSupported(config).catch(
-    () => null,
-  );
-  if (!support?.supported) {
-    post({ type: "error", message: "H.264 decoding is not available" });
-    return;
+    const hex = (value: number) => value.toString(16).padStart(2, "0");
+    return `avc1.${hex(bitstream[at + 1])}${hex(bitstream[at + 2])}${hex(
+      bitstream[at + 3],
+    )}`;
   }
+  return null;
+}
 
-  decoder.configure(config);
-  configured = true;
+function configureFromStream(bitstream: Uint8Array): boolean {
+  if (!decoder || configured) return configured;
+
+  const codec = codecFromSps(bitstream);
+  if (!codec) return false;
+
+  try {
+    // No description: that tells WebCodecs the stream is Annex B, which is what
+    // the RDP graphics pipeline carries. optimizeForLatency keeps the decoder
+    // from buffering frames it could already have shown.
+    decoder.configure({ codec, optimizeForLatency: true });
+    configured = true;
+    console.log("[rdp-direct] decoder configured", { codec });
+    queueMicrotask(flushPending);
+    return true;
+  } catch (error) {
+    post({
+      type: "error",
+      message: `H.264 decoding is not available (${codec}): ${String(error)}`,
+    });
+    return false;
+  }
 }
 
 self.onmessage = async (event: MessageEvent<InboundMessage>) => {
@@ -217,8 +327,6 @@ self.onmessage = async (event: MessageEvent<InboundMessage>) => {
       canvas = message.canvas;
       ctx = canvas.getContext("2d");
       ensureDecoder();
-      await configureDecoder();
-      flushPending();
       post({ type: "ready" });
       break;
     }

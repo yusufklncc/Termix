@@ -1368,6 +1368,7 @@ static int run_session(int sock, const char* json)
 	UINT32 idleSeconds = 0;
 	UINT64 statsTick = GetTickCount64();
 	UINT32 statsFrames = 0;
+	BOOL warnedNoH264 = FALSE;
 	for (;;)
 	{
 		/* A busy session never goes idle, so the frame rate has to be reported
@@ -1384,6 +1385,31 @@ static int run_session(int sock, const char* json)
 			log_codec_mix(ctx);
 			statsTick = now;
 			statsFrames = ctx->frameCount;
+
+			/* A server that draws in ClearCodec or progressive leaves this path
+			 * with nothing to carry, and the viewer sees a black screen with no
+			 * hint why -- the session is otherwise healthy, so nothing else
+			 * fails. Windows only offers H.264 once the "Prioritize H.264/AVC
+			 * 444" policy is on, which is a target-side setting no amount of
+			 * client code can substitute for. Say so once, rather than leaving
+			 * a working connection that shows nothing. */
+			if (!warnedNoH264 && ctx->frameCount == 0)
+			{
+				UINT32 otherCodecs = 0;
+				for (UINT16 id = 0; id < ARRAYSIZE(ctx->codecCounts); id++)
+					otherCodecs += ctx->codecCounts[id];
+
+				if (otherCodecs > 0)
+				{
+					warnedNoH264 = TRUE;
+					wire_error(ctx, "no-h264: the server is drawing without H.264");
+					fprintf(stderr,
+					        "[%s] no H.264 after %u surface commands -- enable the "
+					        "'Prioritize H.264/AVC 444 graphics mode' policy on the target\n",
+					        TAG, otherCodecs);
+					fflush(stderr);
+				}
+			}
 		}
 
 		HANDLE handles[64];

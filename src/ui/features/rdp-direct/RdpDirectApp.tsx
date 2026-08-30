@@ -137,34 +137,36 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
         className="relative w-full h-full outline-none"
         style={{ backgroundColor: "var(--bg-base)" }}
       >
-        {state === "connected" && shortcutsEscape && !shortcutNoticeDismissed && (
-          <div
-            className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-start gap-2 rounded-md border px-3 py-2 shadow-md max-w-lg"
-            style={{
-              backgroundColor: "var(--bg-elevated, var(--bg-base))",
-              borderColor: "var(--border)",
-            }}
-          >
-            <AlertCircle
-              className="size-4 shrink-0 mt-0.5"
-              style={{ color: "var(--foreground-secondary)" }}
-            />
-            <p
-              className="text-xs leading-relaxed"
-              style={{ color: "var(--foreground-secondary)" }}
+        {state === "connected" &&
+          shortcutsEscape &&
+          !shortcutNoticeDismissed && (
+            <div
+              className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-start gap-2 rounded-md border px-3 py-2 shadow-md max-w-lg"
+              style={{
+                backgroundColor: "var(--bg-elevated, var(--bg-base))",
+                borderColor: "var(--border)",
+              }}
             >
-              {t("rdpDirect.shortcutsEscapeNotice")}
-            </p>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 -mt-0.5 shrink-0"
-              onClick={() => setShortcutNoticeDismissed(true)}
-            >
-              {t("rdpDirect.dismiss")}
-            </Button>
-          </div>
-        )}
+              <AlertCircle
+                className="size-4 shrink-0 mt-0.5"
+                style={{ color: "var(--foreground-secondary)" }}
+              />
+              <p
+                className="text-xs leading-relaxed"
+                style={{ color: "var(--foreground-secondary)" }}
+              >
+                {t("rdpDirect.shortcutsEscapeNotice")}
+              </p>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 -mt-0.5 shrink-0"
+                onClick={() => setShortcutNoticeDismissed(true)}
+              >
+                {t("rdpDirect.dismiss")}
+              </Button>
+            </div>
+          )}
 
         {state !== "connected" && (
           <div
@@ -188,7 +190,10 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
                     className="text-xs max-w-md text-center"
                     style={{ color: "var(--foreground-secondary)" }}
                   >
-                    {detail}
+                    {/* A known condition with a known remedy is explained in
+                        the viewer's language; anything else is a runtime
+                        detail and is shown as the bridge reported it. */}
+                    {detail === "no-h264" ? t("rdpDirect.noH264") : detail}
                   </p>
                 )}
                 <Button variant="outline" size="sm" onClick={reconnect}>

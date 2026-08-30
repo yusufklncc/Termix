@@ -412,7 +412,14 @@ export function connectRdpDirect({
         }
 
         case "ERRR": {
-          onState("failed", new TextDecoder().decode(frame.payload));
+          const message = new TextDecoder().decode(frame.payload);
+          // The bridge prefixes conditions with a known remedy so the UI can
+          // explain them in the viewer's language. Anything else is a runtime
+          // detail and is shown as it came.
+          onState(
+            "failed",
+            message.startsWith("no-h264:") ? "no-h264" : message,
+          );
           break;
         }
 

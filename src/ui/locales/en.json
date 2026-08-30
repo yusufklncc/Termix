@@ -3802,6 +3802,7 @@
     "connectionFailed": "Direct RDP session failed",
     "reconnect": "Reconnect",
     "shortcutsEscapeNotice": "This browser will not hand over reserved shortcuts such as Ctrl+W and Alt+Tab, even in fullscreen — they still act on the browser. Every other key reaches the remote desktop.",
-    "dismiss": "Dismiss"
+    "dismiss": "Dismiss",
+    "noH264": "This host is not sending H.264, so there is nothing for the direct renderer to show. Enable \"Prioritize H.264/AVC 444 graphics mode\" on the target and restart it, or switch this host to the Guacamole renderer."
   }
 }

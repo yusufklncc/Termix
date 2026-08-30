@@ -235,6 +235,25 @@ function decodeAvc(payload: ArrayBuffer) {
         state: decoder.state,
       });
     }
+
+    /*
+     * Nothing has been painted yet, so push the decoder to hand over what it
+     * has.
+     *
+     * A Main-profile stream permits frame reordering, so the decoder is
+     * entitled to hold a picture until the next one tells it the display
+     * order. A remote desktop that nobody is touching sends no next one -- the
+     * first frame sits inside the decoder and the screen stays black.
+     *
+     * Only until the first picture arrives: after that, frames are flowing and
+     * flushing every one of them would throw away the pipelining that keeps
+     * this path fast.
+     */
+    if (videoFrames === 0) {
+      decoder.flush().catch(() => {
+        // A flush racing a reset is not a failure worth reporting.
+      });
+    }
   } catch (error) {
     pendingRects.shift();
     drops.decodeError++;

@@ -241,7 +241,9 @@ guacd olmadan gerçek RDP, 60fps hedefi. Riskli.
 ### Sonraya
 
 - [ ] WebTransport (HTTP/3 datagram) — WebSocket HOL blocking için
-- [ ] Ses, clipboard, RDPDR — COOP/COEP kararı ile birlikte
+- [x] Pano (metin) — `CLIP`, çift yönlü. `SharedArrayBuffer` gerektirmediği için
+      COOP/COEP kararına girmedi
+- [ ] Ses, RDPDR — COOP/COEP kararı ile birlikte
 
 ### Ölçüm
 

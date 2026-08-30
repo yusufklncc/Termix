@@ -91,6 +91,15 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let softwareFallbackUsed = false;
 let flushedOnce = false;
 let lastCodec: string | null = null;
+/*
+ * The most recent key frame, kept so a decoder can be restarted.
+ *
+ * configure() and flush() both leave a decoder that will accept nothing but a
+ * key frame, and RDP does not send one on request -- an idle desktop may go
+ * minutes without another. Replaying the one already seen is what makes
+ * reconfiguring viable at all.
+ */
+let lastKeyChunk: ArrayBuffer | null = null;
 
 /** Rects for the frame currently in flight, in submission order. */
 const pendingRects: RdpRect[][] = [];
@@ -163,8 +172,12 @@ function paint(frame: VideoFrame) {
     queueMicrotask(() => applyConfig(codec));
     softwareWatchdog = setTimeout(() => {
       softwareWatchdog = null;
+      // The key frame was replayed into the reconfigured decoder, so this is a
+      // fair verdict rather than a decoder that was never given anything.
       if (videoFrames === before)
-        giveUpOnDecoding("software decoder produced nothing");
+        giveUpOnDecoding(
+          "software decoder produced nothing from a replayed key frame",
+        );
     }, SOFTWARE_GRACE_MS);
     return;
   }
@@ -344,6 +357,13 @@ function decodeAvc(payload: ArrayBuffer) {
     return;
   }
 
+  if (key) {
+    // The decoder can take deltas from here, and this frame is what restarts it
+    // if it ever has to be reconfigured.
+    needsKeyFrame = false;
+    lastKeyChunk = payload.slice(0);
+  }
+
   pendingRects.push(parsed.rects);
   try {
     decoder.decode(
@@ -487,7 +507,10 @@ function applyConfig(codec: string): boolean {
       codec,
       acceleration: softwareFallbackUsed ? "prefer-software" : "default",
     });
-    queueMicrotask(flushPending);
+    queueMicrotask(() => {
+      if (lastKeyChunk) decodeAvc(lastKeyChunk.slice(0));
+      flushPending();
+    });
     return true;
   } catch (error) {
     post({

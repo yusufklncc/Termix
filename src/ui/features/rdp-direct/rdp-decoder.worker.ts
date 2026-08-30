@@ -94,8 +94,46 @@ function post(message: OutboundMessage) {
 
 let loggedFirstPaint = false;
 
+/*
+ * A picture whose size is nothing like the surface did not come from this
+ * stream.
+ *
+ * RDP aligns the desktop to macroblocks, so a correct frame is the surface
+ * size rounded up to a multiple of 16 -- never smaller, never far larger. A
+ * hardware decoder that has quietly failed reports a size of its own instead,
+ * and paints a blank picture at it.
+ */
+function sizeLooksWrong(frame: VideoFrame): boolean {
+  if (!canvas || canvas.width === 0 || canvas.height === 0) return false;
+  const alignedWidth = Math.ceil(canvas.width / 16) * 16;
+  const alignedHeight = Math.ceil(canvas.height / 16) * 16;
+  return (
+    frame.displayWidth < canvas.width ||
+    frame.displayHeight < canvas.height ||
+    frame.displayWidth > alignedWidth ||
+    frame.displayHeight > alignedHeight
+  );
+}
+
 function paint(frame: VideoFrame) {
   const rects = pendingRects.shift();
+
+  if (!softwareFallbackUsed && lastCodec && sizeLooksWrong(frame)) {
+    console.log(
+      "[rdp-direct] decoder returned a foreign size, using software",
+      {
+        frame: `${frame.displayWidth}x${frame.displayHeight}`,
+        canvas: canvas ? `${canvas.width}x${canvas.height}` : "none",
+      },
+    );
+    softwareFallbackUsed = true;
+    configured = false;
+    const codec = lastCodec;
+    frame.close();
+    queueMicrotask(() => applyConfig(codec));
+    return;
+  }
+
   if (!loggedFirstPaint) {
     loggedFirstPaint = true;
     console.log("[rdp-direct] decoder output", {

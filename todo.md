@@ -286,7 +286,8 @@ prototip ve ilk ölçümler (`docs/phase3-measurements.md`). Faz 3'ün ana sorus
       hiç fark edilmezdi. Kullanıcı hangi yolu istediğini host formunda zaten
       açıkça seçiyor.
 - [ ] Belgeleme: kurulum, gereksinimler, hangi host tipinde hangi yol
-- [ ] Upstream PR hazırlığı (`CONTRIBUTING.md`)
+- [x] ~~Upstream PR hazırlığı~~ — **yapılmayacak, kullanıcı kararı.** Bu iş
+      upstream'e sunulmayacak; çalışma bu depoda kalıyor.
 
 ---
 

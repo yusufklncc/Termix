@@ -394,6 +394,32 @@ static UINT send_avc_frame(termixContext* ctx, const RDPGFX_SURFACE_COMMAND* cmd
 
 	memcpy(p, avc->data, avc->length);
 
+	/* BRIDGE_DUMP_AVC writes the forwarded bitstream to a file, so a stream a
+	 * browser refuses can be handed to a decoder that explains itself. Off
+	 * unless the path is set: a session's worth of H.264 is not something to
+	 * write to disk by accident. */
+	{
+		static FILE* dump = NULL;
+		static BOOL dumpTried = FALSE;
+		if (!dumpTried)
+		{
+			dumpTried = TRUE;
+			const char* path = getenv("BRIDGE_DUMP_AVC");
+			if (path && *path)
+			{
+				dump = fopen(path, "wb");
+				fprintf(stderr, "[%s] dumping avc to %s (%s)\n", TAG, path,
+				        dump ? "open" : "failed");
+				fflush(stderr);
+			}
+		}
+		if (dump)
+		{
+			fwrite(avc->data, 1, avc->length, dump);
+			fflush(dump);
+		}
+	}
+
 	ctx->frameCount++;
 	wire_send(ctx, "AVCF", payload, (UINT32)total);
 	free(payload);

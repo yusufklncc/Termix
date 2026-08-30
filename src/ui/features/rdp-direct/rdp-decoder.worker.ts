@@ -67,6 +67,23 @@ let videoFrames = 0;
  */
 let needsKeyFrame = true;
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
+/*
+ * Which decoder implementation is in use.
+ *
+ * A hardware decoder can accept a stream, emit frames, and produce nothing but
+ * a blank picture at a size it invented -- measured against a Windows host
+ * encoding 1152x1136, which ffmpeg decodes correctly while the browser
+ * reported 1280x720 and painted green. Unusual resolutions are where that
+ * happens, and RDP produces them constantly because it aligns the desktop to
+ * macroblocks rather than to a video standard.
+ *
+ * So hardware is tried first, and software is the fallback when no picture
+ * arrives -- not the default, since decoding in software is the cost this path
+ * exists to avoid.
+ */
+let softwareFallbackUsed = false;
+let flushedOnce = false;
+let lastCodec: string | null = null;
 
 /** Rects for the frame currently in flight, in submission order. */
 const pendingRects: RdpRect[][] = [];
@@ -287,10 +304,23 @@ function decodeAvc(payload: ArrayBuffer) {
         flushTimer = null;
         if (videoFrames > 0 || !decoder || decoder.state !== "configured")
           return;
-        needsKeyFrame = true;
-        decoder.flush().catch(() => {
-          // A flush racing a reset is not a failure worth reporting.
-        });
+
+        if (!flushedOnce) {
+          flushedOnce = true;
+          needsKeyFrame = true;
+          decoder.flush().catch(() => {
+            // A flush racing a reset is not a failure worth reporting.
+          });
+          return;
+        }
+
+        // Flushing did not produce a picture either, so the decoder itself is
+        // the problem rather than the ordering.
+        if (!softwareFallbackUsed && lastCodec) {
+          softwareFallbackUsed = true;
+          configured = false;
+          applyConfig(lastCodec);
+        }
       }, STUCK_FRAME_MS);
     }
   } catch (error) {
@@ -361,13 +391,29 @@ function configureFromStream(bitstream: Uint8Array): boolean {
   const codec = codecFromSps(bitstream);
   if (!codec) return false;
 
+  lastCodec = codec;
+  return applyConfig(codec);
+}
+
+function applyConfig(codec: string): boolean {
+  if (!decoder) return false;
   try {
     // No description: that tells WebCodecs the stream is Annex B, which is what
     // the RDP graphics pipeline carries. optimizeForLatency keeps the decoder
     // from buffering frames it could already have shown.
-    decoder.configure({ codec, optimizeForLatency: true });
+    decoder.configure({
+      codec,
+      optimizeForLatency: true,
+      ...(softwareFallbackUsed
+        ? { hardwareAcceleration: "prefer-software" as const }
+        : {}),
+    });
     configured = true;
-    console.log("[rdp-direct] decoder configured", { codec });
+    needsKeyFrame = true;
+    console.log("[rdp-direct] decoder configured", {
+      codec,
+      acceleration: softwareFallbackUsed ? "prefer-software" : "default",
+    });
     queueMicrotask(flushPending);
     return true;
   } catch (error) {

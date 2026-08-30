@@ -95,7 +95,12 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
             statsLogger.info(
               `Direct RDP painted ${stats.fps.toFixed(1)} fps ` +
                 `(${stats.painted} frames in ${Math.round(stats.elapsedMs)}ms, ` +
-                `${stats.decoded} total)`,
+                `${stats.decoded} total) ` +
+                `decoder=${stats.decoderState} drops=` +
+                `unconfigured:${stats.drops.unconfigured} ` +
+                `unparsed:${stats.drops.unparsed} ` +
+                `noKey:${stats.drops.noKey} ` +
+                `decodeError:${stats.drops.decodeError}`,
               { operation: "rdp_direct_stats", hostId: numericHostId },
             );
           },

@@ -20,7 +20,14 @@ type InboundMessage =
 
 type OutboundMessage =
   | { type: "ready" }
-  | { type: "stats"; decoded: number; painted: number; elapsedMs: number }
+  | {
+      type: "stats";
+      decoded: number;
+      painted: number;
+      elapsedMs: number;
+      drops: typeof drops;
+      decoderState: string;
+    }
   | { type: "error"; message: string };
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -41,6 +48,11 @@ let decodedCount = 0;
  */
 const pendingChunks: ArrayBuffer[] = [];
 const MAX_PENDING_CHUNKS = 64;
+
+/* Why frames do not reach the canvas. Every rejection below is silent by
+ * design -- a dropped frame is not an error -- which makes a black screen
+ * impossible to explain without counting them. */
+const drops = { unconfigured: 0, unparsed: 0, noKey: 0, decodeError: 0 };
 /* Video frames only. The key-frame gate must not count painted rects: a
  * decoder that has not seen a key frame still cannot take a delta. */
 let videoFrames = 0;
@@ -114,6 +126,8 @@ function reportStats(now: number) {
     decoded: decodedCount,
     painted: decodedCount - statsPainted,
     elapsedMs: elapsed,
+    drops: { ...drops },
+    decoderState: decoder ? decoder.state : "none",
   });
   statsAt = now;
   statsPainted = decodedCount;
@@ -124,16 +138,23 @@ function decodeAvc(payload: ArrayBuffer) {
     // Still configuring. Hold it rather than drop it: the first frame is the
     // one that makes every later frame decodable.
     if (pendingChunks.length < MAX_PENDING_CHUNKS) pendingChunks.push(payload);
+    else drops.unconfigured++;
     return;
   }
 
   const parsed = parseAvcFrame(new Uint8Array(payload));
-  if (!parsed || parsed.bitstream.length === 0) return;
+  if (!parsed || parsed.bitstream.length === 0) {
+    drops.unparsed++;
+    return;
+  }
 
   const key = isKeyFrame(parsed.bitstream);
   // Until a key frame arrives the decoder has no reference to build on, so
   // delta chunks would only produce errors.
-  if (!key && videoFrames === 0) return;
+  if (!key && videoFrames === 0) {
+    drops.noKey++;
+    return;
+  }
 
   pendingRects.push(parsed.rects);
   try {
@@ -146,6 +167,7 @@ function decodeAvc(payload: ArrayBuffer) {
     );
   } catch (error) {
     pendingRects.shift();
+    drops.decodeError++;
     post({ type: "error", message: String(error) });
   }
 }

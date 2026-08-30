@@ -38,6 +38,14 @@ export interface RdpDirectStats {
   painted: number;
   elapsedMs: number;
   fps: number;
+  /** Why frames did not reach the canvas; all zero on a healthy session. */
+  drops: {
+    unconfigured: number;
+    unparsed: number;
+    noKey: number;
+    decodeError: number;
+  };
+  decoderState: string;
 }
 
 export interface RdpDirectOptions {
@@ -129,12 +137,14 @@ export function connectRdpDirect({
   worker.onmessage = (event: MessageEvent) => {
     if (event.data?.type === "error") onState("failed", event.data.message);
     else if (event.data?.type === "stats" && onStats) {
-      const { decoded, painted, elapsedMs } = event.data;
+      const { decoded, painted, elapsedMs, drops, decoderState } = event.data;
       onStats({
         decoded,
         painted,
         elapsedMs,
         fps: elapsedMs > 0 ? (painted * 1000) / elapsedMs : 0,
+        drops,
+        decoderState,
       });
     }
   };

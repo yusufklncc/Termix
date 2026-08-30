@@ -59,6 +59,12 @@ export interface RdpDirectOptions {
    * to know why.
    */
   onKeyboardLock?(state: KeyboardLockState, detail?: string): void;
+  /**
+   * A condition worth telling the viewer that the session nonetheless
+   * survives. `no-h264` means the host draws without H.264, so the slow
+   * fallback is carrying the picture.
+   */
+  onNotice?(code: string): void;
 }
 
 export interface RdpDirectHandle {
@@ -87,6 +93,7 @@ export function connectRdpDirect({
   onResize,
   onStats,
   onKeyboardLock,
+  onNotice,
 }: RdpDirectOptions): RdpDirectHandle {
   const base = buildRdpDirectUrl({
     isDev: import.meta.env.DEV,
@@ -411,15 +418,24 @@ export function connectRdpDirect({
           break;
         }
 
-        case "ERRR": {
-          const message = new TextDecoder().decode(frame.payload);
-          // The bridge prefixes conditions with a known remedy so the UI can
-          // explain them in the viewer's language. Anything else is a runtime
-          // detail and is shown as it came.
-          onState(
-            "failed",
-            message.startsWith("no-h264:") ? "no-h264" : message,
+        case "RECT": {
+          const buffer = frame.payload.buffer.slice(
+            frame.payload.byteOffset,
+            frame.payload.byteOffset + frame.payload.length,
           );
+          worker.postMessage({ type: "rect", payload: buffer }, [buffer]);
+          break;
+        }
+
+        case "WARN": {
+          // A condition the session survives. The code is stable so the UI can
+          // explain it in the viewer's language.
+          onNotice?.(new TextDecoder().decode(frame.payload));
+          break;
+        }
+
+        case "ERRR": {
+          onState("failed", new TextDecoder().decode(frame.payload));
           break;
         }
 

@@ -33,6 +33,7 @@
 #include <freerdp/client/channels.h>
 #include <freerdp/client/rdpgfx.h>
 #include <freerdp/gdi/gdi.h>
+#include <freerdp/gdi/gfx.h>
 #include <freerdp/graphics.h>
 #include <freerdp/codec/color.h>
 #include <freerdp/channels/channels.h>
@@ -77,6 +78,7 @@ typedef struct
 	UINT32 inputRejected;
 
 	UINT32 cursorsSent;
+	UINT32 rectsSent;
 
 	/* Clipboard. `outgoing` is what the browser last copied, held until the
 	 * server asks for it -- RDP pushes a format list first and pulls the bytes
@@ -257,6 +259,7 @@ static pcRdpgfxDeleteSurface gdi_DeleteSurfaceFn = NULL;
 static pcRdpgfxMapSurfaceToOutput gdi_MapSurfaceToOutputFn = NULL;
 static pcRdpgfxStartFrame gdi_StartFrameFn = NULL;
 static pcRdpgfxEndFrame gdi_EndFrameFn = NULL;
+static pcRdpgfxSurfaceCommand gdi_SurfaceCommandFn = NULL;
 
 static UINT tx_ResetGraphics(RdpgfxClientContext* gfx, const RDPGFX_RESET_GRAPHICS_PDU* pdu)
 {
@@ -398,6 +401,66 @@ static UINT send_avc_frame(termixContext* ctx, const RDPGFX_SURFACE_COMMAND* cmd
 }
 
 /*
+ * Sends a decoded region as raw BGRA.
+ *
+ * The GDI keeps each surface as a flat buffer, so the changed rectangle is
+ * copied out row by row -- the rows are not contiguous, the surface stride is.
+ *
+ * Raw rather than re-encoded on purpose: compressing here would be guacd's
+ * design, and guacd's cost. This path only runs for hosts that never send
+ * H.264, and the notice in the UI says so.
+ */
+static UINT send_surface_rect(termixContext* ctx, RdpgfxClientContext* gfx,
+                              const RDPGFX_SURFACE_COMMAND* cmd)
+{
+	if (!gfx->GetSurfaceData)
+		return CHANNEL_RC_OK;
+
+	const gdiGfxSurface* surface =
+	    (const gdiGfxSurface*)gfx->GetSurfaceData(gfx, (UINT16)cmd->surfaceId);
+	if (!surface || !surface->data)
+		return CHANNEL_RC_OK;
+
+	/* Clamp to the surface: a command may name a region larger than what was
+	 * actually allocated, and reading past the buffer would be a crash. */
+	const UINT32 left = cmd->left;
+	const UINT32 top = cmd->top;
+	const UINT32 right = cmd->right < surface->width ? cmd->right : surface->width;
+	const UINT32 bottom = cmd->bottom < surface->height ? cmd->bottom : surface->height;
+	if (right <= left || bottom <= top)
+		return CHANNEL_RC_OK;
+
+	const UINT32 width = right - left;
+	const UINT32 height = bottom - top;
+	const size_t bytes = (size_t)width * height * 4u;
+	const size_t total = 10 + bytes;
+	if (total > MAX_FRAME_PAYLOAD)
+		return CHANNEL_RC_OK;
+
+	BYTE* payload = (BYTE*)malloc(total);
+	if (!payload)
+		return CHANNEL_RC_NO_MEMORY;
+
+	put_u16(payload, (UINT16)cmd->surfaceId);
+	put_u16(payload + 2, (UINT16)left);
+	put_u16(payload + 4, (UINT16)top);
+	put_u16(payload + 6, (UINT16)width);
+	put_u16(payload + 8, (UINT16)height);
+
+	const UINT32 bpp = FreeRDPGetBytesPerPixel(surface->format);
+	for (UINT32 y = 0; y < height; y++)
+	{
+		const BYTE* src = surface->data + (size_t)(top + y) * surface->scanline + (size_t)left * bpp;
+		memcpy(payload + 10 + (size_t)y * width * 4u, src, (size_t)width * 4u);
+	}
+
+	ctx->rectsSent++;
+	wire_send(ctx, "RECT", payload, (UINT32)total);
+	free(payload);
+	return CHANNEL_RC_OK;
+}
+
+/*
  * The pass-through.
  *
  * AVC420 is the simple case: cmd->extra is the bitstream exactly as it came off
@@ -455,13 +518,28 @@ static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COM
 		return send_avc_frame(ctx, cmd, &bs->bitstream[0]);
 	}
 
-	/* Anything else is skipped, not fatal. Windows mixes codecs: small
-	 * non-video updates arrive as ClearCodec or Planar even when H.264 is
-	 * negotiated, so failing the session on the first one kills it on the lock
-	 * screen before the desktop ever draws. Those regions simply do not update
-	 * yet -- what to do about them is a decision for the measured mix, which
-	 * the periodic histogram reports. */
-	return CHANNEL_RC_OK;
+	/*
+	 * Everything else: let the GDI decode it and forward the pixels.
+	 *
+	 * A Windows host only offers H.264 once the "Prioritize H.264/AVC 444"
+	 * policy is on. Without it the desktop is drawn entirely in ClearCodec and
+	 * progressive, and a passthrough that carries H.264 alone shows a black
+	 * screen on a session where everything else works. So those commands go
+	 * through the GDI, which already decodes them, and the decoded region is
+	 * sent as pixels.
+	 *
+	 * This is the expensive path -- decoding and a raw copy per update, which
+	 * is what the H.264 route exists to avoid -- so it is a fallback, not the
+	 * design. H.264 never reaches the GDI.
+	 */
+	if (!gdi_SurfaceCommandFn)
+		return CHANNEL_RC_OK;
+
+	const UINT rc = gdi_SurfaceCommandFn(gfx, cmd);
+	if (rc != CHANNEL_RC_OK)
+		return rc;
+
+	return send_surface_rect(ctx, gfx, cmd);
 }
 
 /* ------------------------------------------------------------------ */
@@ -676,6 +754,7 @@ static void tx_OnChannelConnected(void* context, const ChannelConnectedEventArgs
 		gdi_MapSurfaceToOutputFn = gfx->MapSurfaceToOutput;
 		gdi_StartFrameFn = gfx->StartFrame;
 		gdi_EndFrameFn = gfx->EndFrame;
+		gdi_SurfaceCommandFn = gfx->SurfaceCommand;
 		gdi_CapsConfirmFn = gfx->CapsConfirm;
 
 		gfx->CapsConfirm = tx_CapsConfirm;
@@ -1003,7 +1082,12 @@ static BOOL tx_post_connect(freerdp* instance)
 		wire_error(ctx, "gdi_init failed");
 		return FALSE;
 	}
-	if (!freerdp_settings_set_bool(settings, FreeRDP_DeactivateClientDecoding, TRUE))
+	/* The GDI decodes, but only what the passthrough will not carry. Leaving it
+	 * active is what lets a default Windows host -- which draws in ClearCodec
+	 * and progressive -- still produce a picture. tx_SurfaceCommand hands those
+	 * to the GDI and reads the pixels back; H.264 never reaches it, so the
+	 * frames that matter are still never decoded here. */
+	if (!freerdp_settings_set_bool(settings, FreeRDP_DeactivateClientDecoding, FALSE))
 		return FALSE;
 
 	instance->context->update->DesktopResize = tx_desktop_resize;
@@ -1402,10 +1486,14 @@ static int run_session(int sock, const char* json)
 				if (otherCodecs > 0)
 				{
 					warnedNoH264 = TRUE;
-					wire_error(ctx, "no-h264: the server is drawing without H.264");
+					/* A notice, not an error: the fallback path is drawing, so
+					 * the session works. It is just the expensive way to do it,
+					 * and the remedy is one policy on the target. */
+					wire_send(ctx, "WARN", "no-h264", 7);
 					fprintf(stderr,
-					        "[%s] no H.264 after %u surface commands -- enable the "
-					        "'Prioritize H.264/AVC 444 graphics mode' policy on the target\n",
+					        "[%s] no H.264 after %u surface commands, falling back to decoded "
+					        "rects -- enable the 'Prioritize H.264/AVC 444 graphics mode' "
+					        "policy on the target for the fast path\n",
 					        TAG, otherCodecs);
 					fflush(stderr);
 				}

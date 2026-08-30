@@ -47,8 +47,13 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
     // shortcuts. Dismissed by the viewer, not on a timer: it explains why
     // Ctrl+W just closed a tab, which is worth reading at leisure.
     const [shortcutsEscape, setShortcutsEscape] = useState(false);
-    const [shortcutNoticeDismissed, setShortcutNoticeDismissed] =
-      useState(false);
+    const [noticeCode, setNoticeCode] = useState<string | null>(null);
+    const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+
+    const dismiss = useCallback(
+      (key: string) => setDismissed((prev) => new Set(prev).add(key)),
+      [],
+    );
 
     const numericHostId = hostId ? parseInt(hostId, 10) : NaN;
 
@@ -85,6 +90,7 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
               lockState === "unsupported" || lockState === "refused",
             );
           },
+          onNotice: setNoticeCode,
           onStats: (stats) => {
             statsLogger.info(
               `Direct RDP painted ${stats.fps.toFixed(1)} fps ` +
@@ -130,6 +136,18 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
 
     const failed = state === "failed" || state === "closed";
 
+    const notices = [
+      shortcutsEscape
+        ? { key: "shortcuts", text: t("rdpDirect.shortcutsEscapeNotice") }
+        : null,
+      noticeCode === "no-h264"
+        ? { key: "no-h264", text: t("rdpDirect.noH264") }
+        : null,
+    ].filter(
+      (n): n is { key: string; text: string } =>
+        n !== null && !dismissed.has(n.key),
+    );
+
     return (
       <div
         ref={surfaceRef}
@@ -137,36 +155,42 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
         className="relative w-full h-full outline-none"
         style={{ backgroundColor: "var(--bg-base)" }}
       >
-        {state === "connected" &&
-          shortcutsEscape &&
-          !shortcutNoticeDismissed && (
-            <div
-              className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex items-start gap-2 rounded-md border px-3 py-2 shadow-md max-w-lg"
-              style={{
-                backgroundColor: "var(--bg-elevated, var(--bg-base))",
-                borderColor: "var(--border)",
-              }}
-            >
-              <AlertCircle
-                className="size-4 shrink-0 mt-0.5"
-                style={{ color: "var(--foreground-secondary)" }}
-              />
-              <p
-                className="text-xs leading-relaxed"
-                style={{ color: "var(--foreground-secondary)" }}
+        {/* Conditions the session survives. Both are dismissed by the viewer
+            rather than on a timer: each explains something that already
+            happened, or is about to, and is worth reading at leisure. */}
+        {state === "connected" && notices.length > 0 && (
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex flex-col gap-2 max-w-lg">
+            {notices.map(({ key, text }) => (
+              <div
+                key={key}
+                className="flex items-start gap-2 rounded-md border px-3 py-2 shadow-md"
+                style={{
+                  backgroundColor: "var(--bg-elevated, var(--bg-base))",
+                  borderColor: "var(--border)",
+                }}
               >
-                {t("rdpDirect.shortcutsEscapeNotice")}
-              </p>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 px-2 -mt-0.5 shrink-0"
-                onClick={() => setShortcutNoticeDismissed(true)}
-              >
-                {t("rdpDirect.dismiss")}
-              </Button>
-            </div>
-          )}
+                <AlertCircle
+                  className="size-4 shrink-0 mt-0.5"
+                  style={{ color: "var(--foreground-secondary)" }}
+                />
+                <p
+                  className="text-xs leading-relaxed"
+                  style={{ color: "var(--foreground-secondary)" }}
+                >
+                  {text}
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 -mt-0.5 shrink-0"
+                  onClick={() => dismiss(key)}
+                >
+                  {t("rdpDirect.dismiss")}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
 
         {state !== "connected" && (
           <div
@@ -190,10 +214,7 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
                     className="text-xs max-w-md text-center"
                     style={{ color: "var(--foreground-secondary)" }}
                   >
-                    {/* A known condition with a known remedy is explained in
-                        the viewer's language; anything else is a runtime
-                        detail and is shown as the bridge reported it. */}
-                    {detail === "no-h264" ? t("rdpDirect.noH264") : detail}
+                    {detail}
                   </p>
                 )}
                 <Button variant="outline" size="sm" onClick={reconnect}>

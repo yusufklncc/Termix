@@ -15,6 +15,7 @@ type InboundMessage =
   | { type: "init"; canvas: OffscreenCanvas }
   | { type: "resize"; width: number; height: number }
   | { type: "avc"; payload: ArrayBuffer }
+  | { type: "rect"; payload: ArrayBuffer }
   | { type: "close" };
 
 type OutboundMessage =
@@ -29,6 +30,9 @@ let ctx: OffscreenCanvasRenderingContext2D | null = null;
 let decoder: VideoDecoder | null = null;
 let configured = false;
 let decodedCount = 0;
+/* Video frames only. The key-frame gate must not count painted rects: a
+ * decoder that has not seen a key frame still cannot take a delta. */
+let videoFrames = 0;
 
 /** Rects for the frame currently in flight, in submission order. */
 const pendingRects: RdpRect[][] = [];
@@ -68,6 +72,7 @@ function paint(frame: VideoFrame) {
       }
     }
     decodedCount++;
+    videoFrames++;
   } finally {
     frame.close();
   }
@@ -161,6 +166,39 @@ self.onmessage = async (event: MessageEvent<InboundMessage>) => {
       break;
     }
 
+    /*
+     * A decoded region from the bridge, for hosts that never send H.264.
+     * Painted straight onto the canvas: there is no decoder involved, so it
+     * bypasses the video path entirely and does not disturb its key-frame
+     * state.
+     */
+    case "rect": {
+      if (!ctx) return;
+      const bytes = new Uint8Array(message.payload);
+      if (bytes.length < 10) return;
+      const view = new DataView(message.payload);
+      const left = view.getUint16(2, true);
+      const top = view.getUint16(4, true);
+      const width = view.getUint16(6, true);
+      const height = view.getUint16(8, true);
+      if (width === 0 || height === 0) return;
+      if (bytes.length < 10 + width * height * 4) return;
+
+      const image = ctx.createImageData(width, height);
+      // BGRA on the wire, RGBA in an ImageData.
+      for (let i = 0; i < width * height; i++) {
+        const src = 10 + i * 4;
+        const dst = i * 4;
+        image.data[dst] = bytes[src + 2];
+        image.data[dst + 1] = bytes[src + 1];
+        image.data[dst + 2] = bytes[src];
+        image.data[dst + 3] = 255;
+      }
+      ctx.putImageData(image, left, top);
+      decodedCount++;
+      break;
+    }
+
     case "avc": {
       reportStats(performance.now());
 
@@ -171,7 +209,7 @@ self.onmessage = async (event: MessageEvent<InboundMessage>) => {
       const key = isKeyFrame(parsed.bitstream);
       // Until a key frame arrives the decoder has no reference to build on, so
       // delta chunks would only produce errors.
-      if (!key && decodedCount === 0) return;
+      if (!key && videoFrames === 0) return;
 
       pendingRects.push(parsed.rects);
       try {

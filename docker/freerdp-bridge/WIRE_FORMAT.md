@@ -30,6 +30,8 @@ Bütün sayısal alanlar **little-endian**.
 | `CURS` | aşağıya bak                                                  | İmleç şekli                                 |
 | `CURD` | boş                                                          | Varsayılan imlece dön                       |
 | `CLIP` | UTF-8 metin                                                  | Pano — **çift yönlü**                       |
+| `RECT` | aşağıya bak                                                  | Decode edilmiş ham bölge (H.264 olmayan)    |
+| `WARN` | ASCII kod                                                    | Oturumu öldürmeyen uyarı                    |
 | `ERRR` | UTF-8 metin                                                  | Hata                                        |
 | `BYE ` | `u32 reason`                                                 | Oturum kapandı                              |
 
@@ -136,3 +138,36 @@ okuyabilir, ve "kullanıcı kopyaladı" diyen bir olay yok. Bu yüzden yerel pan
 oturuma **tıklandığında** okunur — yapıştırmadan hemen önceki an. Firefox'ta
 okuma atlanır; izin modeli sormak yerine hata veriyor. Mevcut guacd yolu da
 aynı şeyi yapıyor.
+
+## `RECT` — H.264 göndermeyen sunucular için
+
+```
+u16 surfaceId
+u16 left, u16 top
+u16 width, u16 height
+BGRA piksel verisi   (width * height * 4 bayt)
+```
+
+Bir Windows host'u H.264'ü ancak "Prioritize H.264/AVC 444" politikası açıkken
+sunuyor. Açık değilse masaüstünün tamamı ClearCodec ve progressive ile
+çiziliyor; yalnızca H.264 taşıyan bir pass-through böyle bir oturumda **siyah
+ekran** gösterir — üstelik bağlantı, girdi ve pano çalışıyorken.
+
+Bu yüzden H.264 olmayan komutlar GDI'ye decode ettirilip decode edilmiş bölge
+ham piksel olarak gönderiliyor. **Pahalı yol budur** — H.264 rotası tam da
+bundan kaçınmak için var — dolayısıyla bir yedek, tasarım değil. H.264 GDI'ye
+hiç uğramıyor.
+
+Ham gönderiliyor, yeniden encode edilmiyor: sıkıştırmak guacd'nin tasarımı ve
+guacd'nin maliyeti olurdu. Bunun yerine arayüz kullanıcıya politikayı açmasını
+öneren kapatılabilir bir bildirim gösteriyor.
+
+## `WARN` — ölümcül olmayan uyarı
+
+Payload sabit bir ASCII kod. Arayüz bunu kullanıcının dilinde bir açıklamaya
+çeviriyor ve kapatılabilir bir bildirim olarak gösteriyor; oturum çalışmaya
+devam eder.
+
+| Kod       | Anlamı                                            |
+| --------- | ------------------------------------------------- |
+| `no-h264` | Sunucu H.264 göndermiyor, `RECT` yedeğine düşüldü |

@@ -95,8 +95,32 @@ function paint(frame: VideoFrame) {
   }
 
   try {
+    /*
+     * The coded picture is not always the size of the surface. A server may
+     * encode the desktop at a fixed resolution and still describe the update as
+     * covering the whole surface -- measured against a Windows host encoding
+     * 1280x720 for surfaces of 1126x1130 and 1684x1282 alike. Drawing that one
+     * to one puts a fraction of the picture in the corner.
+     *
+     * So the rects, which are in surface coordinates, are mapped into the
+     * picture through the ratio between the two. Where the sizes agree the
+     * ratio is one and this is the same 1:1 copy as before.
+     */
+    const scaleX = canvas ? frame.displayWidth / canvas.width : 1;
+    const scaleY = canvas ? frame.displayHeight / canvas.height : 1;
+
     if (!rects || rects.length === 0) {
-      ctx.drawImage(frame, 0, 0);
+      ctx.drawImage(
+        frame,
+        0,
+        0,
+        frame.displayWidth,
+        frame.displayHeight,
+        0,
+        0,
+        canvas ? canvas.width : frame.displayWidth,
+        canvas ? canvas.height : frame.displayHeight,
+      );
     } else {
       // The picture covers the whole surface; the rects say which parts of it
       // actually changed. Painting only those avoids redrawing stale areas.
@@ -106,10 +130,10 @@ function paint(frame: VideoFrame) {
         if (width <= 0 || height <= 0) continue;
         ctx.drawImage(
           frame,
-          rect.left,
-          rect.top,
-          width,
-          height,
+          rect.left * scaleX,
+          rect.top * scaleY,
+          width * scaleX,
+          height * scaleY,
           rect.left,
           rect.top,
           width,

@@ -509,6 +509,20 @@ static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COM
 		if (!bs)
 			return CHANNEL_RC_OK;
 
+		static BOOL loggedAvc444 = FALSE;
+		if (!loggedAvc444)
+		{
+			loggedAvc444 = TRUE;
+			fprintf(stderr,
+			        "[%s] avc444: LC=%u luma=%u bytes/%u rects, chroma=%u bytes/%u rects, "
+			        "cb1=%u, cmd %ux%u dest %u,%u-%u,%u\n",
+			        TAG, bs->LC, bs->bitstream[0].length, bs->bitstream[0].meta.numRegionRects,
+			        bs->bitstream[1].length, bs->bitstream[1].meta.numRegionRects,
+			        bs->cbAvc420EncodedBitstream1, cmd->width, cmd->height, cmd->left, cmd->top,
+			        cmd->right, cmd->bottom);
+			fflush(stderr);
+		}
+
 		if (bs->LC == 2)
 		{
 			ctx->chromaOnlySkipped++;

@@ -6,6 +6,7 @@ import { PermissionManager } from "../../utils/permission-manager.js";
 import { sshLogger } from "../../utils/logger.js";
 import { resolveRdpBridgeOptions } from "../../utils/rdp-bridge-config.js";
 import { resolveDisplaySize } from "./display-size.js";
+import { startRecording, type RdpRecorder } from "./recording.js";
 import {
   openJumpTunnel,
   parseJumpHosts,
@@ -83,6 +84,7 @@ wss.on("connection", async (ws: WebSocket, req) => {
   let userId: string | undefined;
   let bridge: net.Socket | null = null;
   let tunnel: JumpTunnel | null = null;
+  let recorder: RdpRecorder | null = null;
 
   const fail = (code: number, message: string) => {
     try {
@@ -251,10 +253,23 @@ wss.on("connection", async (ws: WebSocket, req) => {
       );
     });
 
-    // The bridge's frames are already the browser's wire format; relaying them
-    // as-is is what keeps this process off the video path.
+    /*
+     * The bridge's frames are already the browser's wire format; relaying them
+     * as-is is what keeps this process off the video path.
+     *
+     * And because they are, recording is the same bytes written down rather
+     * than a second description of the session assembled here.
+     */
+    if (record.enableSessionLogging !== false) {
+      recorder = startRecording({ hostId, userId });
+    }
+
     bridge.on("data", (chunk) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(chunk);
+      // No encoding is ever set on this socket, so a chunk is always a Buffer;
+      // the conversion is there to satisfy the type, not to do work.
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      recorder?.write(bytes);
+      if (ws.readyState === WebSocket.OPEN) ws.send(bytes);
     });
 
     bridge.on("error", (error) => {
@@ -270,6 +285,8 @@ wss.on("connection", async (ws: WebSocket, req) => {
     bridge.on("close", () => {
       tunnel?.close();
       tunnel = null;
+      void recorder?.close();
+      recorder = null;
       if (ws.readyState === WebSocket.OPEN) ws.close(1000, "Session ended");
     });
 
@@ -316,6 +333,8 @@ wss.on("connection", async (ws: WebSocket, req) => {
     bridge = null;
     tunnel?.close();
     tunnel = null;
+    void recorder?.close();
+    recorder = null;
     sshLogger.info("Direct RDP session ended", {
       operation: "rdp_direct_session_end",
       userId,

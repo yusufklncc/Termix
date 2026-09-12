@@ -26,6 +26,7 @@ type InboundMessage =
   | { type: "avc"; payload: ArrayBuffer }
   | { type: "rect"; payload: ArrayBuffer }
   | { type: "rectw"; payload: ArrayBuffer }
+  | { type: "reset" }
   | { type: "close" };
 
 type OutboundMessage =
@@ -536,6 +537,45 @@ self.onmessage = async (event: MessageEvent<InboundMessage>) => {
     case "avc": {
       reportStats(performance.now());
       decodeAvc(message.payload);
+      break;
+    }
+
+    /*
+     * Back to the state a fresh session starts in.
+     *
+     * Playback seeking backwards needs this: the stream describes changes to a
+     * picture, so reaching an earlier moment means replaying from the start,
+     * and replaying into a decoder holding the later state gives it deltas
+     * against a picture that no longer applies.
+     */
+    case "reset": {
+      try {
+        decoder?.close();
+      } catch {
+        // already closed
+      }
+      decoder = null;
+      configured = false;
+      lastCodec = null;
+      needsKeyFrame = true;
+      lastKeyChunk = null;
+      softwareFallbackUsed = false;
+      flushedOnce = false;
+      gaveUp = false;
+      pendingChunks.length = 0;
+      pendingRects.length = 0;
+      regionQueue = Promise.resolve();
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      if (softwareWatchdog) {
+        clearTimeout(softwareWatchdog);
+        softwareWatchdog = null;
+      }
+      if (ctx && canvas) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
       break;
     }
 

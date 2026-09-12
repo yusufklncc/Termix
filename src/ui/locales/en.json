@@ -510,7 +510,9 @@
     "deleted": "Deleted",
     "deleteFailed": "Failed to delete",
     "saveFailed": "Failed to save",
-    "required": "Required"
+    "required": "Required",
+    "play": "Play",
+    "pause": "Pause"
   },
   "nav": {
     "home": "Home",
@@ -3807,5 +3809,9 @@
     "dismiss": "Dismiss",
     "noH264": "This host draws without H.264, so the session falls back to decoding on the server — it works, but costs far more CPU and bandwidth. Enable \"Prioritize H.264/AVC 444 graphics mode\" on the target and restart it for the fast path.",
     "serverDecode": "This browser could not decode this host's video, so the session falls back to decoding on the server — it works, but costs far more CPU and bandwidth than the direct path."
+  },
+  "sessionRecording": {
+    "unreadable": "This recording is not in a format this player understands.",
+    "position": "Position in the recording"
   }
 }

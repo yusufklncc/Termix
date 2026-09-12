@@ -5,6 +5,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import Guacamole from "guacamole-common-js";
 import type { SessionLogRecord } from "@/api/session-log-api";
 import { parseAsciicast, type Asciicast } from "./asciicast";
+import { RdpDirectPlayer } from "./RdpDirectPlayer";
 import "@xterm/xterm/css/xterm.css";
 
 const SPEEDS = [0.5, 1, 2, 4];
@@ -285,9 +286,9 @@ export function SessionRecordingPlayer({
   log: SessionLogRecord;
   blob: Blob;
 }) {
-  return log.format === "guacamole" ? (
-    <GuacamolePlayer blob={blob} />
-  ) : (
-    <AsciicastPlayer blob={blob} />
-  );
+  if (log.format === "guacamole") return <GuacamolePlayer blob={blob} />;
+  // The direct renderer records its own wire stream, so it plays back through
+  // its own decoder rather than guacamole-common-js.
+  if (log.format === "rdp-direct") return <RdpDirectPlayer blob={blob} />;
+  return <AsciicastPlayer blob={blob} />;
 }

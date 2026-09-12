@@ -10,6 +10,7 @@ import {
   readHelo,
   RdpFrameReader,
 } from "./rdp-wire.ts";
+import { createRdpRenderer } from "./rdp-render.ts";
 import {
   PTR_FLAGS_DOWN,
   PTR_FLAGS_MOVE,
@@ -134,6 +135,8 @@ export function connectRdpDirect({
   const offscreen = canvas.transferControlToOffscreen();
   worker.postMessage({ type: "init", canvas: offscreen }, [offscreen]);
 
+  const renderer = createRdpRenderer({ worker, surface, onResize });
+
   worker.onmessage = (event: MessageEvent) => {
     if (event.data?.type === "error") onState("failed", event.data.message);
     else if (event.data?.type === "decoder-unusable") {
@@ -219,53 +222,6 @@ export function connectRdpDirect({
    * it stays responsive at any frame rate, and it cannot lag behind the pointer
    * the way a painted one would.
    */
-  const cursorCanvas = document.createElement("canvas");
-
-  const applyCursor = (payload: Uint8Array) => {
-    if (payload.length < 8) return;
-    const view = new DataView(
-      payload.buffer,
-      payload.byteOffset,
-      payload.length,
-    );
-    const width = view.getUint16(0, true);
-    const height = view.getUint16(2, true);
-    const hotX = view.getUint16(4, true);
-    const hotY = view.getUint16(6, true);
-
-    // A zero-sized cursor is how the bridge says "hide it".
-    if (width === 0 || height === 0) {
-      surface.style.cursor = "none";
-      return;
-    }
-    if (payload.length < 8 + width * height * 4) return;
-
-    const context = cursorCanvas.getContext("2d");
-    if (!context) return;
-    cursorCanvas.width = width;
-    cursorCanvas.height = height;
-
-    const image = context.createImageData(width, height);
-    // BGRA on the wire, RGBA in an ImageData.
-    for (let i = 0; i < width * height; i++) {
-      const src = 8 + i * 4;
-      const dst = i * 4;
-      image.data[dst] = payload[src + 2];
-      image.data[dst + 1] = payload[src + 1];
-      image.data[dst + 2] = payload[src];
-      image.data[dst + 3] = payload[src + 3];
-    }
-    context.putImageData(image, 0, 0);
-
-    try {
-      // The keyword fallback matters: a browser that rejects the image (too
-      // large, or a hotspot outside it) drops the whole declaration otherwise.
-      const url = cursorCanvas.toDataURL("image/png");
-      surface.style.cursor = `url(${url}) ${hotX} ${hotY}, default`;
-    } catch {
-      surface.style.cursor = "default";
-    }
-  };
 
   /* ---- input ---- */
 
@@ -387,27 +343,18 @@ export function connectRdpDirect({
   socket.addEventListener("message", (event) => {
     const chunk = new Uint8Array(event.data as ArrayBuffer);
     for (const frame of reader.push(chunk)) {
-      switch (frame.magic) {
-        case "HELO": {
+      // Anything that only paints is the renderer's, and is the same code a
+      // recording of this session plays back through.
+      if (renderer.handle(frame)) {
+        if (frame.magic === "HELO") {
           const size = readHelo(frame.payload);
-          if (!size) break;
-          remote = size;
-          worker.postMessage({ type: "resize", ...size });
-          onResize?.(size.width, size.height);
+          if (size) remote = size;
           onState("connected");
-          break;
         }
+        continue;
+      }
 
-        case "AVCF": {
-          // Transferred, not copied: the payload leaves this thread entirely.
-          const buffer = frame.payload.buffer.slice(
-            frame.payload.byteOffset,
-            frame.payload.byteOffset + frame.payload.length,
-          );
-          worker.postMessage({ type: "avc", payload: buffer }, [buffer]);
-          break;
-        }
-
+      switch (frame.magic) {
         case "FEND": {
           const frameId = readFrameId(frame.payload);
           if (frameId === null) break;
@@ -419,34 +366,8 @@ export function connectRdpDirect({
           break;
         }
 
-        case "CURS": {
-          applyCursor(frame.payload);
-          break;
-        }
-
-        case "CURD": {
-          surface.style.cursor = "default";
-          break;
-        }
-
         case "CLIP": {
           receiveClipboard(frame.payload);
-          break;
-        }
-
-        case "RECT":
-        case "RECW": {
-          const buffer = frame.payload.buffer.slice(
-            frame.payload.byteOffset,
-            frame.payload.byteOffset + frame.payload.length,
-          );
-          worker.postMessage(
-            {
-              type: frame.magic === "RECW" ? "rectw" : "rect",
-              payload: buffer,
-            },
-            [buffer],
-          );
           break;
         }
 

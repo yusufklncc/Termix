@@ -9,6 +9,12 @@
 # and Termix's own file manager already reaches these hosts. Printing is on --
 # there is no other way to get a document out of a remote desktop.
 #
+# CHANNEL_PRINTER_CLIENT has to be asked for by name. FreeRDP defaults the
+# client half of the printer channel to the value of WITH_CUPS, which is off
+# here because the job belongs in a browser rather than in a local queue --
+# and without the channel, rdpdr fails to load its device and takes the whole
+# connection down with it.
+#
 # ALSA and PulseAudio are off too, and that one is not a size decision. This
 # container has no sound card and must never look for one: remote audio is
 # carried to the browser by rdpsnd_termix.c instead. Leaving ALSA built meant
@@ -49,6 +55,7 @@ RUN cmake -GNinja -S FreeRDP -B build \
       -DWITH_CUPS=OFF \
       -DWITH_MANPAGES=OFF \
       -DWITH_FUSE=OFF \
+      -DCHANNEL_PRINTER_CLIENT=ON \
       -DCHANNEL_DRIVE=OFF \
       -DCHANNEL_PARALLEL=OFF \
       -DCHANNEL_SERIAL=OFF \

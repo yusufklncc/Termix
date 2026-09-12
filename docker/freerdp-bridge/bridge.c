@@ -1630,7 +1630,18 @@ static BOOL tx_pre_connect(freerdp* instance)
 	 * instead of to a queue. BRIDGE_PRINTER=0 leaves it unasked for.
 	 */
 	const char* printerEnv = getenv("BRIDGE_PRINTER");
-	if (!(printerEnv && printerEnv[0] == '0'))
+	/* Asking for a printer whose driver is missing does not fail the printer --
+	 * it fails rdpdr, which takes the whole connection with it. Checking first
+	 * turns a build that shipped without the plugin into a session with no
+	 * printer rather than no session. */
+	const BOOL printerAvailable =
+	    access("/usr/local/lib/freerdp3/libprinter-client-termix.so", R_OK) == 0;
+	if (!printerAvailable)
+	{
+		fprintf(stderr, "[%s] printer driver not installed; continuing without printing\n", TAG);
+		fflush(stderr);
+	}
+	if (printerAvailable && !(printerEnv && printerEnv[0] == '0'))
 	{
 		/* Name, then driver. The backend is the half after the colon, which the
 		 * channel strips before telling Windows what driver it is talking to --

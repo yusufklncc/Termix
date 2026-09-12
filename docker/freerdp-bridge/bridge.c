@@ -1627,7 +1627,7 @@ static BOOL tx_pre_connect(freerdp* instance)
 	 *
 	 * "termix" resolves to libprinter-client-termix.so, which announces one
 	 * printer under the name of a PostScript driver and hands the job here
-	 * instead of to a queue. BRIDGE_PRINTER=0 leaves it unasked for.
+	 * instead of to a queue. BRIDGE_PRINTER=1 asks for it.
 	 */
 	const char* printerEnv = getenv("BRIDGE_PRINTER");
 	/* Asking for a printer whose driver is missing does not fail the printer --
@@ -1641,7 +1641,17 @@ static BOOL tx_pre_connect(freerdp* instance)
 		fprintf(stderr, "[%s] printer driver not installed; continuing without printing\n", TAG);
 		fflush(stderr);
 	}
-	if (printerAvailable && !(printerEnv && printerEnv[0] == '0'))
+	/*
+	 * Off unless asked for, and that is not timidity.
+	 *
+	 * Printing rides on rdpdr, and rdpdr is not optional to a session: when its
+	 * device fails to load, FreeRDP fails post-connect and the whole connection
+	 * goes with it. So the cost of a printer that does not work is not a missing
+	 * printer -- it is a desktop nobody can reach. Until this has been proven
+	 * against more than one Windows build, that risk belongs behind a switch
+	 * rather than in front of every session.
+	 */
+	if (printerAvailable && printerEnv && printerEnv[0] == '1')
 	{
 		/* Name, then driver. The backend is the half after the colon, which the
 		 * channel strips before telling Windows what driver it is talking to --

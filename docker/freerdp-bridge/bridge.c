@@ -1387,8 +1387,14 @@ static BOOL tx_pre_connect(freerdp* instance)
 	const char* audioEnv = getenv("BRIDGE_AUDIO");
 	if (!(audioEnv && audioEnv[0] == '0'))
 	{
+		/* Both registrations, because FreeRDP runs rdpsnd over the dynamic channel
+		 * when the server offers one and over the static channel otherwise -- and
+		 * the subsystem argument only reaches the one it actually used. Setting
+		 * just the static one left the dynamic channel to pick a device by
+		 * itself, which it did: ALSA, in a container with no sound card. */
 		const char* args[] = { "rdpsnd", "sys:termix" };
 		if (!freerdp_client_add_static_channel(settings, ARRAYSIZE(args), args) ||
+		    !freerdp_client_add_dynamic_channel(settings, ARRAYSIZE(args), args) ||
 		    !freerdp_settings_set_bool(settings, FreeRDP_DeviceRedirection, TRUE) ||
 		    !freerdp_settings_set_bool(settings, FreeRDP_AudioPlayback, TRUE))
 		{

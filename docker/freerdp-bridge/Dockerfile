@@ -5,8 +5,14 @@
 # in the Termix one: only deployments that opt into the direct RDP path pay for
 # the build, exactly as guacd is optional today.
 #
-# Drive/printer/serial redirection are switched off: drive redirection needs
-# FUSE, and none of them are in the first prototype's scope anyway.
+# Drive/serial redirection are switched off: drive redirection needs FUSE and
+# neither is in scope.
+#
+# ALSA and PulseAudio are off too, and that one is not a size decision. This
+# container has no sound card and must never look for one: remote audio is
+# carried to the browser by rdpsnd_termix.c instead. Leaving ALSA built meant
+# rdpsnd could pick it, which it did -- filling the log with card-not-found
+# errors while the viewer heard nothing.
 
 FROM ubuntu:24.04 AS build
 
@@ -38,6 +44,7 @@ RUN cmake -GNinja -S FreeRDP -B build \
       -DWITH_X11=OFF \
       -DWITH_WAYLAND=OFF \
       -DWITH_PULSE=OFF \
+      -DWITH_ALSA=OFF \
       -DWITH_CUPS=OFF \
       -DWITH_MANPAGES=OFF \
       -DWITH_FUSE=OFF \

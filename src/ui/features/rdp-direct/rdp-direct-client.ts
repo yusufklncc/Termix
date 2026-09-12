@@ -160,7 +160,6 @@ export function connectRdpDirect({
 
   const reader = new RdpFrameReader();
   let closed = false;
-  let loggedFirstAvcf = false;
   let remote = { width: 0, height: 0 };
 
   const send = (magic: string, payload: Uint8Array) => {
@@ -400,12 +399,6 @@ export function connectRdpDirect({
         }
 
         case "AVCF": {
-          if (!loggedFirstAvcf) {
-            loggedFirstAvcf = true;
-            console.log("[rdp-direct] first AVCF from bridge", {
-              bytes: frame.payload.length,
-            });
-          }
           // Transferred, not copied: the payload leaves this thread entirely.
           const buffer = frame.payload.buffer.slice(
             frame.payload.byteOffset,

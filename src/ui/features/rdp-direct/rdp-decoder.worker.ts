@@ -10,6 +10,11 @@
  */
 
 import { isKeyFrame, parseAvcFrame, type RdpRect } from "./rdp-wire.ts";
+import {
+  codecFromSps,
+  isForeignFrameSize,
+  mapRectToFrame,
+} from "./rdp-decode-policy.ts";
 
 type InboundMessage =
   | { type: "init"; canvas: OffscreenCanvas }
@@ -108,29 +113,6 @@ function post(message: OutboundMessage) {
   self.postMessage(message);
 }
 
-let loggedFirstPaint = false;
-
-/*
- * A picture whose size is nothing like the surface did not come from this
- * stream.
- *
- * RDP aligns the desktop to macroblocks, so a correct frame is the surface
- * size rounded up to a multiple of 16 -- never smaller, never far larger. A
- * hardware decoder that has quietly failed reports a size of its own instead,
- * and paints a blank picture at it.
- */
-function sizeLooksWrong(frame: VideoFrame): boolean {
-  if (!canvas || canvas.width === 0 || canvas.height === 0) return false;
-  const alignedWidth = Math.ceil(canvas.width / 16) * 16;
-  const alignedHeight = Math.ceil(canvas.height / 16) * 16;
-  return (
-    frame.displayWidth < canvas.width ||
-    frame.displayHeight < canvas.height ||
-    frame.displayWidth > alignedWidth ||
-    frame.displayHeight > alignedHeight
-  );
-}
-
 let gaveUp = false;
 let softwareWatchdog: ReturnType<typeof setTimeout> | null = null;
 
@@ -141,14 +123,20 @@ function giveUpOnDecoding(reason: string) {
     clearTimeout(softwareWatchdog);
     softwareWatchdog = null;
   }
-  console.log("[rdp-direct] giving up on browser decoding:", reason);
+  console.warn(`[rdp-direct] browser cannot decode this stream: ${reason}`);
   post({ type: "decoder-unusable" });
 }
 
 function paint(frame: VideoFrame) {
   const rects = pendingRects.shift();
 
-  if (softwareFallbackUsed && sizeLooksWrong(frame)) {
+  if (
+    softwareFallbackUsed &&
+    isForeignFrameSize(
+      { width: frame.displayWidth, height: frame.displayHeight },
+      { width: canvas ? canvas.width : 0, height: canvas ? canvas.height : 0 },
+    )
+  ) {
     // Software failed the same way hardware did, so it is not the decoder
     // implementation -- this browser cannot decode this stream at all.
     frame.close();
@@ -156,13 +144,17 @@ function paint(frame: VideoFrame) {
     return;
   }
 
-  if (!softwareFallbackUsed && lastCodec && sizeLooksWrong(frame)) {
-    console.log(
-      "[rdp-direct] decoder returned a foreign size, using software",
-      {
-        frame: `${frame.displayWidth}x${frame.displayHeight}`,
-        canvas: canvas ? `${canvas.width}x${canvas.height}` : "none",
-      },
+  if (
+    !softwareFallbackUsed &&
+    lastCodec &&
+    isForeignFrameSize(
+      { width: frame.displayWidth, height: frame.displayHeight },
+      { width: canvas ? canvas.width : 0, height: canvas ? canvas.height : 0 },
+    )
+  ) {
+    console.warn(
+      `[rdp-direct] hardware decoder returned ${frame.displayWidth}x${frame.displayHeight} ` +
+        `for a ${canvas?.width}x${canvas?.height} surface; switching to software`,
     );
     softwareFallbackUsed = true;
     configured = false;
@@ -182,16 +174,6 @@ function paint(frame: VideoFrame) {
     return;
   }
 
-  if (!loggedFirstPaint) {
-    loggedFirstPaint = true;
-    console.log("[rdp-direct] decoder output", {
-      frame: `${frame.displayWidth}x${frame.displayHeight}`,
-      canvas: canvas ? `${canvas.width}x${canvas.height}` : "none",
-      ctx: !!ctx,
-      rects: rects ? rects.length : 0,
-      firstRect: rects && rects[0] ? rects[0] : null,
-    });
-  }
   if (!ctx) {
     frame.close();
     return;
@@ -209,8 +191,14 @@ function paint(frame: VideoFrame) {
      * picture through the ratio between the two. Where the sizes agree the
      * ratio is one and this is the same 1:1 copy as before.
      */
-    const scaleX = canvas ? frame.displayWidth / canvas.width : 1;
-    const scaleY = canvas ? frame.displayHeight / canvas.height : 1;
+    const surface = {
+      width: canvas ? canvas.width : frame.displayWidth,
+      height: canvas ? canvas.height : frame.displayHeight,
+    };
+    const picture = {
+      width: frame.displayWidth,
+      height: frame.displayHeight,
+    };
 
     if (!rects || rects.length === 0) {
       ctx.drawImage(
@@ -221,26 +209,25 @@ function paint(frame: VideoFrame) {
         frame.displayHeight,
         0,
         0,
-        canvas ? canvas.width : frame.displayWidth,
-        canvas ? canvas.height : frame.displayHeight,
+        surface.width,
+        surface.height,
       );
     } else {
       // The picture covers the whole surface; the rects say which parts of it
       // actually changed. Painting only those avoids redrawing stale areas.
       for (const rect of rects) {
-        const width = rect.right - rect.left;
-        const height = rect.bottom - rect.top;
-        if (width <= 0 || height <= 0) continue;
+        const source = mapRectToFrame(rect, picture, surface);
+        if (!source) continue;
         ctx.drawImage(
           frame,
-          rect.left * scaleX,
-          rect.top * scaleY,
-          width * scaleX,
-          height * scaleY,
+          source.sx,
+          source.sy,
+          source.sw,
+          source.sh,
           rect.left,
           rect.top,
-          width,
-          height,
+          rect.right - rect.left,
+          rect.bottom - rect.top,
         );
       }
     }
@@ -286,48 +273,8 @@ function reportStats(now: number) {
 /* The 5s stats window says nothing on an idle desktop, where a handful of
  * frames decide whether anything is ever drawn. This reports the first one
  * immediately, with the state that decided its fate. */
-function listNalTypes(bitstream: Uint8Array): number[] {
-  const types: number[] = [];
-  for (let i = 0; i + 3 < bitstream.length; i++) {
-    const start3 =
-      bitstream[i] === 0 && bitstream[i + 1] === 0 && bitstream[i + 2] === 1;
-    const start4 =
-      bitstream[i] === 0 &&
-      bitstream[i + 1] === 0 &&
-      bitstream[i + 2] === 0 &&
-      bitstream[i + 3] === 1;
-    if (!start3 && !start4) continue;
-    const at = i + (start4 ? 4 : 3);
-    if (at >= bitstream.length) break;
-    types.push(bitstream[at] & 0x1f);
-    i = at;
-  }
-  return types;
-}
-
-let loggedFirstFrame = false;
-let loggedSubmit = false;
 
 function decodeAvc(payload: ArrayBuffer) {
-  if (!loggedFirstFrame) {
-    loggedFirstFrame = true;
-    const probe = parseAvcFrame(new Uint8Array(payload));
-    console.log("[rdp-direct] first frame", {
-      bytes: payload.byteLength,
-      decoder: decoder ? decoder.state : "none",
-      parsed: !!probe,
-      bitstream: probe ? probe.bitstream.length : 0,
-      key: probe ? isKeyFrame(probe.bitstream) : false,
-      // Which NAL units the stream actually carries. A decoder cannot start
-      // without a sequence parameter set (7) and picture parameter set (8);
-      // an IDR (5) on its own is undecodable and some decoders drop it in
-      // silence rather than reporting an error.
-      nals: probe ? listNalTypes(probe.bitstream) : [],
-      rects: probe ? probe.rects.length : 0,
-      dest: probe ? probe.dest : null,
-    });
-  }
-
   const parsed = parseAvcFrame(new Uint8Array(payload));
   if (!parsed || parsed.bitstream.length === 0) {
     drops.unparsed++;
@@ -373,14 +320,6 @@ function decodeAvc(payload: ArrayBuffer) {
         data: parsed.bitstream,
       }),
     );
-    if (!loggedSubmit) {
-      loggedSubmit = true;
-      console.log("[rdp-direct] submitted to decoder", {
-        queue: decoder.decodeQueueSize,
-        state: decoder.state,
-      });
-    }
-
     /*
      * A Main-profile stream permits frame reordering, so the decoder may hold a
      * picture until the next one establishes display order. A remote desktop
@@ -422,7 +361,6 @@ function decodeAvc(payload: ArrayBuffer) {
     // Recoverable: the next key frame restarts the stream. Reporting it as a
     // session failure would close a session that is about to right itself.
     needsKeyFrame = true;
-    console.log("[rdp-direct] decode threw", String(error));
   }
 }
 
@@ -437,45 +375,9 @@ function ensureDecoder() {
   decoder = new VideoDecoder({
     output: paint,
     error: (error) => {
-      console.log("[rdp-direct] decoder error", String(error));
       post({ type: "error", message: String(error) });
     },
   });
-}
-
-/**
- * Builds the codec string from the stream's own sequence parameter set.
- *
- * A hardcoded profile is a guess about someone else's encoder, and a wrong one
- * fails in the worst possible way: Chrome accepts the configuration, then
- * accepts frames and emits neither a picture nor an error. The three bytes
- * after the SPS NAL header are exactly what the codec string encodes --
- * profile, constraint flags, level -- so they are read rather than assumed.
- */
-function codecFromSps(bitstream: Uint8Array): string | null {
-  for (let i = 0; i + 3 < bitstream.length; i++) {
-    const start3 =
-      bitstream[i] === 0 && bitstream[i + 1] === 0 && bitstream[i + 2] === 1;
-    const start4 =
-      bitstream[i] === 0 &&
-      bitstream[i + 1] === 0 &&
-      bitstream[i + 2] === 0 &&
-      bitstream[i + 3] === 1;
-    if (!start3 && !start4) continue;
-
-    const at = i + (start4 ? 4 : 3);
-    if (at + 3 >= bitstream.length) break;
-    if ((bitstream[at] & 0x1f) !== 7) {
-      i = at;
-      continue;
-    }
-
-    const hex = (value: number) => value.toString(16).padStart(2, "0");
-    return `avc1.${hex(bitstream[at + 1])}${hex(bitstream[at + 2])}${hex(
-      bitstream[at + 3],
-    )}`;
-  }
-  return null;
 }
 
 function configureFromStream(bitstream: Uint8Array): boolean {
@@ -503,10 +405,10 @@ function applyConfig(codec: string): boolean {
     });
     configured = true;
     needsKeyFrame = true;
-    console.log("[rdp-direct] decoder configured", {
-      codec,
-      acceleration: softwareFallbackUsed ? "prefer-software" : "default",
-    });
+    console.info(
+      `[rdp-direct] decoder configured: ${codec}` +
+        (softwareFallbackUsed ? " (software)" : ""),
+    );
     queueMicrotask(() => {
       if (lastKeyChunk) decodeAvc(lastKeyChunk.slice(0));
       flushPending();

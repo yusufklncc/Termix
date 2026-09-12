@@ -285,7 +285,8 @@ prototip ve ilk ölçümler (`docs/phase3-measurements.md`). Faz 3'ün ana sorus
       süreci (capset pazarlığı, AVC444, imleç) sessiz bir geri düşme olsaydı
       hiç fark edilmezdi. Kullanıcı hangi yolu istediğini host formunda zaten
       açıkça seçiyor.
-- [ ] Belgeleme: kurulum, gereksinimler, hangi host tipinde hangi yol
+- [x] Belgeleme: kurulum, gereksinimler, hangi host tipinde hangi yol
+      → [`docs/direct-rdp-setup.md`](docs/direct-rdp-setup.md)
 - [x] ~~Upstream PR hazırlığı~~ — **yapılmayacak, kullanıcı kararı.** Bu iş
       upstream'e sunulmayacak; çalışma bu depoda kalıyor.
 

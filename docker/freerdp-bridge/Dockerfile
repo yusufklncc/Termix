@@ -50,14 +50,14 @@ RUN cmake -GNinja -S FreeRDP -B build \
 
 COPY bridge.c /src/bridge/bridge.c
 RUN gcc -O2 -Wall -Wextra -o /usr/local/bin/termix-rdp-bridge /src/bridge/bridge.c \
-      $(pkg-config --cflags --libs freerdp3 freerdp-client3 winpr3) -lpthread -lz
+      $(pkg-config --cflags --libs freerdp3 freerdp-client3 winpr3) -lpthread -lz -lwebp
 
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libssl3t64 libavcodec60 libavutil58 libswscale7 libcjson1 libkrb5-3 \
-      libgsm1 zlib1g ca-certificates libusb-1.0-0 libasound2t64 \
+      libgsm1 zlib1g libwebp7 ca-certificates libusb-1.0-0 libasound2t64 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --no-create-home --shell /usr/sbin/nologin termix
 

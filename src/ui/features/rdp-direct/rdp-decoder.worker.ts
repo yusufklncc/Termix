@@ -25,7 +25,7 @@ type InboundMessage =
   | { type: "resize"; width: number; height: number }
   | { type: "avc"; payload: ArrayBuffer }
   | { type: "rect"; payload: ArrayBuffer }
-  | { type: "rectz"; payload: ArrayBuffer }
+  | { type: "rectw"; payload: ArrayBuffer }
   | { type: "close" };
 
 type OutboundMessage =
@@ -259,10 +259,10 @@ function paint(frame: VideoFrame) {
 /*
  * Painted regions, in the order the bridge sent them.
  *
- * Inflating is asynchronous, so a compressed region cannot simply be painted
- * where it arrives -- a later small update could overtake an earlier large one
- * and leave the older pixels on top. Chaining keeps them in order, and an
- * uncompressed region joins the same chain rather than jumping it.
+ * Decoding an image is asynchronous, so an encoded region cannot simply be
+ * painted where it arrives -- a later small update could overtake an earlier
+ * large one and leave the older pixels on top. Chaining keeps them in order,
+ * and a raw region joins the same chain rather than jumping it.
  *
  * Ordering against video frames is not a concern: the two never cover the same
  * pixels. What the server encodes never reaches the bridge's own surface, so
@@ -279,42 +279,42 @@ function enqueueRegion(payload: ArrayBuffer, deflated: boolean) {
     });
 }
 
-async function paintRegion(payload: ArrayBuffer, deflated: boolean) {
+async function paintRegion(payload: ArrayBuffer, encoded: boolean) {
   if (!ctx) return;
 
   const header = parseRectHeader(
     new DataView(payload),
     payload.byteLength,
-    deflated,
+    encoded,
   );
   if (!header) return;
   const { left, top, width, height } = header;
 
-  let pixels: Uint8ClampedArray;
-  if (deflated) {
-    const stream = new Blob([payload.slice(RECT_HEADER_BYTES)])
-      .stream()
-      .pipeThrough(new DecompressionStream("deflate"));
-    const inflated = await new Response(stream).arrayBuffer();
-    if (inflated.byteLength < width * height * BYTES_PER_PIXEL) return;
-    pixels = new Uint8ClampedArray(
-      inflated,
-      0,
-      width * height * BYTES_PER_PIXEL,
+  if (encoded) {
+    /*
+     * The browser decodes it, not this worker.
+     *
+     * That is the whole reason the bridge sends WebP rather than something it
+     * would have to unpack here. createImageBitmap runs off this thread and
+     * costs no JavaScript per pixel -- and per-pixel JavaScript on a
+     * full-screen region is what stopped the tab answering once already.
+     */
+    const bitmap = await createImageBitmap(
+      new Blob([payload.slice(RECT_HEADER_BYTES)], { type: "image/webp" }),
     );
+    ctx.drawImage(bitmap, left, top);
+    bitmap.close();
   } else {
-    // The bridge sends RGBA, which is what an ImageData holds, so the pixels
-    // are wrapped rather than copied. Swapping channels here instead was four
-    // million writes for a full-screen update, in the same worker that then
-    // has to paint it -- enough to stop answering altogether.
-    pixels = new Uint8ClampedArray(
+    // The raw fallback is RGBA, which is what an ImageData holds, so the
+    // pixels are wrapped rather than copied.
+    const pixels = new Uint8ClampedArray(
       payload,
       RECT_HEADER_BYTES,
       width * height * BYTES_PER_PIXEL,
     );
+    ctx.putImageData(new ImageData(pixels, width, height), left, top);
   }
 
-  ctx.putImageData(new ImageData(pixels, width, height), left, top);
   decodedCount++;
 }
 
@@ -528,8 +528,8 @@ self.onmessage = async (event: MessageEvent<InboundMessage>) => {
      * state.
      */
     case "rect":
-    case "rectz": {
-      enqueueRegion(message.payload, message.type === "rectz");
+    case "rectw": {
+      enqueueRegion(message.payload, message.type === "rectw");
       break;
     }
 

@@ -435,14 +435,14 @@ export function connectRdpDirect({
         }
 
         case "RECT":
-        case "RECZ": {
+        case "RECW": {
           const buffer = frame.payload.buffer.slice(
             frame.payload.byteOffset,
             frame.payload.byteOffset + frame.payload.length,
           );
           worker.postMessage(
             {
-              type: frame.magic === "RECZ" ? "rectz" : "rect",
+              type: frame.magic === "RECW" ? "rectw" : "rect",
               payload: buffer,
             },
             [buffer],

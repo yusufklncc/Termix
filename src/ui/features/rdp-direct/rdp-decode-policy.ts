@@ -174,15 +174,15 @@ export function nextDecoderStage(stage: DecoderStage): DecoderStage {
 /**
  * The geometry at the head of a painted region, or null if it cannot be one.
  *
- * The pixels that follow may be deflated, so the length of the message says
- * nothing about whether the region is whole -- only the uncompressed case can
- * be checked here, and it is, because a short buffer would otherwise reach
+ * The pixels that follow may be an encoded image, so the length of the message
+ * says nothing about whether the region is whole -- only the raw case can be
+ * checked here, and it is, because a short buffer would otherwise reach
  * ImageData as a range error mid-paint.
  */
 export function parseRectHeader(
   view: DataView,
   byteLength: number,
-  deflated: boolean,
+  encoded: boolean,
 ): { left: number; top: number; width: number; height: number } | null {
   if (byteLength < RECT_HEADER_BYTES) return null;
 
@@ -193,7 +193,7 @@ export function parseRectHeader(
   if (width === 0 || height === 0) return null;
 
   if (
-    !deflated &&
+    !encoded &&
     byteLength < RECT_HEADER_BYTES + width * height * BYTES_PER_PIXEL
   ) {
     return null;

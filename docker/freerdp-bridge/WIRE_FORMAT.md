@@ -148,20 +148,34 @@ u16 width, u16 height
 RGBA piksel verisi   (width * height * 4 bayt)
 ```
 
-## `RECZ` — deflate'lenmiş `RECT`
+## `RECW` — WebP'ye encode edilmiş `RECT`
 
-Başlık `RECT` ile birebir aynı; farkı, başlığın ardındaki baytların zlib
-akışı olması. Açıldığında tam olarak `RECT` payload'ının piksel kısmını verir.
+Başlık `RECT` ile birebir aynı; farkı, başlığın ardındaki baytların bir WebP
+dosyası olması. Tarayıcı onu `createImageBitmap` ile kendi çözüyor — bu yolun
+tamamında piksel başına tek bir JavaScript işi kalmıyor, çözme de worker
+thread'inin dışında oluyor.
 
-Ekran pikselleri bu hattaki en tekrarlı veri: düz pencere çerçevesi, tekrar
-eden metin kenar yumuşatması, binlerce piksel boyunca tek renk bir arka plan.
-Köprü level 1 ile sıkıştırıyor — amaç oranın çoğunu çok az CPU ile almak,
-üstelik aynı süreç masaüstünü de decode ediyor.
+Format seçimi ölçümle yapıldı. Gerçek bir oturumun bir dakikası, 993 MB bölge:
 
-Sıkışmayan bir bölge — bir fotoğraf, sunucunun encode etmemeye karar verdiği
-bir video karesi — deflate başlığına para ödemek yerine `RECT` olarak ham
-gidiyor. Yani iki magic'i de beklemek gerekiyor; hangisinin geleceği bölgenin
-içeriğine bağlı.
+| Yöntem            | Oran | Süre (bölge başına) |
+| ----------------- | ---- | ------------------- |
+| deflate level 1   | 2.5x | 0.75 ms             |
+| deflate level 6   | 2.7x | 2.06 ms             |
+| PNG               | 3.2x | 4.32 ms             |
+| WebP lossless m=0 | 4.3x | 0.63 ms             |
+
+WebP lossless bir takas değil: hepsinden iyi sıkıştırıyor ve yerini aldığı
+deflate'ten daha ucuz. Sebebi, kestiricilerinin resim için tasarlanmış olması;
+deflate ise metin olmayan bir veride tekrar eden bayt dizileri arıyor.
+
+Burada oran değil kayıpsızlık belirleyici. Aynı ölçüm lossy q=75'i 23.7x
+veriyor — ta ki bu yolun büyük kısmının metin olduğunu hatırlayana kadar.
+Kenarları yumuşatılmış glif'leri lossy encode etmek, bir uzak masaüstünü uzak
+masaüstü gibi gösteren şeyin ta kendisi. Bu takasa değecek hatlar için
+`BRIDGE_RECT_QUALITY` ile açılabiliyor.
+
+WebP'nin reddettiği bölge, ham olarak `RECT` ile gidiyor. Yani iki magic'i de
+beklemek gerekiyor.
 
 Kanal sırası `CURS`'ten farklı ve bilerek öyle: `RECT` doğrudan bir `ImageData`
 olarak sarılıyor, kopyalanmadan. Kanalları tarayıcıda çevirmek tam ekran bir

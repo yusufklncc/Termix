@@ -101,6 +101,10 @@ typedef struct
 	 * mixes codecs freely -- knowing the mix is what says whether the
 	 * passthrough is carrying the session or only a corner of it. */
 	UINT32 codecCounts[16];
+	/* What each codec's own bitstream weighs before this side decodes it. A
+	 * client that could decode these itself would pay this instead of the
+	 * pixels, so it is the ceiling on what moving the decode is worth. */
+	UINT64 codecBytes[16];
 	UINT32 codecOther;
 	/* AVC444 updates that carried only chroma, so had no picture to forward. */
 	UINT32 chromaOnlySkipped;
@@ -280,15 +284,16 @@ static const char* codec_name(UINT16 codecId)
  * that is busy in the wrong codec looks identical from a frame counter alone. */
 static void log_codec_mix(termixContext* ctx)
 {
-	char line[256];
+	char line[384];
 	size_t used = 0;
 
 	for (UINT16 id = 0; id < ARRAYSIZE(ctx->codecCounts); id++)
 	{
 		if (ctx->codecCounts[id] == 0 || used >= sizeof(line))
 			continue;
-		const int n = snprintf(line + used, sizeof(line) - used, "%s%s=%u", used ? " " : "",
-		                       codec_name(id), ctx->codecCounts[id]);
+		const int n = snprintf(line + used, sizeof(line) - used, "%s%s=%u/%lluKB",
+		                       used ? " " : "", codec_name(id), ctx->codecCounts[id],
+		                       (unsigned long long)(ctx->codecBytes[id] / 1024u));
 		if (n < 0)
 			break;
 		used += (size_t)n;
@@ -877,6 +882,7 @@ static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COM
 
 	if (cmd->codecId < ARRAYSIZE(ctx->codecCounts))
 	{
+		ctx->codecBytes[cmd->codecId] += cmd->length;
 		if (ctx->codecCounts[cmd->codecId]++ == 0)
 		{
 			fprintf(stderr, "[%s] first %s surface command: %ux%u\n", TAG,

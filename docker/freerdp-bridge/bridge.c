@@ -151,6 +151,8 @@ typedef struct
 	UINT32 rectQuality;
 	/* Set to keep every region lossless, whatever it holds. */
 	BOOL losslessOnly;
+	/* Whether this session's host asked for a printer. */
+	BOOL wantPrinter;
 	UINT32 rectsLossy;
 
 	/* Clipboard. `outgoing` is what the browser last copied, held until the
@@ -1694,7 +1696,8 @@ static BOOL tx_pre_connect(freerdp* instance)
 	 *
 	 * "termix" resolves to libprinter-client-termix.so, which announces one
 	 * printer under the name of a PostScript driver and hands the job here
-	 * instead of to a queue. BRIDGE_PRINTER=1 asks for it.
+	 * instead of to a queue. The host asks for it; BRIDGE_PRINTER forces it on
+	 * or off for the whole bridge.
 	 */
 	/*
 	 * Somewhere writable to keep per-printer settings.
@@ -1709,7 +1712,11 @@ static BOOL tx_pre_connect(freerdp* instance)
 	if (!freerdp_settings_set_string(settings, FreeRDP_ConfigPath, "/tmp/termix-freerdp"))
 		return FALSE;
 
+	/* The host's choice, unless the deployment has overridden it either way. */
 	const char* printerEnv = getenv("BRIDGE_PRINTER");
+	const BOOL wantPrinter = printerEnv && printerEnv[0]
+	                             ? printerEnv[0] == '1'
+	                             : (g_session && g_session->wantPrinter);
 	/* Asking for a printer whose driver is missing does not fail the printer --
 	 * it fails rdpdr, which takes the whole connection with it. Checking first
 	 * turns a build that shipped without the plugin into a session with no
@@ -1731,7 +1738,7 @@ static BOOL tx_pre_connect(freerdp* instance)
 	 * against more than one Windows build, that risk belongs behind a switch
 	 * rather than in front of every session.
 	 */
-	if (printerAvailable && printerEnv && printerEnv[0] == '1')
+	if (printerAvailable && wantPrinter)
 	{
 		/* Name, then driver. The backend is the half after the colon, which the
 		 * channel strips before telling Windows what driver it is talking to --
@@ -2364,6 +2371,12 @@ static int run_session(int sock, const char* json)
 	                            sanitize_dimension(json_number(json, "height", 1080), 1080));
 
 	const BOOL ignoreCert = json_bool(json, "ignoreCert", TRUE);
+
+	/* Which host wants a printer is a property of the host, not of the
+	 * container. BRIDGE_PRINTER is still honoured as a deployment-wide
+	 * override, because a bridge that has to be taken out of the printing
+	 * business should not require every host to be edited. */
+	ctx->wantPrinter = json_bool(json, "printer", FALSE);
 	freerdp_settings_set_bool(settings, FreeRDP_IgnoreCertificate, ignoreCert);
 	freerdp_settings_set_bool(settings, FreeRDP_AutoAcceptCertificate, ignoreCert);
 

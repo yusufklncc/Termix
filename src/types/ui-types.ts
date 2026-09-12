@@ -164,6 +164,7 @@ export type Host = {
   telnetPort: number;
 
   rdpRenderEngine?: "guacamole" | "direct";
+  rdpEnablePrinting?: boolean;
   rdpAuthType?: "direct" | "credential" | "none";
   rdpCredentialId?: string;
   rdpUser?: string;

@@ -83,6 +83,21 @@ export function HostEditorRdpTab({
               ? t("hosts.guac.engineDirectDesc")
               : t("hosts.guac.engineGuacamoleDesc")}
           </p>
+
+          {/* Only under the direct renderer, because it is the only path that
+              has a printer to offer -- guacd's redirection is its own setting
+              further down and works differently. */}
+          {form.rdpRenderEngine === "direct" && (
+            <SettingRow
+              label={t("hosts.guac.directPrinting")}
+              description={t("hosts.guac.directPrintingDesc")}
+            >
+              <FakeSwitch
+                checked={form.rdpEnablePrinting}
+                onChange={(v) => setField("rdpEnablePrinting", v)}
+              />
+            </SettingRow>
+          )}
         </div>
       </SectionCard>
 

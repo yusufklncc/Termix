@@ -1499,7 +1499,9 @@
       "engineGuacamole": "Guacamole",
       "engineDirect": "Direct H.264",
       "engineGuacamoleDesc": "The compatible path: guacd handles the session and every setting below applies.",
-      "engineDirectDesc": "Experimental. H.264 is passed straight from FreeRDP to the browser with no server-side decoding, which needs the RDP bridge sidecar. Connection, authentication and display size apply; drive redirection, the RDP performance flags and session sharing do not. Text clipboard, audio, printing to PDF and session recording work."
+      "engineDirectDesc": "Experimental. H.264 is passed straight from FreeRDP to the browser with no server-side decoding, which needs the RDP bridge sidecar. Connection, authentication and display size apply; drive redirection, the RDP performance flags and session sharing do not. Text clipboard, audio, printing to PDF and session recording work.",
+      "directPrinting": "Printing",
+      "directPrintingDesc": "Offer the remote desktop a printer. What it prints comes back as a PDF to save. Off by default: printing shares a channel with device redirection, so a host that refuses the printer refuses the whole session."
     },
     "stream": {
       "connection": "Stream Connection",

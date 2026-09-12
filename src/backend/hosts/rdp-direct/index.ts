@@ -199,6 +199,10 @@ wss.on("connection", async (ws: WebSocket, req) => {
       width,
       height,
       ignoreCert: record.rdpIgnoreCert !== false,
+      /* Per host, because the cost of getting it wrong is the whole session:
+       * printing rides on device redirection, and a host that refuses the
+       * printer refuses to connect at all. */
+      printer: record.rdpEnablePrinting === true,
     };
 
     const { host: bridgeHost, port: bridgePort } = await resolveBridge();

@@ -1,0 +1,1 @@
+ALTER TABLE `ssh_data` ADD `rdp_enable_printing` integer DEFAULT false;

@@ -180,7 +180,12 @@ sondan başa yazılıyor, yani iş bitmeden gönderilecek bir şey yok. ghostscr
 ayrı bir süreç olarak çalıştırılıyor — kendi lisansı olan büyük bir program ve
 oradaki bir çökme oturuma değil yalnızca o yazdırma işine mal olmalı.
 
-Yazdırma `BRIDGE_PRINTER=1` ile açılıyor, varsayılan kapalı. Bu çekingenlik
+Yazdırmayı host açıyor — host editöründe **RDP → Render Engine → Printing**,
+yalnızca Direct H.264 seçiliyken görünür. `CONN` isteğindeki `printer` alanı
+onu taşıyor. `BRIDGE_PRINTER` hâlâ geçerli ama artık bir ezme: bütün köprüyü
+yazdırma işinden çıkarmak, her host'u tek tek düzenlemeyi gerektirmesin diye.
+
+Varsayılan kapalı. Bu çekingenlik
 değil: yazdırma `rdpdr` üzerinden gidiyor ve rdpdr bir oturum için isteğe bağlı
 değil. Cihazı yüklenemezse FreeRDP post-connect'te düşüyor ve **tüm bağlantı**
 onunla gidiyor — yani çalışmayan bir yazıcının bedeli yazıcı değil, kimsenin

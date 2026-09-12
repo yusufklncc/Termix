@@ -1574,6 +1574,7 @@ const migrateSchema = () => {
     { column: "stream_mode", sql: "ALTER TABLE ssh_data ADD COLUMN stream_mode TEXT" },
     { column: "stream_publisher", sql: "ALTER TABLE ssh_data ADD COLUMN stream_publisher TEXT" },
     { column: "rdp_render_engine", sql: "ALTER TABLE ssh_data ADD COLUMN rdp_render_engine TEXT" },
+    { column: "rdp_enable_printing", sql: "ALTER TABLE ssh_data ADD COLUMN rdp_enable_printing INTEGER DEFAULT 0" },
   ];
 
   for (const migration of sshDataMigrations) {

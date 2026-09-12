@@ -226,6 +226,7 @@ router.post(
       vncPort,
       telnetPort,
       rdpRenderEngine,
+      rdpEnablePrinting,
       rdpAuthType,
       rdpCredentialId,
       rdpUser,
@@ -374,6 +375,7 @@ router.post(
       vncPort: vncPort || 5900,
       telnetPort: telnetPort || 23,
       rdpRenderEngine: enableRdp ? rdpRenderEngine || "guacamole" : null,
+      rdpEnablePrinting: enableRdp ? !!rdpEnablePrinting : false,
       rdpAuthType: enableRdp ? rdpAuthType || null : null,
       rdpCredentialId:
         enableRdp && rdpAuthType === "credential" && rdpCredentialId
@@ -903,6 +905,7 @@ router.put(
       vncPort,
       telnetPort,
       rdpRenderEngine,
+      rdpEnablePrinting,
       rdpAuthType,
       rdpCredentialId,
       rdpUser,
@@ -1048,6 +1051,7 @@ router.put(
       vncPort: vncPort || 5900,
       telnetPort: telnetPort || 23,
       rdpRenderEngine: enableRdp ? rdpRenderEngine || "guacamole" : null,
+      rdpEnablePrinting: enableRdp ? !!rdpEnablePrinting : false,
       rdpAuthType: enableRdp ? rdpAuthType || null : null,
       rdpCredentialId:
         enableRdp && rdpAuthType === "credential" && rdpCredentialId

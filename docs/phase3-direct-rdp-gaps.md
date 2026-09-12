@@ -211,3 +211,39 @@ Yukarıdakiler ışığında, "çalışan prototip" için en dar ve en dürüst 
   bağlanmadı — mevcut davranışı değiştirmemek için bilinçli olarak.
 
 Bu kapsam COOP/COEP gerektirmez, dolayısıyla Faz 1'i bozmaz.
+
+---
+
+## İkinci hedefin öğrettikleri
+
+Faz 3 tek bir Windows makinesinde "çalışıyor" durumuna geldi. İkinci bir makine
+(farklı üretici, farklı GPU) **altı ayrı varsayımı** birden açığa çıkardı. Hepsi
+ilk hedefte sessizce doğru çıkmıştı; hiçbiri test edilmiş değildi.
+
+| Varsayım                                        | Neden ilk hedefte görünmedi                                                             |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Codec dizesi Baseline'dır (`avc1.42E01E` sabit) | O encoder toleranslıydı; ikincisi Main üretiyor                                         |
+| Yapılandırma öncesi gelen kare atılabilir       | Akış sürekliydi, IDR kısa sürede tekrar geliyordu                                       |
+| Decoder resmi hemen verir                       | Main profile yeniden sıralamaya izin veriyor; boş masaüstünde sonraki kare hiç gelmiyor |
+| `flush()` zararsızdır                           | Flush hiç gerekmemişti; sonrasında anahtar kare şart oluyor                             |
+| Kodlanan boyut = yüzey boyutu                   | İkisi denk gelmişti                                                                     |
+| Decoder başarısızlığı hata verir                | Donanım decoder kareleri kabul edip uydurduğu boyutta boş resim üretiyor, hata vermiyor |
+
+Sonuncusu en sinsisi: bitstream `ffmpeg` ile kusursuz çözülüyordu (56 kare,
+1152x1136, Main) ama tarayıcı 1280x720 raporlayıp yeşil boyuyordu. Bunu ancak
+bitstream'i dosyaya döküp kendini açıklayan bir decoder'a sorarak anladık —
+`BRIDGE_DUMP_AVC` o yüzden duruyor.
+
+### Buradan çıkan kalıcı değişiklikler
+
+- Codec dizesi akışın SPS'inden okunuyor, sabit değil
+- Anahtar kare saklanıyor; decoder her yeniden kurulduğunda ona veriliyor
+- Kare boyutu yüzeyle karşılaştırılıyor; uyuşmazsa decoder değiştiriliyor
+- Donanım → yazılım → köprüde decode sırası, her adım ölçülmüş başarısızlıktan sonra
+- Bu kararların hepsi `rdp-decode-policy.ts`'te ve testli
+
+### Okunuşu
+
+**"Çalışıyor" ifadesi, kaç farklı hedefte çalıştığıyla birlikte anlamlı.** Üçüncü
+bir makine muhtemelen yeni varsayımlar çıkaracaktır — özellikle farklı bir GPU
+üreticisi veya Windows Server sürümü.

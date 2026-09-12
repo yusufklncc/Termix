@@ -148,6 +148,32 @@ u16 width, u16 height
 RGBA piksel verisi   (width * height * 4 bayt)
 ```
 
+## `SNDA` — uzak ses
+
+```
+u32 sampleRate
+u16 channels
+u16 bitsPerSample     (her zaman 16)
+PCM verisi            (imzalı little-endian)
+```
+
+Format her parçanın önünde. Sekiz bayta mal oluyor, karşılığında iki şey
+veriyor: kaçırılabilecek ayrı bir duyuru olmadan kendini yapılandırabilen bir
+tarayıcı, ve yıllar sonra hâlâ sesini nasıl çalacağını bilen bir kayıt.
+
+FreeRDP uzak sesi bir cihaz eklentisiyle veriyor — alsa, pulse, oss — ve
+hepsi bir ses kartı açıyor. Köprünün ses kartı yok ve olmasını da istemiyoruz:
+ses birkaç sıçrama ötedeki tarayıcıya ait. O yüzden
+`librdpsnd-client-termix.so` bir cihazın yaptığı her şeyi yapıyor, son adım
+hariç — örnekleri donanıma değil köprüye veriyor.
+
+Yalnızca 16 bit lineer PCM kabul ediliyor. FreeRDP'nin DSP'si ffmpeg ile
+derlendiği için sunucunun AAC veya ADPCM önerdiği durumda dönüşüm zaten
+girişte yapılıyor; sıkıştırılmış formatı anlıyormuş gibi yapmak, tarayıcıya
+hiç haberdar edilmediği bir formatı çözdürmek olurdu.
+
+`BRIDGE_AUDIO=0` kanalı hiç istemez.
+
 ## `RECW` — WebP'ye encode edilmiş `RECT`
 
 Başlık `RECT` ile birebir aynı; farkı, başlığın ardındaki baytların bir WebP

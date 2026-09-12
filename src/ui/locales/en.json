@@ -1499,7 +1499,7 @@
       "engineGuacamole": "Guacamole",
       "engineDirect": "Direct H.264",
       "engineGuacamoleDesc": "The compatible path: guacd handles the session and every setting below applies.",
-      "engineDirectDesc": "Experimental. H.264 is passed straight from FreeRDP to the browser with no server-side decoding, which needs the RDP bridge sidecar. Connection, authentication and display size apply; audio, device redirection, RDP performance flags, session recording and session sharing do not. Text clipboard works."
+      "engineDirectDesc": "Experimental. H.264 is passed straight from FreeRDP to the browser with no server-side decoding, which needs the RDP bridge sidecar. Connection, authentication and display size apply; device redirection, the RDP performance flags and session sharing do not. Text clipboard, audio and session recording work."
     },
     "stream": {
       "connection": "Stream Connection",

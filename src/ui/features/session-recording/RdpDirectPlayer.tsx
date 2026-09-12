@@ -83,6 +83,7 @@ export function RdpDirectPlayer({ blob }: { blob: Blob }) {
     rendererRef.current = createRdpRenderer({ worker, surface });
 
     return () => {
+      rendererRef.current?.close();
       worker.postMessage({ type: "close" });
       worker.terminate();
       canvas.remove();
@@ -188,7 +189,12 @@ export function RdpDirectPlayer({ blob }: { blob: Blob }) {
       <div className="flex items-center gap-3">
         <button
           type="button"
-          onClick={() => setPlaying((was) => !was)}
+          onClick={() => {
+            // Pressing play is the interaction a browser wants before it will
+            // let a page make sound.
+            rendererRef.current?.resumeAudio();
+            setPlaying((was) => !was);
+          }}
           disabled={!records}
           className="size-7 flex items-center justify-center border border-border text-foreground disabled:opacity-40"
           aria-label={t(playing ? "common.pause" : "common.play")}

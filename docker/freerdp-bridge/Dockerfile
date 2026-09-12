@@ -48,8 +48,21 @@ RUN cmake -GNinja -S FreeRDP -B build \
     && cmake --build build --parallel \
     && cmake --install build
 
+# The audio device FreeRDP dlopens by name. Remote sound has to reach a
+# browser rather than a sound card, and a device plugin is the supported place
+# to intercept it -- the static addins built into the library are tried first
+# and this is the fallback the loader reaches for "termix".
+COPY rdpsnd_termix.c /src/bridge/rdpsnd_termix.c
+RUN mkdir -p /usr/local/lib/freerdp3 \
+    && gcc -O2 -Wall -Wextra -fPIC -shared \
+      -o /usr/local/lib/freerdp3/librdpsnd-client-termix.so /src/bridge/rdpsnd_termix.c \
+      $(pkg-config --cflags freerdp3 winpr3)
+
 COPY bridge.c /src/bridge/bridge.c
-RUN gcc -O2 -Wall -Wextra -o /usr/local/bin/termix-rdp-bridge /src/bridge/bridge.c \
+# -rdynamic so the device above can resolve termix_audio_sink back into this
+# binary: the plugin is dlopened into this process and the samples go up, not
+# out.
+RUN gcc -O2 -Wall -Wextra -rdynamic -o /usr/local/bin/termix-rdp-bridge /src/bridge/bridge.c \
       $(pkg-config --cflags --libs freerdp3 freerdp-client3 winpr3) -lpthread -lz -lwebp
 
 FROM ubuntu:24.04

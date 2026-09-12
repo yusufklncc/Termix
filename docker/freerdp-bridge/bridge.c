@@ -31,6 +31,7 @@
 #include <freerdp/freerdp.h>
 #include <freerdp/client.h>
 #include <freerdp/client/channels.h>
+#include <freerdp/client/cmdline.h>
 #include <freerdp/client/rdpgfx.h>
 #include <freerdp/gdi/gdi.h>
 #include <freerdp/gdi/gfx.h>
@@ -121,6 +122,7 @@ typedef struct
 	UINT64 avcBytes;
 	UINT64 rectBytesRaw;
 	UINT64 rectBytesSent;
+	UINT64 audioBytes;
 
 	/* What the fallback still owes the viewer, and when it last paid. */
 	pendingSurface pending[MAX_TRACKED_SURFACES];
@@ -308,6 +310,9 @@ static void log_codec_mix(termixContext* ctx)
 	        ctx->pointerEvents, ctx->inputRejected);
 	/* What each path costs. The ratio is the whole argument for compressing
 	 * the pixel path, so it is measured rather than assumed. */
+	if (ctx->audioBytes)
+		fprintf(stderr, "[%s] audio: %lluKB\n", TAG,
+		        (unsigned long long)(ctx->audioBytes / 1024u));
 	fprintf(stderr, "[%s] regions: %u lossless, %u as pictures\n", TAG,
 	        ctx->rectsSent - ctx->rectsLossy, ctx->rectsLossy);
 	fprintf(stderr, "[%s] wire: avc=%lluKB rects=%lluKB (raw %lluKB, %.1fx)\n", TAG,
@@ -634,6 +639,56 @@ static BOOL region_is_picture(const BYTE* rgba, UINT32 width, UINT32 height)
 	}
 
 	return sampled > 0 && distinct * 100u > sampled * PHOTO_DISTINCT_PERCENT;
+}
+
+/*
+ * Remote audio, on its way to the browser.
+ *
+ * Called from FreeRDP's rdpsnd device -- see rdpsnd_termix.c, which is
+ * dlopened into this process precisely so that these samples arrive here
+ * instead of at a sound card this container does not have.
+ *
+ * Each chunk carries its own format. It costs eight bytes against a payload
+ * measured in kilobytes, and it buys two things: a browser that can configure
+ * itself without a separate announcement to miss, and a recording that still
+ * knows how to play its audio years later.
+ */
+void termix_audio_sink(const void* pcm, size_t bytes, unsigned rate, unsigned channels,
+                       unsigned bits)
+{
+	termixContext* ctx = g_session;
+	if (!ctx || !pcm || bytes == 0 || bytes > MAX_FRAME_PAYLOAD - 8)
+		return;
+
+	/* A format the browser cannot make sense of is worse than silence: it would
+	 * play noise at the wrong rate. The device only ever accepts 16 bit PCM, so
+	 * this is a guard against a path that should not exist rather than a case
+	 * that is expected. */
+	if (bits != 16 || rate == 0 || channels == 0 || channels > 2)
+	{
+		static BOOL warned = FALSE;
+		if (!warned)
+		{
+			warned = TRUE;
+			fprintf(stderr, "[%s] dropping audio in an unexpected format: %u Hz %u ch %u bit\n", TAG,
+			        rate, channels, bits);
+			fflush(stderr);
+		}
+		return;
+	}
+
+	BYTE header[8];
+	put_u32(header, (UINT32)rate);
+	put_u16(header + 4, (UINT16)channels);
+	put_u16(header + 6, (UINT16)bits);
+
+	if (ctx->audioBytes == 0)
+	{
+		fprintf(stderr, "[%s] first audio: %u Hz, %u channels, %u bit\n", TAG, rate, channels, bits);
+		fflush(stderr);
+	}
+	ctx->audioBytes += bytes;
+	wire_send_parts(ctx, "SNDA", header, sizeof(header), pcm, bytes);
 }
 
 static UINT send_surface_rect(termixContext* ctx, RdpgfxClientContext* gfx, UINT16 surfaceId,
@@ -1318,6 +1373,31 @@ static BOOL tx_pre_connect(freerdp* instance)
 	 * which is a separate feature rather than a larger buffer. */
 	if (!freerdp_settings_set_bool(settings, FreeRDP_RedirectClipboard, TRUE))
 		return FALSE;
+
+	/*
+	 * Remote audio, through a device that plays nowhere.
+	 *
+	 * "termix" is the subsystem name FreeRDP resolves to
+	 * librdpsnd-client-termix.so, which forwards the samples to this process
+	 * instead of to a sound card. BRIDGE_AUDIO=0 leaves the channel unasked for.
+	 *
+	 * DeviceRedirection has to be on for rdpsnd to register at all -- the sound
+	 * channel rides on rdpdr's announcement even though no device is redirected.
+	 */
+	const char* audioEnv = getenv("BRIDGE_AUDIO");
+	if (!(audioEnv && audioEnv[0] == '0'))
+	{
+		const char* args[] = { "rdpsnd", "sys:termix" };
+		if (!freerdp_client_add_static_channel(settings, ARRAYSIZE(args), args) ||
+		    !freerdp_settings_set_bool(settings, FreeRDP_DeviceRedirection, TRUE) ||
+		    !freerdp_settings_set_bool(settings, FreeRDP_AudioPlayback, TRUE))
+		{
+			/* Not fatal. A session without sound is a session; refusing to connect
+			 * because of it would trade the whole desktop for the audio. */
+			fprintf(stderr, "[%s] could not enable audio; continuing without it\n", TAG);
+			fflush(stderr);
+		}
+	}
 
 	/* There is no client-side bitrate or frame rate knob in RDP: the server's
 	 * encoder decides, which is the whole point of a pass-through. What the

@@ -1,10 +1,13 @@
 import { readHelo, type RdpFrame } from "./rdp-wire.ts";
+import { createRdpAudio, type RdpAudio } from "./rdp-audio.ts";
 
 /**
  * The half of the session that is only pictures.
  *
  * A live session is this plus input, acknowledgements and a clipboard; a
- * recording is only this. Keeping the visual frames in one place is what stops
+ * recording is only this -- which is also why sound belongs here rather than
+ * beside it. Audio is output, so a recording that plays back through this
+ * renderer has its sound for free. Keeping the visual frames in one place is what stops
  * the two drifting -- a new kind of frame added for the live path would
  * otherwise be silently ignored on playback, and the bug would look like a
  * recording that renders differently from the session it recorded.
@@ -16,8 +19,11 @@ export interface RdpRenderSurface {
 }
 
 export interface RdpRenderer {
-  /** Handles a frame if it is a visual one. Returns whether it did. */
+  /** Handles a frame if it is one of the session's output. Returns whether. */
   handle(frame: RdpFrame): boolean;
+  /** Browsers refuse to start audio without a gesture; this is the gesture. */
+  resumeAudio(): void;
+  close(): void;
 }
 
 export function createRdpRenderer({
@@ -29,6 +35,10 @@ export function createRdpRenderer({
   surface: RdpRenderSurface;
   onResize?: (width: number, height: number) => void;
 }): RdpRenderer {
+  // Opened on the first chunk that arrives, so a session without sound never
+  // builds an audio graph and never asks the browser for permission to.
+  let audio: RdpAudio | null = null;
+
   // Reused across cursor updates: a cursor arrives many times a second while
   // moving over different shapes, and a canvas per update is a canvas per
   // update to garbage collect.
@@ -120,9 +130,34 @@ export function createRdpRenderer({
           surface.style.cursor = "default";
           return true;
 
+        case "SNDA": {
+          // Rate, channels and bits ride in front of every chunk, so nothing
+          // here depends on having seen an announcement.
+          if (frame.payload.length < 8) return true;
+          const view = new DataView(
+            frame.payload.buffer,
+            frame.payload.byteOffset,
+            frame.payload.length,
+          );
+          const rate = view.getUint32(0, true);
+          const channels = view.getUint16(4, true);
+          audio ??= createRdpAudio();
+          audio.push(frame.payload.subarray(8), rate, channels);
+          return true;
+        }
+
         default:
           return false;
       }
+    },
+
+    resumeAudio() {
+      audio?.resume();
+    },
+
+    close() {
+      audio?.close();
+      audio = null;
     },
   };
 }

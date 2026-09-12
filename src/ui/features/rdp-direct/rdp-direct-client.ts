@@ -137,6 +137,13 @@ export function connectRdpDirect({
 
   const renderer = createRdpRenderer({ worker, surface, onResize });
 
+  // A browser will not start audio until the page has been interacted with.
+  // The click that focuses the session is that interaction, so the first one
+  // is what lets the sound through.
+  const resumeAudio = () => renderer.resumeAudio();
+  surface.addEventListener("pointerdown", resumeAudio);
+  surface.addEventListener("keydown", resumeAudio);
+
   worker.onmessage = (event: MessageEvent) => {
     if (event.data?.type === "error") onState("failed", event.data.message);
     else if (event.data?.type === "decoder-unusable") {
@@ -422,6 +429,9 @@ export function connectRdpDirect({
       surface.removeEventListener("keyup", onKeyUp);
       surface.removeEventListener("blur", releaseAll);
       window.removeEventListener("blur", releaseAll);
+      surface.removeEventListener("pointerdown", resumeAudio);
+      surface.removeEventListener("keydown", resumeAudio);
+      renderer.close();
 
       keyboardLock.release();
 

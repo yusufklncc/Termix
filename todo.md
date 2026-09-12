@@ -294,6 +294,52 @@ prototip ve ilk ölçümler (`docs/phase3-measurements.md`). Faz 3'ün ana sorus
 
 ---
 
+## Faz 5 — Optimizasyon ve eksik özellikler
+
+Faz 4 onaylandıktan sonra, kullanıcı isteğiyle.
+
+### Piksel yolunun bant genişliği (H.264 politikası kapalı)
+
+Windows politika kapalıyken karma çalışıyor: ekranın video benzeri kısmını
+H.264, geri kalanını ClearCodec ve progressive ile çiziyor. İkincisi köprüde
+decode edilip piksel olarak gidiyor — 580 MB/dk'dan 41 MB/dk'ya indi.
+
+- [x] Uyarlanabilir flush — küçük güncellemeler saati beklemiyor
+- [x] WebP encode, tarayıcıda `createImageBitmap` ile native decode (4.1x)
+- [x] İçeriğe göre kayıplı/kayıpsız seçimi (**14.2x**), metin kayıpsız kalıyor
+- [x] Ölçüm ve gerekçe → [`docs/phase3-measurements.md`](docs/phase3-measurements.md)
+- [x] ~~ClearCodec/progressive'i WASM ile tarayıcıda decode etmek~~ —
+      **ölçüldü ve kapatıldı.** Kazanç WebP öncesi 4.2x, sonrası **1.25x**.
+      FreeRDP codec modülünü emscripten ile derlemek + GFX yüzey modelini
+      tarayıcıda yeniden kurmak, %25 için değmez. Ucuz çözüm pahalı olanı
+      gereksiz kıldı.
+
+### Eksik özellikler
+
+- [x] Oturum kaydı — köprünün kendi wire akışı diske yazılıyor, oynatma aynı
+      decoder'a geri veriyor. Tam ekran düğmesi dahil
+- [x] Ses — `librdpsnd-client-termix.so` cihaz eklentisi, AudioWorklet ile
+      sınırlı kuyruk. Kayıtlar da sesli
+- [x] Yazdırma — `libprinter-client-termix.so` PostScript alıyor, ghostscript
+      PDF'e çeviriyor, tarayıcı indiriyor. Host bazlı toggle, varsayılan kapalı
+- [x] ~~Sürücü yönlendirme~~ — **yapılmayacak, kullanıcı kararı.** guacd'nin
+      yaptığı da konteyner içi bir klasör; Termix'in dosya yöneticisi bu
+      host'lara zaten erişiyor
+- [ ] Sesli bir oturumu kaydedip oynatmak — denenmedi
+- [ ] Yazıcının birden fazla Windows sürümünde denenmesi. Yazdırma rdpdr
+      üzerinden gidiyor ve rdpdr isteğe bağlı değil: yüklenemeyen bir cihaz
+      **tüm bağlantıyı** düşürüyor. Varsayılanın kapalı olma sebebi bu
+
+### Bulunan, düzeltilmeyen
+
+- [ ] `--bg-base`, `--bg-elevated`, `--foreground-secondary` bu projede hiçbir
+      yerde tanımlı değil, ama `GuacamoleApp`, `FullScreenAppWrapper`,
+      `SimpleLoader` ve `GuacamoleDisplay` bunları kullanıyor. Direct yolun
+      bildirim kutusunda okunmazlığa sebep oldu ve orada gerçek token'larla
+      düzeltildi; diğerleri koyu zemin üstünde fark edilmiyor. Ayrı iş
+
+---
+
 ## Hedef makine tarafı (kodla ilgisi yok)
 
 Faz 2 veya 3'e geçmeden önce durumu sorulacak:

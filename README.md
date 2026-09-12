@@ -56,6 +56,46 @@ Termix is free and open source. If you find it useful, consider [donating](https
 
 <br />
 
+> ### This is a fork
+>
+> Upstream is [Termix-SSH/Termix](https://github.com/Termix-SSH/Termix), and everything below
+> is theirs. This fork tracks it and adds a second way to render a remote desktop.
+>
+> **Direct H.264.** Termix's remote desktop runs through guacd, which decodes what the server
+> sends and re-encodes it as image tiles — there is no video codec pass-through, so a server
+> already sending H.264 has it decoded and encoded again before it reaches the browser. The
+> direct renderer connects with FreeRDP 3 and hands the H.264 bitstream to the browser
+> untouched, decoding it with WebCodecs on a worker thread.
+>
+> Measured against the same host: **1.6× the frame rate, 23× less server CPU, 9× less traffic
+> to the browser** — [`docs/phase4-comparison.md`](docs/phase4-comparison.md).
+>
+> A Windows host only offers H.264 with the "Prioritize H.264/AVC 444" policy on. Without it
+> the session still works: the bridge decodes what the server does send and forwards pixels as
+> WebP, chosen lossless or lossy per region so text stays sharp — 14× smaller than sending them
+> raw, and [measured rather than guessed](docs/phase3-measurements.md).
+>
+> Text clipboard, audio, printing to PDF, session recording and playback, pinned resolution,
+> jump hosts and keyboard lock all work on this path. Drive redirection, the RDP performance
+> flags and session sharing do not. It is opt-in per host, the default stays
+> Guacamole, and there is deliberately no automatic fallback — a path that quietly degrades is
+> a path nobody notices is degraded. Setup:
+> [`docs/direct-rdp-setup.md`](docs/direct-rdp-setup.md).
+>
+> **Stream hosts.** A protocol type for machines that already publish their own desktop over
+> WebRTC (Selkies, neko) — for accelerated 3D or a session with several viewers, which RDP and
+> VNC cannot carry. Termix relays only the signalling; the video never passes through it.
+>
+> Running it needs the FreeRDP bridge sidecar and an image built from this repository rather
+> than upstream's published one:
+>
+> ```bash
+> cd docker
+> docker compose -f docker-compose.yml -f compose-fork.yml up -d --build
+> ```
+
+<br />
+
 ## Overview
 
 Termix is a free, open source, self-hosted platform for managing your servers. It puts SSH terminals, remote desktops (RDP, VNC, Telnet), file transfers, tunnels, Docker, metrics, and automations in one place, on web, desktop, and mobile. It is a self-hosted alternative to Termius that stays free forever.

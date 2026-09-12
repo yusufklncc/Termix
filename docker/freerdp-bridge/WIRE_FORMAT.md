@@ -180,7 +180,12 @@ sondan başa yazılıyor, yani iş bitmeden gönderilecek bir şey yok. ghostscr
 ayrı bir süreç olarak çalıştırılıyor — kendi lisansı olan büyük bir program ve
 oradaki bir çökme oturuma değil yalnızca o yazdırma işine mal olmalı.
 
-`BRIDGE_PRINTER=0` kanalı hiç istemez.
+Yazdırma `BRIDGE_PRINTER=1` ile açılıyor, varsayılan kapalı. Bu çekingenlik
+değil: yazdırma `rdpdr` üzerinden gidiyor ve rdpdr bir oturum için isteğe bağlı
+değil. Cihazı yüklenemezse FreeRDP post-connect'te düşüyor ve **tüm bağlantı**
+onunla gidiyor — yani çalışmayan bir yazıcının bedeli yazıcı değil, kimsenin
+ulaşamadığı bir masaüstü. Birden fazla Windows sürümünde doğrulanana kadar bu
+risk her oturumun önünde değil bir anahtarın arkasında duruyor.
 
 ## `SNDA` — uzak ses
 

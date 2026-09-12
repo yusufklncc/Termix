@@ -49,6 +49,29 @@ duruyor.
 "guacd kullanılamaz" demiyor — "direct belirgin şekilde daha hızlı, çok daha
 ucuz ve daha tutarlı" diyor.
 
+## H.264 politikası kapalıyken
+
+Yukarıdaki tablo hedefte "Prioritize H.264/AVC 444" **açıkken** alındı. Kapalı
+olduğunda Windows karma çalışıyor: ekranın video benzeri kısmını H.264 ile,
+geri kalanını ClearCodec ve progressive ile çiziyor. İkincisini köprü decode
+edip piksel olarak gönderiyor — aynı yolun pahalı yarısı.
+
+O yarı bu fazda dört adımda 14 kat küçüldü (580 MB → 41 MB, dakikada):
+
+| Aşama                               |      Oran |
+| ----------------------------------- | --------: |
+| Ham RGBA                            |      1.0x |
+| deflate                             |      2.3x |
+| WebP lossless                       |      4.1x |
+| WebP, içeriğe göre kayıplı/kayıpsız | **14.2x** |
+
+Ayrıntı ve yöntem: [`phase3-measurements.md`](phase3-measurements.md).
+
+Yine de politikayı açmanın yerini tutmuyor. Aynı oturumda H.264 yolu 4.4 MB
+taşırken piksel yolu 41 MB taşıyor — yani politika kapalıyken hâlâ **on kat**
+daha pahalı bir oturum kullanıyorsunuz. Bu iş onu kullanılabilir yaptı,
+tercih edilir değil.
+
 ## Neden üç yollu değil
 
 CLAUDE.md üç yolun karşılaştırılmasını istiyor. `stream` (WebRTC) yolu bu

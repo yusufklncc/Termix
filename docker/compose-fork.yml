@@ -1,20 +1,28 @@
-# Build Termix from this checkout instead of pulling the published image.
+# Run this fork instead of upstream's published build.
 #
 # docker-compose.yml names ghcr.io/lukegus/termix:latest, which is upstream's
-# build and does not contain this fork's work -- deploying it would quietly
+# image and does not contain this fork's work -- deploying it would quietly
 # give you a Termix without the direct RDP renderer or the stream protocol.
-# This overlay replaces that image with a build of the working tree and
-# changes nothing else.
+# This overlay replaces that image and changes nothing else.
 #
-#   docker compose -f docker-compose.yml -f compose-fork.yml up -d --build
+#   docker compose -f docker-compose.yml -f compose-fork.yml up -d
 #
-# The rdp-bridge service builds FreeRDP from source, which takes a while the
-# first time and is cached afterwards. Removing that service and RDP_BRIDGE_URL
-# from docker-compose.yml opts out of the direct renderer entirely; hosts stay
-# on the Guacamole path either way.
+# The bridge is named here too, so a server pulls it instead of building
+# FreeRDP from source -- which works but takes a quarter of an hour.
+#
+# To build from a checkout rather than pull, drop this overlay and use
+# compose-dev.yml, or delete the image lines below.
+#
+# Removing the rdp-bridge service and RDP_BRIDGE_URL from docker-compose.yml
+# opts out of the direct renderer entirely; hosts stay on the Guacamole path
+# either way.
 services:
   termix:
-    image: termix:fork
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
+    image: yusufklncc/termix:latest
+
+  rdp-bridge:
+    image: yusufklncc/termix-rdp-bridge:latest
+    # !reset drops the build block docker-compose.yml declares. Without it a
+    # server with no local image builds FreeRDP from source instead of pulling,
+    # which works and costs a quarter of an hour.
+    build: !reset null

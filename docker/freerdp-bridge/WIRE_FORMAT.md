@@ -148,6 +148,21 @@ u16 width, u16 height
 RGBA piksel verisi   (width * height * 4 bayt)
 ```
 
+## `RECZ` — deflate'lenmiş `RECT`
+
+Başlık `RECT` ile birebir aynı; farkı, başlığın ardındaki baytların zlib
+akışı olması. Açıldığında tam olarak `RECT` payload'ının piksel kısmını verir.
+
+Ekran pikselleri bu hattaki en tekrarlı veri: düz pencere çerçevesi, tekrar
+eden metin kenar yumuşatması, binlerce piksel boyunca tek renk bir arka plan.
+Köprü level 1 ile sıkıştırıyor — amaç oranın çoğunu çok az CPU ile almak,
+üstelik aynı süreç masaüstünü de decode ediyor.
+
+Sıkışmayan bir bölge — bir fotoğraf, sunucunun encode etmemeye karar verdiği
+bir video karesi — deflate başlığına para ödemek yerine `RECT` olarak ham
+gidiyor. Yani iki magic'i de beklemek gerekiyor; hangisinin geleceği bölgenin
+içeriğine bağlı.
+
 Kanal sırası `CURS`'ten farklı ve bilerek öyle: `RECT` doğrudan bir `ImageData`
 olarak sarılıyor, kopyalanmadan. Kanalları tarayıcıda çevirmek tam ekran bir
 güncellemede dört milyon yazma demekti — hem de boyamayı da yapan worker'da.

@@ -50,7 +50,7 @@ RUN cmake -GNinja -S FreeRDP -B build \
 
 COPY bridge.c /src/bridge/bridge.c
 RUN gcc -O2 -Wall -Wextra -o /usr/local/bin/termix-rdp-bridge /src/bridge/bridge.c \
-      $(pkg-config --cflags --libs freerdp3 freerdp-client3 winpr3) -lpthread
+      $(pkg-config --cflags --libs freerdp3 freerdp-client3 winpr3) -lpthread -lz
 
 FROM ubuntu:24.04
 

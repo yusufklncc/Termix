@@ -170,3 +170,38 @@ export function nextDecoderStage(stage: DecoderStage): DecoderStage {
   if (stage === "hardware") return "software";
   return "given-up";
 }
+
+/**
+ * The geometry at the head of a painted region, or null if it cannot be one.
+ *
+ * The pixels that follow may be deflated, so the length of the message says
+ * nothing about whether the region is whole -- only the uncompressed case can
+ * be checked here, and it is, because a short buffer would otherwise reach
+ * ImageData as a range error mid-paint.
+ */
+export function parseRectHeader(
+  view: DataView,
+  byteLength: number,
+  deflated: boolean,
+): { left: number; top: number; width: number; height: number } | null {
+  if (byteLength < RECT_HEADER_BYTES) return null;
+
+  const left = view.getUint16(2, true);
+  const top = view.getUint16(4, true);
+  const width = view.getUint16(6, true);
+  const height = view.getUint16(8, true);
+  if (width === 0 || height === 0) return null;
+
+  if (
+    !deflated &&
+    byteLength < RECT_HEADER_BYTES + width * height * BYTES_PER_PIXEL
+  ) {
+    return null;
+  }
+
+  return { left, top, width, height };
+}
+
+/** surfaceId, left, top, width, height -- five u16s ahead of the pixels. */
+export const RECT_HEADER_BYTES = 10;
+export const BYTES_PER_PIXEL = 4;

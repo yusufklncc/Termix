@@ -434,12 +434,19 @@ export function connectRdpDirect({
           break;
         }
 
-        case "RECT": {
+        case "RECT":
+        case "RECZ": {
           const buffer = frame.payload.buffer.slice(
             frame.payload.byteOffset,
             frame.payload.byteOffset + frame.payload.length,
           );
-          worker.postMessage({ type: "rect", payload: buffer }, [buffer]);
+          worker.postMessage(
+            {
+              type: frame.magic === "RECZ" ? "rectz" : "rect",
+              payload: buffer,
+            },
+            [buffer],
+          );
           break;
         }
 

@@ -14,6 +14,9 @@ import {
   codecFromSps,
   isForeignFrameSize,
   rectHasArea,
+  parseRectHeader,
+  RECT_HEADER_BYTES,
+  BYTES_PER_PIXEL,
   surfaceRegion,
 } from "./rdp-decode-policy.ts";
 
@@ -22,6 +25,7 @@ type InboundMessage =
   | { type: "resize"; width: number; height: number }
   | { type: "avc"; payload: ArrayBuffer }
   | { type: "rect"; payload: ArrayBuffer }
+  | { type: "rectz"; payload: ArrayBuffer }
   | { type: "close" };
 
 type OutboundMessage =
@@ -252,6 +256,68 @@ function paint(frame: VideoFrame) {
  * Sampled on a timer rather than posted per frame: at 60fps a message per frame
  * is pure overhead on the thread whose latency this path exists to protect.
  */
+/*
+ * Painted regions, in the order the bridge sent them.
+ *
+ * Inflating is asynchronous, so a compressed region cannot simply be painted
+ * where it arrives -- a later small update could overtake an earlier large one
+ * and leave the older pixels on top. Chaining keeps them in order, and an
+ * uncompressed region joins the same chain rather than jumping it.
+ *
+ * Ordering against video frames is not a concern: the two never cover the same
+ * pixels. What the server encodes never reaches the bridge's own surface, so
+ * what arrives here as a region is by construction what the video is not
+ * carrying.
+ */
+let regionQueue: Promise<void> = Promise.resolve();
+
+function enqueueRegion(payload: ArrayBuffer, deflated: boolean) {
+  regionQueue = regionQueue
+    .then(() => paintRegion(payload, deflated))
+    .catch((error) => {
+      console.warn(`[rdp-direct] could not paint a region: ${error}`);
+    });
+}
+
+async function paintRegion(payload: ArrayBuffer, deflated: boolean) {
+  if (!ctx) return;
+
+  const header = parseRectHeader(
+    new DataView(payload),
+    payload.byteLength,
+    deflated,
+  );
+  if (!header) return;
+  const { left, top, width, height } = header;
+
+  let pixels: Uint8ClampedArray;
+  if (deflated) {
+    const stream = new Blob([payload.slice(RECT_HEADER_BYTES)])
+      .stream()
+      .pipeThrough(new DecompressionStream("deflate"));
+    const inflated = await new Response(stream).arrayBuffer();
+    if (inflated.byteLength < width * height * BYTES_PER_PIXEL) return;
+    pixels = new Uint8ClampedArray(
+      inflated,
+      0,
+      width * height * BYTES_PER_PIXEL,
+    );
+  } else {
+    // The bridge sends RGBA, which is what an ImageData holds, so the pixels
+    // are wrapped rather than copied. Swapping channels here instead was four
+    // million writes for a full-screen update, in the same worker that then
+    // has to paint it -- enough to stop answering altogether.
+    pixels = new Uint8ClampedArray(
+      payload,
+      RECT_HEADER_BYTES,
+      width * height * BYTES_PER_PIXEL,
+    );
+  }
+
+  ctx.putImageData(new ImageData(pixels, width, height), left, top);
+  decodedCount++;
+}
+
 let statsAt = 0;
 let statsPainted = 0;
 
@@ -455,34 +521,15 @@ self.onmessage = async (event: MessageEvent<InboundMessage>) => {
     }
 
     /*
-     * A decoded region from the bridge, for hosts that never send H.264.
+     * A decoded region from the bridge, for the parts of the screen the server
+     * did not encode.
      * Painted straight onto the canvas: there is no decoder involved, so it
      * bypasses the video path entirely and does not disturb its key-frame
      * state.
      */
-    case "rect": {
-      if (!ctx) return;
-      const bytes = new Uint8Array(message.payload);
-      if (bytes.length < 10) return;
-      const view = new DataView(message.payload);
-      const left = view.getUint16(2, true);
-      const top = view.getUint16(4, true);
-      const width = view.getUint16(6, true);
-      const height = view.getUint16(8, true);
-      if (width === 0 || height === 0) return;
-      if (bytes.length < 10 + width * height * 4) return;
-
-      // The bridge already sends RGBA, which is what an ImageData holds, so the
-      // pixels are wrapped rather than copied. Swapping channels here instead
-      // was four million writes for a full-screen update, in the same worker
-      // that then has to paint it -- enough to stop answering altogether.
-      const image = new ImageData(
-        new Uint8ClampedArray(message.payload, 10, width * height * 4),
-        width,
-        height,
-      );
-      ctx.putImageData(image, left, top);
-      decodedCount++;
+    case "rect":
+    case "rectz": {
+      enqueueRegion(message.payload, message.type === "rectz");
       break;
     }
 

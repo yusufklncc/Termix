@@ -6,6 +6,7 @@ import {
   rectHasArea,
   surfaceRegion,
   nextDecoderStage,
+  parseRectHeader,
 } from "../../../features/rdp-direct/rdp-decode-policy";
 
 /** Annex B bitstream from NAL bodies, alternating 4- and 3-byte start codes. */
@@ -179,5 +180,64 @@ describe("nextDecoderStage", () => {
 
   it("stays given up, so a failing stream cannot loop between decoders", () => {
     expect(nextDecoderStage("given-up")).toBe("given-up");
+  });
+});
+
+describe("parseRectHeader", () => {
+  const header = (
+    left: number,
+    top: number,
+    width: number,
+    height: number,
+    pixelBytes: number,
+  ) => {
+    const buffer = new ArrayBuffer(10 + pixelBytes);
+    const view = new DataView(buffer);
+    view.setUint16(0, 1, true);
+    view.setUint16(2, left, true);
+    view.setUint16(4, top, true);
+    view.setUint16(6, width, true);
+    view.setUint16(8, height, true);
+    return { view, byteLength: buffer.byteLength };
+  };
+
+  it("reads the geometry", () => {
+    const { view, byteLength } = header(4, 8, 2, 3, 2 * 3 * 4);
+    expect(parseRectHeader(view, byteLength, false)).toEqual({
+      left: 4,
+      top: 8,
+      width: 2,
+      height: 3,
+    });
+  });
+
+  it("rejects a buffer too short to hold a header", () => {
+    const view = new DataView(new ArrayBuffer(10));
+    expect(parseRectHeader(view, 9, false)).toBeNull();
+  });
+
+  it("rejects an empty region", () => {
+    // RDP emits them, and an ImageData of zero width throws.
+    const { view, byteLength } = header(0, 0, 0, 5, 0);
+    expect(parseRectHeader(view, byteLength, false)).toBeNull();
+  });
+
+  it("rejects pixels that are truncated", () => {
+    // Short of a whole region, ImageData throws mid-paint rather than
+    // painting what arrived.
+    const { view } = header(0, 0, 4, 4, 4 * 4 * 4);
+    expect(parseRectHeader(view, 10 + 4 * 4 * 4 - 1, false)).toBeNull();
+  });
+
+  it("does not judge the length of a deflated region", () => {
+    // Compressed pixels are shorter than the region by design; only the
+    // inflated buffer can be checked, and it is checked there.
+    const { view } = header(0, 0, 100, 100, 64);
+    expect(parseRectHeader(view, 10 + 64, true)).toEqual({
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 100,
+    });
   });
 });

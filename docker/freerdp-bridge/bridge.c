@@ -37,6 +37,7 @@
 #include <freerdp/graphics.h>
 #include <freerdp/codec/color.h>
 #include <freerdp/codec/region.h>
+#include <zlib.h>
 #include <freerdp/channels/channels.h>
 #include <freerdp/channels/rdpgfx.h>
 #include <freerdp/channels/cliprdr.h>
@@ -103,6 +104,11 @@ typedef struct
 
 	UINT32 cursorsSent;
 	UINT32 rectsSent;
+	/* What each path actually costs on the wire, which is the only way to say
+	 * whether the expensive one is worth optimising further. */
+	UINT64 avcBytes;
+	UINT64 rectBytesRaw;
+	UINT64 rectBytesSent;
 
 	/* What the fallback still owes the viewer, and when it last paid. */
 	pendingSurface pending[MAX_TRACKED_SURFACES];
@@ -256,6 +262,13 @@ static void log_codec_mix(termixContext* ctx)
 	        used ? line : "(nothing yet)", ctx->chromaOnlySkipped);
 	fprintf(stderr, "[%s] input: keys=%u pointer=%u rejected=%u\n", TAG, ctx->keyEvents,
 	        ctx->pointerEvents, ctx->inputRejected);
+	/* What each path costs. The ratio is the whole argument for compressing
+	 * the pixel path, so it is measured rather than assumed. */
+	fprintf(stderr, "[%s] wire: avc=%lluKB rects=%lluKB (raw %lluKB, %.1fx)\n", TAG,
+	        (unsigned long long)(ctx->avcBytes / 1024u),
+	        (unsigned long long)(ctx->rectBytesSent / 1024u),
+	        (unsigned long long)(ctx->rectBytesRaw / 1024u),
+	        ctx->rectBytesSent ? (double)ctx->rectBytesRaw / (double)ctx->rectBytesSent : 0.0);
 	fflush(stderr);
 }
 
@@ -470,6 +483,7 @@ static UINT send_avc_frame(termixContext* ctx, const RDPGFX_SURFACE_COMMAND* cmd
 	}
 
 	ctx->frameCount++;
+	ctx->avcBytes += total;
 	wire_send(ctx, "AVCF", payload, (UINT32)total);
 	free(payload);
 	return CHANNEL_RC_OK;
@@ -540,7 +554,39 @@ static UINT send_surface_rect(termixContext* ctx, RdpgfxClientContext* gfx, UINT
 	}
 
 	ctx->rectsSent++;
-	wire_send(ctx, "RECT", payload, (UINT32)total);
+	ctx->rectBytesRaw += total;
+
+	/*
+	 * Deflate, when it earns its place.
+	 *
+	 * Screen pixels are the most redundant thing on this wire -- flat window
+	 * chrome, repeated text antialiasing, a background that is one colour for
+	 * thousands of pixels -- and this path sends four bytes of them per pixel
+	 * with no compression at all. Level 1 is deliberate: the point is to get
+	 * most of the ratio for very little CPU, in a per-session process that
+	 * also has a desktop to decode.
+	 *
+	 * A region that does not compress -- a photograph, a video frame the
+	 * server chose not to encode -- goes raw instead, under the magic that
+	 * says so, rather than paying to wrap it in a deflate header.
+	 */
+	uLongf packed = compressBound((uLong)(total - 10));
+	BYTE* deflated = (BYTE*)malloc(10 + packed);
+	if (deflated &&
+	    compress2(deflated + 10, &packed, payload + 10, (uLong)(total - 10), 1) == Z_OK &&
+	    packed < (uLongf)(total - 10) * 9u / 10u)
+	{
+		memcpy(deflated, payload, 10);
+		ctx->rectBytesSent += 10 + packed;
+		wire_send(ctx, "RECZ", deflated, (UINT32)(10 + packed));
+	}
+	else
+	{
+		ctx->rectBytesSent += total;
+		wire_send(ctx, "RECT", payload, (UINT32)total);
+	}
+
+	free(deflated);
 	free(payload);
 	return CHANNEL_RC_OK;
 }

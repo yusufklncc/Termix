@@ -13,7 +13,8 @@ import { isKeyFrame, parseAvcFrame, type RdpRect } from "./rdp-wire.ts";
 import {
   codecFromSps,
   isForeignFrameSize,
-  mapRectToFrame,
+  rectHasArea,
+  surfaceRegion,
 } from "./rdp-decode-policy.ts";
 
 type InboundMessage =
@@ -200,34 +201,39 @@ function paint(frame: VideoFrame) {
       height: frame.displayHeight,
     };
 
+    // Padding sits to the right and below the desktop, so the surface is the
+    // top-left region of the picture. Drawing the whole thing would stretch it.
+    const region = surfaceRegion(picture, surface);
+
     if (!rects || rects.length === 0) {
       ctx.drawImage(
         frame,
         0,
         0,
-        frame.displayWidth,
-        frame.displayHeight,
+        region.width,
+        region.height,
         0,
         0,
-        surface.width,
-        surface.height,
+        region.width,
+        region.height,
       );
     } else {
       // The picture covers the whole surface; the rects say which parts of it
       // actually changed. Painting only those avoids redrawing stale areas.
       for (const rect of rects) {
-        const source = mapRectToFrame(rect, picture, surface);
-        if (!source) continue;
+        if (!rectHasArea(rect)) continue;
+        const width = rect.right - rect.left;
+        const height = rect.bottom - rect.top;
         ctx.drawImage(
           frame,
-          source.sx,
-          source.sy,
-          source.sw,
-          source.sh,
           rect.left,
           rect.top,
-          rect.right - rect.left,
-          rect.bottom - rect.top,
+          width,
+          height,
+          rect.left,
+          rect.top,
+          width,
+          height,
         );
       }
     }

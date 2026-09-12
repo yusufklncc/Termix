@@ -3,7 +3,8 @@ import {
   codecFromSps,
   isForeignFrameSize,
   listNalTypes,
-  mapRectToFrame,
+  rectHasArea,
+  surfaceRegion,
   nextDecoderStage,
 } from "../../../features/rdp-direct/rdp-decode-policy";
 
@@ -79,10 +80,17 @@ describe("codecFromSps", () => {
 describe("isForeignFrameSize", () => {
   const surface = { width: 1126, height: 1130 };
 
-  it("accepts the macroblock-aligned size of the surface", () => {
-    // 1126 -> 1136, 1130 -> 1136. This is what a correct decoder returns.
+  it("accepts the padding two real Windows hosts actually produce", () => {
+    // Width aligned to 32, height to 16. Assuming 16 in both directions
+    // rejected these and sent both hosts down the slow server-decode path.
+    expect(isForeignFrameSize({ width: 1152, height: 1136 }, surface)).toBe(
+      false,
+    );
     expect(
-      isForeignFrameSize({ width: 1136, height: 1136 }, surface),
+      isForeignFrameSize(
+        { width: 704, height: 1344 },
+        { width: 688, height: 1338 },
+      ),
     ).toBe(false);
   });
 
@@ -92,18 +100,25 @@ describe("isForeignFrameSize", () => {
     );
   });
 
-  it("rejects the size a failed hardware decoder invents", () => {
+  it("rejects the size a failed decoder invents", () => {
     // Measured: the browser claimed 1280x720 for this surface and painted
-    // green, while ffmpeg decoded the same bytes as 1152x1136.
-    expect(isForeignFrameSize({ width: 1280, height: 720 }, surface)).toBe(true);
+    // green. Padding can never make a picture shorter than its surface.
+    expect(isForeignFrameSize({ width: 1280, height: 720 }, surface)).toBe(
+      true,
+    );
   });
 
-  it("rejects a frame smaller than the surface", () => {
-    expect(isForeignFrameSize({ width: 800, height: 600 }, surface)).toBe(true);
+  it("rejects a frame smaller than the surface in either dimension", () => {
+    expect(isForeignFrameSize({ width: 800, height: 1136 }, surface)).toBe(
+      true,
+    );
+    expect(isForeignFrameSize({ width: 1152, height: 600 }, surface)).toBe(
+      true,
+    );
   });
 
-  it("rejects a frame more than a macroblock larger", () => {
-    expect(isForeignFrameSize({ width: 1152, height: 1136 }, surface)).toBe(
+  it("rejects a size with no relationship to the surface", () => {
+    expect(isForeignFrameSize({ width: 3840, height: 2160 }, surface)).toBe(
       true,
     );
   });
@@ -117,35 +132,42 @@ describe("isForeignFrameSize", () => {
   });
 });
 
-describe("mapRectToFrame", () => {
-  it("is an identity when the picture is the surface size", () => {
+describe("surfaceRegion", () => {
+  it("takes the surface out of a padded picture rather than stretching it", () => {
+    // 688x1338 arrives as 704x1344; the extra 16 and 6 pixels are padding and
+    // drawing them onto the surface would skew the whole desktop.
     expect(
-      mapRectToFrame(
-        { left: 10, top: 20, right: 110, bottom: 220 },
-        { width: 1600, height: 900 },
-        { width: 1600, height: 900 },
-      ),
-    ).toEqual({ sx: 10, sy: 20, sw: 100, sh: 200 });
+      surfaceRegion({ width: 704, height: 1344 }, { width: 688, height: 1338 }),
+    ).toEqual({ width: 688, height: 1338 });
   });
 
-  it("scales when the server encodes at another resolution", () => {
+  it("is an identity when there is no padding", () => {
     expect(
-      mapRectToFrame(
-        { left: 0, top: 0, right: 800, bottom: 450 },
-        { width: 1280, height: 720 },
-        { width: 1600, height: 900 },
-      ),
-    ).toEqual({ sx: 0, sy: 0, sw: 640, sh: 360 });
+      surfaceRegion({ width: 1600, height: 900 }, { width: 1600, height: 900 }),
+    ).toEqual({ width: 1600, height: 900 });
   });
 
-  it("skips a rect with no area rather than drawing nothing at a cost", () => {
-    const frame = { width: 100, height: 100 };
+  it("never reads past the picture", () => {
     expect(
-      mapRectToFrame({ left: 5, top: 5, right: 5, bottom: 9 }, frame, frame),
-    ).toBeNull();
+      surfaceRegion({ width: 640, height: 480 }, { width: 1600, height: 900 }),
+    ).toEqual({ width: 640, height: 480 });
+  });
+
+  it("falls back to the picture before the surface is sized", () => {
     expect(
-      mapRectToFrame({ left: 5, top: 9, right: 9, bottom: 5 }, frame, frame),
-    ).toBeNull();
+      surfaceRegion({ width: 640, height: 480 }, { width: 0, height: 0 }),
+    ).toEqual({ width: 640, height: 480 });
+  });
+});
+
+describe("rectHasArea", () => {
+  it("accepts a rect that covers pixels", () => {
+    expect(rectHasArea({ left: 0, top: 0, right: 10, bottom: 10 })).toBe(true);
+  });
+
+  it("rejects the empty rects RDP emits", () => {
+    expect(rectHasArea({ left: 5, top: 5, right: 5, bottom: 9 })).toBe(false);
+    expect(rectHasArea({ left: 5, top: 9, right: 9, bottom: 5 })).toBe(false);
   });
 });
 

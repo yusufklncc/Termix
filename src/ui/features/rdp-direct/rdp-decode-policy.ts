@@ -82,13 +82,30 @@ export function codecFromSps(bitstream: Uint8Array): string | null {
 }
 
 /**
+ * How much larger than the surface a coded picture may legitimately be.
+ *
+ * An encoder pads to whole macroblocks, and not only to 16: measured against
+ * two unrelated Windows hosts, the width is aligned to 32 while the height is
+ * aligned to 16 -- a 688x1338 surface arrives as 704x1344, a 1126x1130 one as
+ * 1152x1136. Assuming 16 in both directions rejects perfectly good frames.
+ *
+ * So the bound is deliberately loose. It is not here to validate padding; it
+ * is here to catch a decoder that has invented a size, and those are not
+ * subtly wrong.
+ */
+const MAX_PADDING_RATIO = 1.25;
+
+/**
  * Whether a decoded picture could plausibly belong to this surface.
  *
- * A correct frame is the surface size rounded up to a macroblock: never
- * smaller, never more than 15 pixels larger. A hardware decoder that has
- * quietly failed reports a size of its own instead -- measured against a
- * Windows host encoding 1152x1136, where the browser claimed 1280x720 and
- * painted green while ffmpeg decoded the same bytes correctly.
+ * A correct frame covers the surface and is padded up to whole macroblocks. A
+ * decoder that has quietly failed reports a size of its own instead and paints
+ * a blank picture at it -- measured against a host encoding 1152x1136, where
+ * the browser claimed 1280x720 while ffmpeg decoded the same bytes correctly.
+ *
+ * That case is caught by the picture being *smaller* than the surface, which is
+ * something padding can never make it. The upper bound only rules out a size
+ * with no relationship to the surface at all.
  *
  * A surface of zero is not a judgement either way: nothing is known yet.
  */
@@ -98,42 +115,44 @@ export function isForeignFrameSize(
 ): boolean {
   if (surface.width <= 0 || surface.height <= 0) return false;
 
-  const alignedWidth = Math.ceil(surface.width / MACROBLOCK) * MACROBLOCK;
-  const alignedHeight = Math.ceil(surface.height / MACROBLOCK) * MACROBLOCK;
-
   return (
     frame.width < surface.width ||
     frame.height < surface.height ||
-    frame.width > alignedWidth ||
-    frame.height > alignedHeight
+    frame.width > surface.width * MAX_PADDING_RATIO ||
+    frame.height > surface.height * MAX_PADDING_RATIO
   );
 }
 
 /**
- * Maps a rectangle in surface coordinates onto the coded picture.
+ * The region of a coded picture that is the surface.
  *
- * A server may encode at one resolution and describe the update in another --
- * the same host encodes 1280x720 for surfaces of 1126x1130 and 1684x1282
- * alike. Where the sizes agree the ratio is one and this is an identity.
+ * An encoder pads to whole macroblocks, and that padding sits to the right and
+ * below -- it is not a scaled version of the desktop. Drawing the whole picture
+ * onto the surface would stretch it by a few pixels; taking the top-left
+ * surface-sized region is exact.
  */
-export function mapRectToFrame(
-  rect: { left: number; top: number; right: number; bottom: number },
+export function surfaceRegion(
   frame: { width: number; height: number },
   surface: { width: number; height: number },
-): { sx: number; sy: number; sw: number; sh: number } | null {
-  const width = rect.right - rect.left;
-  const height = rect.bottom - rect.top;
-  if (width <= 0 || height <= 0) return null;
-
-  const scaleX = surface.width > 0 ? frame.width / surface.width : 1;
-  const scaleY = surface.height > 0 ? frame.height / surface.height : 1;
-
+): { width: number; height: number } {
   return {
-    sx: rect.left * scaleX,
-    sy: rect.top * scaleY,
-    sw: width * scaleX,
-    sh: height * scaleY,
+    width: Math.min(frame.width, surface.width || frame.width),
+    height: Math.min(frame.height, surface.height || frame.height),
   };
+}
+
+/**
+ * Whether a rect covers any pixels at all.
+ *
+ * A zero-area rect costs a draw call and changes nothing; RDP emits them.
+ */
+export function rectHasArea(rect: {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}): boolean {
+  return rect.right > rect.left && rect.bottom > rect.top;
 }
 
 export type DecoderStage = "hardware" | "software" | "given-up";

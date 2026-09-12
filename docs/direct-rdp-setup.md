@@ -15,7 +15,6 @@ Guacamole.
 | Durum                                                       | Yol           |
 | ----------------------------------------------------------- | ------------- |
 | Pano, ses, dosya aktarımı, oturum kaydı/paylaşımı gerekiyor | **Guacamole** |
-| Jump host üzerinden bağlanılıyor                            | **Guacamole** |
 | Yüksek kare hızı ve düşük sunucu maliyeti isteniyor         | **Direct**    |
 | Hedef makinede ayar yapma imkânı yok                        | **Guacamole** |
 
@@ -23,7 +22,7 @@ Direct yolda **olanlar:** görüntü, klavye, fare, uzak imleç, sabit çözün�
 pano (metin, çift yönlü), ayrılmış tarayıcı kısayolları (Chromium'da).
 
 Direct yolda **olmayanlar:** ses, dosya aktarımı (RDPDR), yazıcı, RemoteApp,
-çoklu monitör, oturum kaydı, oturum paylaşımı, jump host tüneli. Ayrıntı ve
+çoklu monitör, oturum kaydı, oturum paylaşımı. Ayrıntı ve
 gerekçeler: [`phase3-direct-rdp-gaps.md`](phase3-direct-rdp-gaps.md).
 
 ---
@@ -169,5 +168,5 @@ Tarayıcı tarafı ölçüm: DevTools konsolunda `painted` ile filtreleyin.
   ve ikincisi, birincisinde görünmeyen altı ayrı varsayımı açığa çıkardı. Üçüncü
   bir hedef muhtemelen yenilerini çıkaracaktır.
 - Uçtan uca gecikme **ölçülmedi** — fiziksel ölçüm gerekiyor.
-- Jump host tüneli bu yola bağlı değil.
+- Jump host tüneli yazıldı ama **gerçek bir jump host'la denenmedi**.
 - Electron standalone modunda çalıştırılmadı.

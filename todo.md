@@ -219,7 +219,9 @@ guacd olmadan gerçek RDP, 60fps hedefi. Riskli.
 - [x] AVC420 zorla, H.264 NAL'ları **decode etmeden** geçir
 - [x] Binary wire format (magic header deseni)
 - [x] Yeni WS modülü, JWT + `canAccessHost` (Faz 2 gateway'i örnek)
-- [ ] Jump host tüneli — mevcut mekanizma yeniden kullanılacak (**yapılmadı**)
+- [x] Jump host tüneli — `src/backend/hosts/rdp-direct/jump-tunnel.ts`.
+      guacd yolunun mekanizması yeniden kullanıldı (`createJumpHostChain`,
+      `resolveJumpTunnelEndpoint`). **Gerçek bir jump host'la denenmedi.**
 - [x] Gerçek RDP sunucusuna bağlanıyor — kimlik doğrulama, GFX kanalı ve
       `ResetGraphics` çalışıyor; oturum ayakta kalıyor
 - [x] **H.264 akıyor ve ekrana çiziliyor** — Windows 11 hedefinde oturumun

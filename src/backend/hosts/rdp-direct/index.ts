@@ -7,6 +7,11 @@ import { sshLogger } from "../../utils/logger.js";
 import { resolveRdpBridgeOptions } from "../../utils/rdp-bridge-config.js";
 import { resolveDisplaySize } from "./display-size.js";
 import {
+  openJumpTunnel,
+  parseJumpHosts,
+  type JumpTunnel,
+} from "./jump-tunnel.js";
+import {
   createCurrentHostResolutionRepository,
   createCurrentSettingsRepository,
 } from "../../database/repositories/factory.js";
@@ -77,6 +82,7 @@ async function resolveBridge(): Promise<{ host: string; port: number }> {
 wss.on("connection", async (ws: WebSocket, req) => {
   let userId: string | undefined;
   let bridge: net.Socket | null = null;
+  let tunnel: JumpTunnel | null = null;
 
   const fail = (code: number, message: string) => {
     try {
@@ -195,6 +201,44 @@ wss.on("connection", async (ws: WebSocket, req) => {
 
     const { host: bridgeHost, port: bridgePort } = await resolveBridge();
 
+    /*
+     * A host behind jump hosts is dialled through them, not around them. The
+     * bridge takes a host and port and knows nothing about the chain, so the
+     * hops are opened here and the bridge is handed a local listener instead.
+     *
+     * A configured chain that cannot be established fails the session: dialling
+     * the target directly would quietly ignore the hops the host requires.
+     */
+    const jumpHosts = parseJumpHosts(record.jumpHosts);
+    if (jumpHosts.length > 0) {
+      try {
+        tunnel = await openJumpTunnel({
+          jumpHosts,
+          userId,
+          target: { host: connectRequest.host, port: connectRequest.port },
+          consumerHost: bridgeHost,
+        });
+        if (tunnel) {
+          connectRequest.host = tunnel.host;
+          connectRequest.port = tunnel.port;
+          sshLogger.info("Direct RDP tunnelled through jump hosts", {
+            operation: "rdp_direct_jump_tunnel",
+            hostId,
+            userId,
+            hops: jumpHosts.length,
+          });
+        }
+      } catch (error) {
+        sshLogger.error("Failed to open the jump host tunnel", error, {
+          operation: "rdp_direct_jump_tunnel_error",
+          hostId,
+          userId,
+        });
+        fail(1011, "Failed to reach the host through its jump hosts");
+        return;
+      }
+    }
+
     bridge = net.createConnection({ host: bridgeHost, port: bridgePort });
     bridge.setNoDelay(true);
 
@@ -224,6 +268,8 @@ wss.on("connection", async (ws: WebSocket, req) => {
     });
 
     bridge.on("close", () => {
+      tunnel?.close();
+      tunnel = null;
       if (ws.readyState === WebSocket.OPEN) ws.close(1000, "Session ended");
     });
 
@@ -268,6 +314,8 @@ wss.on("connection", async (ws: WebSocket, req) => {
   ws.on("close", () => {
     bridge?.destroy();
     bridge = null;
+    tunnel?.close();
+    tunnel = null;
     sshLogger.info("Direct RDP session ended", {
       operation: "rdp_direct_session_end",
       userId,

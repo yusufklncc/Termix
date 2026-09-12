@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "3db87957-329f-4e20-8630-56287deeb929",
-  "prevId": "27e1a20b-de16-4f5b-945c-bebe5753e6ac",
+  "id": "333b4446-ead3-418f-9abe-6958b5164cbc",
+  "prevId": "7024c984-caee-4ce9-a6f3-27907eb0143d",
   "tables": {
     "alert_firings": {
       "name": "alert_firings",
@@ -657,6 +657,52 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "credential_sidebar_preferences": {
+      "name": "credential_sidebar_preferences",
+      "columns": {
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "data": {
+          "name": "data",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "credential_sidebar_preferences_user_id_users_id_fk": {
+          "name": "credential_sidebar_preferences_user_id_users_id_fk",
+          "tableFrom": "credential_sidebar_preferences",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "dashboard_service_links": {
       "name": "dashboard_service_links",
       "columns": {
@@ -1029,6 +1075,309 @@
           "tableTo": "ssh_data",
           "columnsFrom": [
             "host_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "fleet_inventory": {
+      "name": "fleet_inventory",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "host_id": {
+          "name": "host_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "os_pretty_name": {
+          "name": "os_pretty_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "kernel": {
+          "name": "kernel",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "architecture": {
+          "name": "architecture",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "hostname": {
+          "name": "hostname",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "uptime_seconds": {
+          "name": "uptime_seconds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "ip": {
+          "name": "ip",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "package_manager": {
+          "name": "package_manager",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "collected_at": {
+          "name": "collected_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      },
+      "indexes": {
+        "idx_fleet_inventory_host": {
+          "name": "idx_fleet_inventory_host",
+          "columns": [
+            "host_id",
+            "user_id"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "fleet_inventory_host_id_ssh_data_id_fk": {
+          "name": "fleet_inventory_host_id_ssh_data_id_fk",
+          "tableFrom": "fleet_inventory",
+          "tableTo": "ssh_data",
+          "columnsFrom": [
+            "host_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "fleet_inventory_user_id_users_id_fk": {
+          "name": "fleet_inventory_user_id_users_id_fk",
+          "tableFrom": "fleet_inventory",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "fleet_members": {
+      "name": "fleet_members",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "fleet_id": {
+          "name": "fleet_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "host_id": {
+          "name": "host_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "added_at": {
+          "name": "added_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      },
+      "indexes": {
+        "idx_fleet_members_fleet_host": {
+          "name": "idx_fleet_members_fleet_host",
+          "columns": [
+            "fleet_id",
+            "host_id"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "fleet_members_fleet_id_fleets_id_fk": {
+          "name": "fleet_members_fleet_id_fleets_id_fk",
+          "tableFrom": "fleet_members",
+          "tableTo": "fleets",
+          "columnsFrom": [
+            "fleet_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "fleet_members_host_id_ssh_data_id_fk": {
+          "name": "fleet_members_host_id_ssh_data_id_fk",
+          "tableFrom": "fleet_members",
+          "tableTo": "ssh_data",
+          "columnsFrom": [
+            "host_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "fleets": {
+      "name": "fleets",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "color": {
+          "name": "color",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "icon": {
+          "name": "icon",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "tag_rules": {
+          "name": "tag_rules",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "sync_id": {
+          "name": "sync_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      },
+      "indexes": {
+        "fleets_sync_id_unique": {
+          "name": "fleets_sync_id_unique",
+          "columns": [
+            "sync_id"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "fleets_user_id_users_id_fk": {
+          "name": "fleets_user_id_users_id_fk",
+          "tableFrom": "fleets",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
           ],
           "columnsTo": [
             "id"
@@ -1700,6 +2049,52 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "host_sidebar_preferences": {
+      "name": "host_sidebar_preferences",
+      "columns": {
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "data": {
+          "name": "data",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "host_sidebar_preferences_user_id_users_id_fk": {
+          "name": "host_sidebar_preferences_user_id_users_id_fk",
+          "tableFrom": "host_sidebar_preferences",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "ssh_data": {
       "name": "ssh_data",
       "columns": {
@@ -1760,6 +2155,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "parent_host_id": {
+          "name": "parent_host_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "tags": {
           "name": "tags",
           "type": "text",
@@ -1774,6 +2176,13 @@
           "notNull": true,
           "autoincrement": false,
           "default": false
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "auth_type": {
           "name": "auth_type",
@@ -1968,6 +2377,14 @@
           "autoincrement": false,
           "default": false
         },
+        "enable_terminal_toolbar": {
+          "name": "enable_terminal_toolbar",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
+        },
         "show_terminal_in_sidebar": {
           "name": "show_terminal_in_sidebar",
           "type": "integer",
@@ -2044,6 +2461,21 @@
           "notNull": false,
           "autoincrement": false
         },
+        "enable_proxmox_stats": {
+          "name": "enable_proxmox_stats",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "proxmox_stats_config": {
+          "name": "proxmox_stats_config",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "terminal_config": {
           "name": "terminal_config",
           "type": "text",
@@ -2091,14 +2523,6 @@
         },
         "enable_telnet": {
           "name": "enable_telnet",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
-        "enable_stream": {
-          "name": "enable_stream",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
@@ -2221,77 +2645,6 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
-        },
-        "stream_url": {
-          "name": "stream_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "stream_path": {
-          "name": "stream_path",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "stream_mode": {
-          "name": "stream_mode",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "stream_publisher": {
-          "name": "stream_publisher",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "stream_credential_id": {
-          "name": "stream_credential_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "stream_user": {
-          "name": "stream_user",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "stream_password": {
-          "name": "stream_password",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "stream_auth_type": {
-          "name": "stream_auth_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "rdp_render_engine": {
-          "name": "rdp_render_engine",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "rdp_enable_printing": {
-          "name": "rdp_enable_printing",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false,
-          "default": false
         },
         "rdp_auth_type": {
           "name": "rdp_auth_type",
@@ -2504,6 +2857,19 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
+        "ssh_data_parent_host_id_ssh_data_id_fk": {
+          "name": "ssh_data_parent_host_id_ssh_data_id_fk",
+          "tableFrom": "ssh_data",
+          "tableTo": "ssh_data",
+          "columnsFrom": [
+            "parent_host_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
         "ssh_data_credential_id_ssh_credentials_id_fk": {
           "name": "ssh_data_credential_id_ssh_credentials_id_fk",
           "tableFrom": "ssh_data",
@@ -2562,19 +2928,6 @@
           "tableTo": "ssh_credentials",
           "columnsFrom": [
             "telnet_credential_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "ssh_data_stream_credential_id_ssh_credentials_id_fk": {
-          "name": "ssh_data_stream_credential_id_ssh_credentials_id_fk",
-          "tableFrom": "ssh_data",
-          "tableTo": "ssh_credentials",
-          "columnsFrom": [
-            "stream_credential_id"
           ],
           "columnsTo": [
             "id"
@@ -2839,6 +3192,177 @@
         "opkssh_tokens_host_id_ssh_data_id_fk": {
           "name": "opkssh_tokens_host_id_ssh_data_id_fk",
           "tableFrom": "opkssh_tokens",
+          "tableTo": "ssh_data",
+          "columnsFrom": [
+            "host_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "proxmox_node_history": {
+      "name": "proxmox_node_history",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "host_id": {
+          "name": "host_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ts": {
+          "name": "ts",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        "cpu_percent": {
+          "name": "cpu_percent",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "mem_percent": {
+          "name": "mem_percent",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "disk_percent": {
+          "name": "disk_percent",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "net_rx_bytes": {
+          "name": "net_rx_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "net_tx_bytes": {
+          "name": "net_tx_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "proxmox_node_history_host_id_ssh_data_id_fk": {
+          "name": "proxmox_node_history_host_id_ssh_data_id_fk",
+          "tableFrom": "proxmox_node_history",
+          "tableTo": "ssh_data",
+          "columnsFrom": [
+            "host_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "proxmox_stats_preferences": {
+      "name": "proxmox_stats_preferences",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "host_id": {
+          "name": "host_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "layout": {
+          "name": "layout",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "CURRENT_TIMESTAMP"
+        }
+      },
+      "indexes": {
+        "idx_proxmox_stats_prefs_user_host": {
+          "name": "idx_proxmox_stats_prefs_user_host",
+          "columns": [
+            "user_id",
+            "host_id"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {
+        "proxmox_stats_preferences_user_id_users_id_fk": {
+          "name": "proxmox_stats_preferences_user_id_users_id_fk",
+          "tableFrom": "proxmox_stats_preferences",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "proxmox_stats_preferences_host_id_ssh_data_id_fk": {
+          "name": "proxmox_stats_preferences_host_id_ssh_data_id_fk",
+          "tableFrom": "proxmox_stats_preferences",
           "tableTo": "ssh_data",
           "columnsFrom": [
             "host_id"
@@ -4117,6 +4641,14 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "is_note": {
+          "name": "is_note",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
         }
       },
       "indexes": {
@@ -4274,6 +4806,21 @@
         "tags": {
           "name": "tags",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "pin": {
+          "name": "pin",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -4455,6 +5002,13 @@
         },
         "credential_id": {
           "name": "credential_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "sort_order": {
+          "name": "sort_order",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,

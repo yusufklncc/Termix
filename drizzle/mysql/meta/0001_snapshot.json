@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "668b1c9d-5ef9-46f4-a5b1-1fcd95920384",
+  "id": "c90a5027-6791-426e-a610-1bcdd57a3d82",
   "prevId": "2b238de4-3ad7-4b57-8c58-308d6da06c02",
   "tables": {
     "alert_firings": {
@@ -1830,6 +1830,59 @@
       "uniqueConstraints": {},
       "checkConstraint": {}
     },
+    "host_sidebar_preferences": {
+      "name": "host_sidebar_preferences",
+      "columns": {
+        "user_id": {
+          "name": "user_id",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "data": {
+          "name": "data",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(CURRENT_TIMESTAMP)"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "host_sidebar_preferences_user_id_users_id_fk": {
+          "name": "host_sidebar_preferences_user_id_users_id_fk",
+          "tableFrom": "host_sidebar_preferences",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "host_sidebar_preferences_user_id": {
+          "name": "host_sidebar_preferences_user_id",
+          "columns": [
+            "user_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {}
+    },
     "ssh_data": {
       "name": "ssh_data",
       "columns": {
@@ -1904,6 +1957,13 @@
           "notNull": true,
           "autoincrement": false,
           "default": false
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "auth_type": {
           "name": "auth_type",
@@ -2227,14 +2287,6 @@
           "autoincrement": false,
           "default": false
         },
-        "enable_stream": {
-          "name": "enable_stream",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
         "ssh_port": {
           "name": "ssh_port",
           "type": "int",
@@ -2348,48 +2400,6 @@
         "telnet_credential_id": {
           "name": "telnet_credential_id",
           "type": "int",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "stream_url": {
-          "name": "stream_url",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "stream_path": {
-          "name": "stream_path",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "stream_credential_id": {
-          "name": "stream_credential_id",
-          "type": "int",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "stream_user": {
-          "name": "stream_user",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "stream_password": {
-          "name": "stream_password",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "stream_auth_type": {
-          "name": "stream_auth_type",
-          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -2655,19 +2665,6 @@
           "tableTo": "ssh_credentials",
           "columnsFrom": [
             "telnet_credential_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        },
-        "ssh_data_stream_credential_id_ssh_credentials_id_fk": {
-          "name": "ssh_data_stream_credential_id_ssh_credentials_id_fk",
-          "tableFrom": "ssh_data",
-          "tableTo": "ssh_credentials",
-          "columnsFrom": [
-            "stream_credential_id"
           ],
           "columnsTo": [
             "id"
@@ -4676,6 +4673,13 @@
         },
         "credential_id": {
           "name": "credential_id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "sort_order": {
+          "name": "sort_order",
           "type": "int",
           "primaryKey": false,
           "notNull": false,

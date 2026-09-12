@@ -1,1 +1,0 @@
-ALTER TABLE "ssh_data" ADD COLUMN "rdp_enable_printing" boolean DEFAULT false;

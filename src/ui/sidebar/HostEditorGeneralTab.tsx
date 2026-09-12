@@ -1,4 +1,5 @@
 import React from "react";
+import type { ProxyNode } from "@/types/index";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/button";
 import { Input } from "@/components/input";
@@ -17,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { FolderPathPicker } from "./FolderPathPicker";
+import { HostParentPicker } from "./HostParentPicker";
 import { getSSHFolders, isElectron } from "@/main-axios";
 import type { HostEditorForm, HostProtocols } from "./HostEditorData";
 
@@ -32,6 +34,7 @@ export function HostEditorGeneralTab({
   handleProtocolToggle,
   hosts,
   host,
+  simpleMode = false,
 }: {
   form: HostEditorForm;
   setField: HostEditorSetField;
@@ -39,8 +42,17 @@ export function HostEditorGeneralTab({
   handleProtocolToggle: (proto: keyof HostProtocols, value: boolean) => void;
   hosts: Host[];
   host: Host | null;
+  /** Hides organizational/advanced fields; their values still save unchanged. */
+  simpleMode?: boolean;
 }) {
   const { t } = useTranslation();
+
+  // Tracks which picker is shown, independent of whether a value is set yet
+  // -- switching to "parent host" mode with nothing picked shouldn't bounce
+  // back to the folder picker just because parentHostId is still empty.
+  const [placementMode, setPlacementMode] = React.useState<
+    "folder" | "parentHost"
+  >(form.parentHostId ? "parentHost" : "folder");
 
   const [folderMeta, setFolderMeta] = React.useState<
     Map<string, { color?: string; icon?: string }>
@@ -195,7 +207,7 @@ export function HostEditorGeneralTab({
                 onChange={(e) => setField("name", e.target.value)}
               />
             </div>
-            {protocols.enableSsh && (
+            {protocols.enableSsh && !simpleMode && (
               <div className="flex flex-col gap-1.5">
                 <div className="flex items-center justify-between">
                   <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
@@ -217,7 +229,7 @@ export function HostEditorGeneralTab({
                 />
               </div>
             )}
-            {protocols.enableSsh && form.macAddress && (
+            {protocols.enableSsh && !simpleMode && form.macAddress && (
               <div className="flex flex-col gap-1.5">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
                   {t("hosts.wolBroadcastAddress")}
@@ -252,18 +264,49 @@ export function HostEditorGeneralTab({
       <SectionCard
         title={t("hosts.folderAndAdvanced")}
         icon={<Tag className="size-3.5" />}
+        className={simpleMode ? "hidden" : undefined}
       >
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 py-3">
-          <div className="flex flex-col gap-1.5">
-            <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-              {t("hosts.folder")}
-            </label>
-            <FolderPathPicker
-              value={form.folder}
-              onChange={(path) => setField("folder", path)}
-              folderPaths={folderPaths}
-              folderMeta={folderMeta}
-            />
+          <div className="flex flex-col gap-1.5 col-span-2 md:col-span-1">
+            <div className="flex items-center justify-between">
+              <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                {placementMode === "parentHost"
+                  ? t("hosts.parentHost")
+                  : t("hosts.folder")}
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  if (placementMode === "parentHost") {
+                    setPlacementMode("folder");
+                    setField("parentHostId", "");
+                  } else {
+                    setPlacementMode("parentHost");
+                    setField("folder", "");
+                  }
+                }}
+                className="text-[10px] text-accent-brand hover:underline"
+              >
+                {placementMode === "parentHost"
+                  ? t("hosts.useFolderInstead")
+                  : t("hosts.useParentHostInstead")}
+              </button>
+            </div>
+            {placementMode === "parentHost" ? (
+              <HostParentPicker
+                value={String(form.parentHostId)}
+                onChange={(hostId) => setField("parentHostId", hostId)}
+                hosts={hosts}
+                excludeHostId={host?.id}
+              />
+            ) : (
+              <FolderPathPicker
+                value={form.folder}
+                onChange={(path) => setField("folder", path)}
+                folderPaths={folderPaths}
+                folderMeta={folderMeta}
+              />
+            )}
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
@@ -608,7 +651,10 @@ export function HostEditorGeneralTab({
                             value={node.type}
                             onChange={(e) => {
                               const u = [...form.socks5ProxyChain];
-                              u[ni] = { ...u[ni], type: e.target.value };
+                              u[ni] = {
+                                ...u[ni],
+                                type: e.target.value as ProxyNode["type"],
+                              };
                               setField("socks5ProxyChain", u);
                             }}
                           >

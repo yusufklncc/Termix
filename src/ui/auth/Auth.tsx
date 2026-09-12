@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Fingerprint,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
@@ -33,8 +34,10 @@ import {
   getCurrentToken,
   getOidcSilentLoginDefault,
   requestDesktopAutoSession,
+  requestTrustedProxyLogin,
 } from "@/main-axios";
 import { getSSOProviders, ldapLogin } from "@/api/sso-provider-api";
+import { isPasskeySupported, loginWithPasskey } from "@/api/webauthn-api";
 import type { SSOProviderPublic } from "@/types/index";
 import { Checkbox } from "@/components/checkbox";
 import {
@@ -216,6 +219,13 @@ export function Auth({ onLogin }: AuthProps) {
   const [providerLoading, setProviderLoading] = useState<
     Record<number, boolean>
   >({});
+  const [passkeySupported] = useState(() => {
+    try {
+      return isPasskeySupported();
+    } catch {
+      return false;
+    }
+  });
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -258,6 +268,7 @@ export function Auth({ onLogin }: AuthProps) {
   const [ldapUsername, setLdapUsername] = useState("");
   const [ldapPassword, setLdapPassword] = useState("");
   const silentSigninHandledRef = useRef(false);
+  const proxySigninHandledRef = useRef(false);
   const [oidcSilentLoginDefault, setOidcSilentLoginDefault] = useState(false);
   const [oidcSilentLoginDefaultLoaded, setOidcSilentLoginDefaultLoaded] =
     useState(false);
@@ -280,6 +291,25 @@ export function Auth({ onLogin }: AuthProps) {
     boolean | null
   >(!isElectron() || isInElectronWebView() ? true : null);
   const [desktopAutoSessionRetries, setDesktopAutoSessionRetries] = useState(0);
+
+  useEffect(() => {
+    if (proxySigninHandledRef.current || isElectron()) return;
+    proxySigninHandledRef.current = true;
+    requestTrustedProxyLogin()
+      .then((result) => {
+        if (!result.enabled || !result.success) return;
+        storeAuth(result.username || "");
+        onLogin(
+          result.username || "",
+          result.userId || undefined,
+          !!result.is_admin,
+        );
+      })
+      .catch(() => {
+        // Leave the login screen visible. The backend logs the reason without
+        // exposing trusted proxy configuration to an untrusted client.
+      });
+  }, [onLogin]);
 
   useEffect(() => {
     try {
@@ -336,17 +366,48 @@ export function Auth({ onLogin }: AuthProps) {
     // Electron). Waiting avoids flashing a login screen the user is about
     // to skip past via auto-login.
     if (desktopAutoSessionDone !== true) return;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // Right after a server update/restart (or behind a reverse proxy that's
+    // still warming up), the very first request can transiently fail even
+    // though the backend/database is fine seconds later. A single failure
+    // here used to permanently show the "could not connect to the database"
+    // screen, forcing users to manually reload -- sometimes repeatedly.
+    // Retry a few times with backoff before treating it as a real failure.
+    const maxAttempts = 5;
+    const attempt = (attemptNumber: number) => {
+      getSetupRequired()
+        .then((res) => {
+          if (cancelled) return;
+          if (res.setup_required) {
+            setFirstUser(true);
+            setView("register");
+          }
+          setDbConnectionFailed(false);
+          setDbHealthChecking(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          if (attemptNumber >= maxAttempts) {
+            setDbConnectionFailed(true);
+            setDbHealthChecking(false);
+            return;
+          }
+          const delay = Math.min(500 * 2 ** attemptNumber, 5000);
+          retryTimer = setTimeout(() => {
+            if (!cancelled) attempt(attemptNumber + 1);
+          }, delay);
+        });
+    };
+
     setDbHealthChecking(true);
-    getSetupRequired()
-      .then((res) => {
-        if (res.setup_required) {
-          setFirstUser(true);
-          setView("register");
-        }
-        setDbConnectionFailed(false);
-      })
-      .catch(() => setDbConnectionFailed(true))
-      .finally(() => setDbHealthChecking(false));
+    attempt(0);
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, [desktopAutoSessionDone]);
 
   // A cold first launch spawns the embedded backend as a separate process
@@ -577,6 +638,72 @@ export function Auth({ onLogin }: AuthProps) {
         error?.response?.data?.error ||
           error?.message ||
           t("errors.unknownError"),
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handlePasskeyLogin() {
+    setLoading(true);
+    try {
+      const res = await loginWithPasskey(
+        username.trim() || undefined,
+        rememberMe,
+      );
+      if (res.requires_totp) {
+        setTotpTempToken(res.temp_token ?? "");
+        setView("totp");
+        return;
+      }
+      if (!res?.success) throw new Error(t("auth.passkeyLoginFailed"));
+      if (isInMobileWebView()) {
+        const token = res?.token ?? "";
+        (window as ExtendedWindow).ReactNativeWebView?.postMessage(
+          JSON.stringify({ type: "AUTH_SUCCESS", token }),
+        );
+        setWebviewAuthSuccess(true);
+        return;
+      }
+      if (isInElectronWebView()) {
+        // Same as handleLogin: the iframe never sends X-Electron-App, so read
+        // the JWT back from the cookie that was just set.
+        const token = res?.token ?? (await getCurrentToken());
+        window.parent.postMessage(
+          {
+            type: "AUTH_SUCCESS",
+            source: "passkey_auth_component",
+            platform: "desktop",
+            token: token ?? null,
+            timestamp: Date.now(),
+          },
+          "*",
+        );
+        setWebviewAuthSuccess(true);
+        return;
+      }
+      const meRes = await getUserInfo();
+      storeAuth(meRes.username || res.username || "");
+      toast.success(t("messages.loginSuccess"));
+      onLogin(
+        meRes.username || res.username || "",
+        meRes.userId || undefined,
+        !!meRes.is_admin,
+      );
+    } catch (err: unknown) {
+      const error = err as {
+        name?: string;
+        message?: string;
+        response?: { data?: { error?: string } };
+      };
+      // Closing or cancelling the browser prompt is not a failure worth a toast.
+      if (error?.name === "NotAllowedError" || error?.name === "AbortError") {
+        return;
+      }
+      toast.error(
+        error?.response?.data?.error ||
+          error?.message ||
+          t("auth.passkeyLoginFailed"),
       );
     } finally {
       setLoading(false);
@@ -1417,6 +1544,20 @@ export function Auth({ onLogin }: AuthProps) {
                           </Button>
                         );
                       })}
+                      {passkeySupported && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={handlePasskeyLogin}
+                          disabled={loading}
+                          className="w-full h-10 font-bold"
+                        >
+                          <span className="flex items-center gap-2">
+                            <Fingerprint className="size-4" />
+                            {t("auth.signInWithPasskey")}
+                          </span>
+                        </Button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1484,6 +1625,20 @@ export function Auth({ onLogin }: AuthProps) {
                         </span>
                       )}
                     </Button>
+                    {passkeySupported && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handlePasskeyLogin}
+                        disabled={loading}
+                        className="w-full h-10 font-bold"
+                      >
+                        <span className="flex items-center gap-2">
+                          <Fingerprint className="size-4" />
+                          {t("auth.signInWithPasskey")}
+                        </span>
+                      </Button>
+                    )}
                   </form>
                 )}
 

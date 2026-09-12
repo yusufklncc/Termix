@@ -2,8 +2,10 @@ import type { SSHHostWithStatus } from "@/main-axios";
 import type { Host, Credential } from "@/types/ui-types";
 
 type RawSSHHost = SSHHostWithStatus & {
+  hasPassword?: boolean;
   hasKey?: boolean;
   hasKeyPassword?: boolean;
+  hasSudoPassword?: boolean;
   hasRdpPassword?: boolean;
   hasVncPassword?: boolean;
   hasTelnetPassword?: boolean;
@@ -20,6 +22,9 @@ type RawCredential = {
   folder?: string | null;
   tags?: string[];
   publicKey?: string | null;
+  pin?: boolean | null;
+  sortOrder?: number | null;
+  certPublicKey?: string | null;
 };
 
 function parseJson<T>(v: unknown): T | undefined {
@@ -37,6 +42,8 @@ function parseJson<T>(v: unknown): T | undefined {
 export function sshHostToHost(h: SSHHostWithStatus): Host {
   const host = h as RawSSHHost;
   const isSshHost = h.connectionType === "ssh" || !h.connectionType;
+  const parsedTerminalConfig = parseJson(h.terminalConfig) as
+    (Host["terminalConfig"] & { sudoPassword?: string }) | undefined;
   return {
     id: String(h.id),
     name: h.name,
@@ -44,14 +51,21 @@ export function sshHostToHost(h: SSHHostWithStatus): Host {
     ip: h.ip,
     port: h.port,
     folder: h.folder ?? "",
+    parentHostId:
+      (h as { parentHostId?: number | string | null }).parentHostId != null
+        ? String((h as { parentHostId?: number | string }).parentHostId)
+        : null,
     online: h.status === "online",
+    status: h.status,
     cpu: null,
     ram: null,
     lastAccess: "",
     tags: h.tags ?? [],
+    syncId: h.syncId ?? null,
     authType: h.authType,
     shareSshAuth: h.shareSshAuth ?? false,
     password: h.password,
+    hasPassword: !!host.hasPassword || !!h.password,
     hasKey: !!host.hasKey || !!(typeof h.key === "string" && h.key),
     hasKeyPassword: !!host.hasKeyPassword || !!h.keyPassword,
     key: typeof h.key === "string" ? h.key : undefined,
@@ -64,6 +78,7 @@ export function sshHostToHost(h: SSHHostWithStatus): Host {
         : undefined,
     notes: h.notes,
     pin: h.pin ?? false,
+    sortOrder: h.sortOrder ?? null,
     macAddress: h.macAddress,
     wolBroadcastAddress: h.wolBroadcastAddress,
     enableSsh: h.enableSsh != null ? h.enableSsh : isSshHost,
@@ -74,9 +89,13 @@ export function sshHostToHost(h: SSHHostWithStatus): Host {
     enableTunnel: h.enableTunnel ?? false,
     enableFileManager: h.enableFileManager ?? true,
     enableDocker: h.enableDocker ?? false,
+    dockerConfig: h.dockerConfig ?? null,
     enableProxmox: h.enableProxmox ?? false,
+    enableProxmoxStats: h.enableProxmoxStats ?? false,
     enableTmuxMonitor: h.enableTmuxMonitor ?? false,
+    enableTerminalToolbar: h.enableTerminalToolbar ?? true,
     proxmoxConfig: h.proxmoxConfig ?? null,
+    proxmoxStatsConfig: h.proxmoxStatsConfig ?? null,
     enableRdp: h.enableRdp != null ? h.enableRdp : h.connectionType === "rdp",
     enableVnc: h.enableVnc != null ? h.enableVnc : h.connectionType === "vnc",
     enableTelnet:
@@ -131,7 +150,7 @@ export function sshHostToHost(h: SSHHostWithStatus): Host {
     streamUser: h.streamUser,
     streamPassword: h.streamPassword ?? "",
     hasStreamPassword: !!host.hasStreamPassword || !!h.streamPassword,
-    quickActions: (h.quickActions ?? []).map((a: HostQuickAction) => ({
+    quickActions: (h.quickActions ?? []).map((a) => ({
       name: a.name,
       snippetId: String(a.snippetId),
     })),
@@ -141,7 +160,9 @@ export function sshHostToHost(h: SSHHostWithStatus): Host {
     })),
     portKnockSequence: parseJson(h.portKnockSequence) ?? [],
     defaultPath: h.defaultPath,
-    terminalConfig: parseJson(h.terminalConfig) as Host["terminalConfig"],
+    terminalConfig: parsedTerminalConfig as Host["terminalConfig"],
+    hasSudoPassword:
+      !!host.hasSudoPassword || !!parsedTerminalConfig?.sudoPassword,
     statsConfig: parseJson(h.statsConfig) as Host["statsConfig"],
     guacamoleConfig: parseJson(h.guacamoleConfig),
     forceKeyboardInteractive: h.forceKeyboardInteractive ?? false,
@@ -186,5 +207,8 @@ export function mapCredentials(res: unknown): Credential[] {
     folder: c.folder ?? "",
     tags: c.tags ?? [],
     publicKey: c.publicKey ?? undefined,
+    pin: c.pin ?? false,
+    sortOrder: c.sortOrder ?? null,
+    certPublicKey: c.certPublicKey ?? undefined,
   }));
 }

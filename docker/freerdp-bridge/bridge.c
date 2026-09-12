@@ -61,11 +61,18 @@
  * Nothing downstream can take that: the browser tab stops answering, which
  * stops input, which looks exactly like a frozen session.
  *
- * So the dirty region is accumulated and paid out on a clock. Coalescing is
+ * So a large dirty region is accumulated and paid out on a clock. Coalescing is
  * why this is a delay rather than a loss -- two updates to the same pixels
  * before a flush cost one copy of them, and the viewer sees the later state.
+ *
+ * A small one is not worth delaying. A caret blinking, a character appearing,
+ * a menu highlight following the pointer: these are a few kilobytes, they are
+ * what the session feels like, and holding them back to protect a budget they
+ * do not threaten only adds latency. So the clock applies above a budget and
+ * not below it.
  */
 #define FALLBACK_FLUSH_MS 50u
+#define FLUSH_NOW_BYTES (192u * 1024u)
 #define MAX_TRACKED_SURFACES 8u
 
 typedef struct
@@ -305,6 +312,27 @@ static pcRdpgfxStartFrame gdi_StartFrameFn = NULL;
 static pcRdpgfxEndFrame gdi_EndFrameFn = NULL;
 static pcRdpgfxSurfaceCommand gdi_SurfaceCommandFn = NULL;
 
+/* What the pending region would cost as raw pixels, which is what decides
+ * whether it can go straight out or has to wait for the clock. */
+static UINT64 pending_bytes(const termixContext* ctx)
+{
+	UINT64 bytes = 0;
+	for (UINT32 i = 0; i < MAX_TRACKED_SURFACES; i++)
+	{
+		if (!ctx->pending[i].used)
+			continue;
+
+		UINT32 nbRects = 0;
+		const RECTANGLE_16* rects = region16_rects(&ctx->pending[i].region, &nbRects);
+		for (UINT32 r = 0; r < nbRects; r++)
+		{
+			bytes += (UINT64)(rects[r].right - rects[r].left) *
+			         (UINT64)(rects[r].bottom - rects[r].top) * 4u;
+		}
+	}
+	return bytes;
+}
+
 static BOOL has_pending_regions(const termixContext* ctx)
 {
 	for (UINT32 i = 0; i < MAX_TRACKED_SURFACES; i++)
@@ -315,6 +343,7 @@ static BOOL has_pending_regions(const termixContext* ctx)
 	return FALSE;
 }
 
+static UINT64 pending_bytes(const termixContext* ctx);
 static BOOL has_pending_regions(const termixContext* ctx);
 static void accumulate_invalid_regions(termixContext* ctx, RdpgfxClientContext* gfx);
 static void flush_pending_regions(termixContext* ctx, RdpgfxClientContext* gfx);
@@ -556,6 +585,36 @@ static UINT send_surface_rect(termixContext* ctx, RdpgfxClientContext* gfx, UINT
 	ctx->rectsSent++;
 	ctx->rectBytesRaw += total;
 
+	/* BRIDGE_DUMP_RECT writes the raw regions to a file, each behind its own
+	 * u16 width and height, so a compression strategy can be tried against
+	 * what a session actually sends rather than against a guess about it. Off
+	 * unless the path is set: this is the path that moves hundreds of
+	 * megabytes, and it would fill a disk. */
+	{
+		static FILE* dump = NULL;
+		static BOOL dumpTried = FALSE;
+		if (!dumpTried)
+		{
+			dumpTried = TRUE;
+			const char* path = getenv("BRIDGE_DUMP_RECT");
+			if (path && *path)
+			{
+				dump = fopen(path, "wb");
+				fprintf(stderr, "[%s] dumping regions to %s (%s)\n", TAG, path,
+				        dump ? "open" : "failed");
+				fflush(stderr);
+			}
+		}
+		if (dump)
+		{
+			BYTE geometry[4];
+			put_u16(geometry, (UINT16)width);
+			put_u16(geometry + 2, (UINT16)height);
+			fwrite(geometry, 1, sizeof(geometry), dump);
+			fwrite(payload + 10, 1, bytes, dump);
+		}
+	}
+
 	/*
 	 * Deflate, when it earns its place.
 	 *
@@ -690,7 +749,7 @@ static void flush_pending_regions(termixContext* ctx, RdpgfxClientContext* gfx)
 		return;
 
 	const UINT64 now = GetTickCount64();
-	if (now - ctx->lastFlushTick < FALLBACK_FLUSH_MS)
+	if (now - ctx->lastFlushTick < FALLBACK_FLUSH_MS && pending_bytes(ctx) >= FLUSH_NOW_BYTES)
 		return;
 	ctx->lastFlushTick = now;
 

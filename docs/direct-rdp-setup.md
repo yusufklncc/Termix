@@ -63,10 +63,11 @@ Hiçbiri zorunlu değil; hepsi teşhis ve A/B içindir.
 
 ## 2. Hedef makine (Windows)
 
-**Bu adımlar olmadan yol çalışmaz.** Kod tarafında telafisi yok: sunucu H.264
-üretmiyorsa taşınacak bir şey de yoktur.
+Bu adımlar olmadan oturum **açılır ve görüntü gelir**, ama yolun var olma
+sebebi ortadan kalkar: H.264 pass-through devre dışı kalır, decode köprüde
+yapılır.
 
-### Zorunlu: H.264'ü aç
+### Şart değil ama asıl mesele bu: H.264'ü aç
 
 `gpedit.msc` → Computer Configuration → Administrative Templates → Windows
 Components → Remote Desktop Services → Remote Desktop Session Host →
@@ -76,8 +77,17 @@ Components → Remote Desktop Services → Remote Desktop Session Host →
 
 Bu olmadan Windows masaüstü ClearCodec ve progressive ile çizer. Oturum kurulur,
 girdi çalışır, pano kanalı bağlanır — ama H.264 gelmez. Termix bu durumu fark
-eder ve köprüde decode etmeye düşer; çalışır ama yavaştır ve arayüzde bunu
-söyleyen bir bildirim çıkar.
+eder, köprüde decode edip ham piksel gönderir ve arayüzde kapatılabilir bir
+bildirim çıkarır.
+
+Fark ölçülebilir:
+
+|                | Politika açık   | Politika kapalı         |
+| -------------- | --------------- | ----------------------- |
+| Taşınan veri   | H.264 bitstream | Ham BGRA bölgeler       |
+| Sunucu CPU     | ~%4             | Belirgin şekilde yüksek |
+| Bant genişliği | ~3 Mbps         | ~10 kat fazla           |
+| Gecikme        | Düşük           | Gözle görülür           |
 
 ### Dokunma: donanım encode
 

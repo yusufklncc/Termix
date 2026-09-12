@@ -6,7 +6,7 @@ Aynı hedef, aynı iş yükü, aynı tarayıcı, arka arkaya iki oturum.
 
 |         |                                                                         |
 | ------- | ----------------------------------------------------------------------- |
-| Hedef   | Windows 11 laptop, `10.10.30.104:3389`, Wi-Fi                           |
+| Hedef   | Windows 11 laptop, `192.0.2.10:3389`, Wi-Fi                             |
 | İş yükü | TestUFO (sürekli hareket — en kötü durum)                               |
 | guacd   | `guacamole/guacd:1.6.0`, Docker, `localhost:4822`                       |
 | Köprü   | `termix-rdp-bridge:dev`, FreeRDP 3.17.1, Docker                         |

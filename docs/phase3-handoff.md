@@ -14,9 +14,9 @@ Takıldığımız nokta: sunucu grafik göndermeye başlamıyor.
 Son köprü logu:
 
 ```
-connecting to 10.10.30.104:3389 as 'yusuf' domain '' 2194x1250
+connecting to 192.0.2.10:3389 as '<user>' domain '' 2194x1250
 post_connect sent HELO 2194x1250
-connected to 10.10.30.104
+connected to 192.0.2.10
 graphics pipeline attached (gdi bookkeeping + avc420 passthrough)
 reset graphics 2194x1250
 ```
@@ -101,7 +101,7 @@ npm run dev:backend      # API 30001, direct RDP gateway 30014
 npm run dev              # http://localhost:5173
 ```
 
-- **Hedef:** `10.10.30.104:3389`, kullanıcı `yusuf`, Windows laptop, ekran 1920x1200 60 Hz
+- **Hedef:** `192.0.2.10:3389`, kullanıcı `<user>`, Windows laptop, ekran 1920x1200 60 Hz
 - **Host adı Termix'te:** "HUAWEI RDP", host id 2
 - Host editöründe **RDP sekmesi → Render Engine → Direct H.264** seçili olmalı
 - Kimlik bilgileri host'un RDP sekmesinde (General'daki `root` kullanıcı adı değil)

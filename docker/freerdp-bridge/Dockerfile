@@ -99,7 +99,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libgsm1 zlib1g libwebp7 ca-certificates libusb-1.0-0 libasound2t64 \
       ghostscript \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --no-create-home --shell /usr/sbin/nologin termix
+    && useradd --system --no-create-home --shell /usr/sbin/nologin termix \
+    && mkdir -p /tmp/termix-freerdp && chown termix:termix /tmp/termix-freerdp
 
 COPY --from=build /usr/local/lib/ /usr/local/lib/
 COPY --from=build /usr/local/bin/termix-rdp-bridge /usr/local/bin/termix-rdp-bridge

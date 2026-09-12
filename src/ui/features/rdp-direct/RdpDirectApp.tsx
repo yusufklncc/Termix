@@ -206,24 +206,16 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
         {state === "connected" && notices.length > 0 && (
           <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex flex-col gap-2 max-w-lg">
             {notices.map(({ key, text, action }) => (
+              /* Opaque on purpose. This sits over the remote desktop, which
+                 is whatever the viewer happens to be looking at -- a white
+                 page behind a translucent notice is a notice nobody can
+                 read. */
               <div
                 key={key}
-                className="flex items-start gap-2 rounded-md border px-3 py-2 shadow-md"
-                style={{
-                  backgroundColor: "var(--bg-elevated, var(--bg-base))",
-                  borderColor: "var(--border)",
-                }}
+                className="flex items-start gap-2 rounded-md border border-border bg-surface text-foreground px-3 py-2 shadow-md"
               >
-                <AlertCircle
-                  className="size-4 shrink-0 mt-0.5"
-                  style={{ color: "var(--foreground-secondary)" }}
-                />
-                <p
-                  className="text-xs leading-relaxed"
-                  style={{ color: "var(--foreground-secondary)" }}
-                >
-                  {text}
-                </p>
+                <AlertCircle className="size-4 shrink-0 mt-0.5 text-muted-foreground" />
+                <p className="text-xs leading-relaxed">{text}</p>
                 {action && (
                   <Button
                     variant="ghost"

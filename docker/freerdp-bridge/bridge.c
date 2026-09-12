@@ -183,6 +183,32 @@ static BOOL write_all(int fd, const void* buf, size_t len)
 	return TRUE;
 }
 
+/*
+ * The same loop for a file.
+ *
+ * write_all above sends on a socket, which is not a superset of writing to a
+ * file -- send() on a plain descriptor fails with ENOTSOCK. Reusing it to
+ * spool a print job wrote nothing, reported nothing, and left ghostscript to
+ * be blamed for an empty conversion it never performed.
+ */
+static BOOL write_file(int fd, const void* buf, size_t len)
+{
+	const BYTE* p = (const BYTE*)buf;
+	while (len > 0)
+	{
+		const ssize_t n = write(fd, p, len);
+		if (n <= 0)
+		{
+			if (n < 0 && errno == EINTR)
+				continue;
+			return FALSE;
+		}
+		p += n;
+		len -= (size_t)n;
+	}
+	return TRUE;
+}
+
 /* Frames are emitted from the FreeRDP thread while input arrives on another,
  * so every writer takes the same lock. */
 static BOOL wire_send(termixContext* ctx, const char magic[4], const void* payload, UINT32 length)
@@ -752,7 +778,11 @@ static BYTE* convert_to_pdf(const BYTE* postscript, size_t size, size_t* pdfSize
 
 	const int inFd = mkstemp(inPath);
 	if (inFd < 0)
+	{
+		fprintf(stderr, "[%s] could not open a spool file: %s\n", TAG, strerror(errno));
+		fflush(stderr);
 		return NULL;
+	}
 	const int outFd = mkstemp(outPath);
 	if (outFd < 0)
 	{
@@ -762,17 +792,33 @@ static BYTE* convert_to_pdf(const BYTE* postscript, size_t size, size_t* pdfSize
 	}
 	close(outFd);
 
-	if (!write_all(inFd, postscript, size))
+	if (!write_file(inFd, postscript, size))
 	{
+		fprintf(stderr, "[%s] could not spool the print job: %s\n", TAG, strerror(errno));
+		fflush(stderr);
 		close(inFd);
 		goto done;
 	}
 	close(inFd);
 
 	{
+		/*
+		 * Waiting for this child needs SIGCHLD back for the duration.
+		 *
+		 * The accept loop ignores it so that finished sessions are reaped without
+		 * anyone asking, and under SIG_IGN waitpid cannot report a status -- it
+		 * waits, then fails with ECHILD. Ghostscript converted the job perfectly
+		 * and was pronounced a failure on the strength of that.
+		 */
+		void (*previous)(int) = signal(SIGCHLD, SIG_DFL);
 		const pid_t pid = fork();
 		if (pid < 0)
+		{
+			fprintf(stderr, "[%s] could not start ghostscript: %s\n", TAG, strerror(errno));
+			fflush(stderr);
+			(void)signal(SIGCHLD, previous);
 			goto done;
+		}
 
 		if (pid == 0)
 		{
@@ -780,13 +826,25 @@ static BYTE* convert_to_pdf(const BYTE* postscript, size_t size, size_t* pdfSize
 			 * wire. Everything it has to say goes to stderr with the rest of the
 			 * logging. */
 			(void)dup2(STDERR_FILENO, STDOUT_FILENO);
-			execlp("gs", "gs", "-q", "-dNOPAUSE", "-dBATCH", "-dSAFER", "-sDEVICE=pdfwrite",
-			       "-sOutputFile", outPath, inPath, (char*)NULL);
+
+			/* One argument, not two. Ghostscript reads -sOutputFile=<path> as a
+			 * single token; split, it never learns where to write, exits cleanly
+			 * and produces nothing. */
+			char outArg[sizeof(outPath) + 16];
+			(void)snprintf(outArg, sizeof(outArg), "-sOutputFile=%s", outPath);
+			execlp("gs", "gs", "-q", "-dNOPAUSE", "-dBATCH", "-dSAFER", "-sDEVICE=pdfwrite", outArg,
+			       inPath, (char*)NULL);
 			_exit(127);
 		}
 
 		int status = 0;
-		if (waitpid(pid, &status, 0) < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		const pid_t waited = waitpid(pid, &status, 0);
+		(void)signal(SIGCHLD, previous);
+
+		/* ECHILD means something else reaped it, which is not the same as
+		 * failing. The converted file is the real answer either way, so the only
+		 * status worth refusing on is one we actually saw. */
+		if (waited == pid && (!WIFEXITED(status) || WEXITSTATUS(status) != 0))
 		{
 			fprintf(stderr, "[%s] ghostscript could not convert the print job (status %d)\n", TAG,
 			        status);
@@ -798,11 +856,20 @@ static BYTE* convert_to_pdf(const BYTE* postscript, size_t size, size_t* pdfSize
 	{
 		FILE* out = fopen(outPath, "rb");
 		if (!out)
+		{
+			fprintf(stderr, "[%s] could not read the converted job: %s\n", TAG, strerror(errno));
+			fflush(stderr);
 			goto done;
+		}
 
 		fseek(out, 0, SEEK_END);
 		const long length = ftell(out);
 		fseek(out, 0, SEEK_SET);
+		if (length <= 0)
+		{
+			fprintf(stderr, "[%s] ghostscript exited cleanly and wrote nothing\n", TAG);
+			fflush(stderr);
+		}
 		if (length > 0 && (size_t)length <= MAX_PRINT_JOB_BYTES)
 		{
 			pdf = (BYTE*)malloc((size_t)length);
@@ -1629,6 +1696,19 @@ static BOOL tx_pre_connect(freerdp* instance)
 	 * printer under the name of a PostScript driver and hands the job here
 	 * instead of to a queue. BRIDGE_PRINTER=1 asks for it.
 	 */
+	/*
+	 * Somewhere writable to keep per-printer settings.
+	 *
+	 * The printer channel saves each printer's name and driver under
+	 * FreeRDP_ConfigPath before it will register the device, and it creates the
+	 * directory to do so. That defaults under the user's home, and this
+	 * container's user deliberately has none -- so the save failed, and it fails
+	 * without logging anything, which is how a missing home directory came to
+	 * present itself as "the connection could not be made".
+	 */
+	if (!freerdp_settings_set_string(settings, FreeRDP_ConfigPath, "/tmp/termix-freerdp"))
+		return FALSE;
+
 	const char* printerEnv = getenv("BRIDGE_PRINTER");
 	/* Asking for a printer whose driver is missing does not fail the printer --
 	 * it fails rdpdr, which takes the whole connection with it. Checking first

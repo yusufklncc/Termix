@@ -96,6 +96,17 @@ export function HostEditorStreamTab({
         icon={<Globe className="size-3.5" />}
       >
         <div className="flex flex-col gap-4 py-3">
+          {/* A stream host is the odd one out -- Termix speaks no protocol here
+              and only embeds someone else's. Saying so where the fields are is
+              what keeps it from looking like a broken RDP. */}
+          <div className="flex flex-col gap-2 border border-border bg-muted/10 p-3">
+            <p className="text-[10px] text-muted-foreground">
+              {t("hosts.stream.whatItIs")}
+            </p>
+            <p className="text-[10px] text-muted-foreground/70">
+              {t("hosts.stream.notAProtocol")}
+            </p>
+          </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               {t("hosts.stream.url")}

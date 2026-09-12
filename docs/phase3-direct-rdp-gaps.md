@@ -85,7 +85,7 @@ tamamına açılırsa **Faz 1'in embed modu kırılır.**
 
 Kaçış yolu var: video için `SharedArrayBuffer` gerekmiyor. Yalnızca
 
-- progressive/ClearCodec WASM decoder'ı (AVC420 zorlarsak gerekmez)
+- progressive/ClearCodec WASM decoder'ı (AVC420 zorlarsak gerekmez) — **ölçüldü ve kapatıldı:** içeriğe göre kalite sonrası kazanç 1.25x'e indi, bkz. [`phase3-measurements.md`](phase3-measurements.md)
 - AudioWorklet ring buffer (sesi ilk sürümde kapsam dışı bırakırsak gerekmez)
 
 Yani **ilk prototipte ses ve progressive codec kapsam dışı bırakılırsa COOP/COEP

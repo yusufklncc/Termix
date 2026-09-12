@@ -221,3 +221,67 @@ içerik üretiyor ve rakamı düşürüyor.
 - LAN / WAN ayrımı
 - Guacamole ile karşılaştırma → Faz 4
 - 60 fps'teki ara düşüşlerin (42 – 49) sebebi
+
+---
+
+## Piksel yolunun bant genişliği (H.264 politikası kapalı)
+
+Windows "Prioritize H.264/AVC 444" olmadan karma çalışıyor: ekranın video
+benzeri kısmını H.264 ile, geri kalanını ClearCodec ve progressive ile
+çiziyor. İkincisini köprü decode ediyor ve piksel olarak gönderiyor — bu
+yolun pahalı yarısı. Ölçümler aynı host'ta (Toshiba, 850x1338), her biri
+yaklaşık bir dakikalık gerçek kullanım.
+
+| Aşama                               |      Oran | Gönderilen |
+| ----------------------------------- | --------: | ---------: |
+| Ham RGBA (başlangıç)                |      1.0x |    ~580 MB |
+| deflate level 1                     |      2.3x |    ~252 MB |
+| WebP lossless                       |      4.1x |    ~141 MB |
+| WebP, içeriğe göre kayıplı/kayıpsız | **14.2x** |  **41 MB** |
+
+Son satırda 6618 bölgenin yalnızca **586'sı** (%8.9) resim sayılıp kayıplı
+gitti — ama baytların ezici çoğunluğunu onlar taşıyordu. Metinde gözle görülür
+bir bozulma raporlanmadı.
+
+Sıkıştırma seçimi tahminle değil, gerçek bir oturumun 993 MB'lık bölge
+dökümüyle yapıldı (`BRIDGE_DUMP_RECT`):
+
+| Yöntem            | Oran  | Süre (bölge başına) |
+| ----------------- | ----- | ------------------- |
+| deflate level 1   | 2.5x  | 0.75 ms             |
+| deflate level 6   | 2.7x  | 2.06 ms             |
+| PNG               | 3.2x  | 4.32 ms             |
+| WebP lossless m=0 | 4.3x  | 0.63 ms             |
+| WebP lossy q=90   | 15.6x | 0.72 ms             |
+| WebP lossy q=75   | 23.7x | 0.55 ms             |
+
+WebP lossless bir takas değil: deflate'ten hem iyi sıkıştırıyor hem ucuz.
+Sebebi kestiricilerinin resim için tasarlanmış olması; deflate metin olmayan
+bir veride tekrar eden bayt dizileri arıyor.
+
+### Kapanan soru: kodekleri tarayıcıda decode etmek
+
+Fikir, ClearCodec ve progressive bitstream'lerini hiç açmadan tarayıcıya
+geçirmek ve orada FreeRDP'nin decoder'larını WASM olarak çalıştırmaktı.
+Kazancın üst sınırı, bu bitstream'lerin decode edilmeden önceki ağırlığı —
+`codec mix` satırı artık onu da yazıyor.
+
+Aynı oturumda:
+
+```
+clearcodec   2686 komut →  6.3 MB
+progressive   892 komut → 26.5 MB
+                          ────────
+                           32.8 MB   bitstream
+                           40.9 MB   şu an gönderdiğimiz piksel
+```
+
+Yani **1.25x.** WebP'den önce ölçüldüğünde 4.2x çıkıyordu ve o zaman bile
+sınırdaydı; içeriğe göre kalite devreye girince kazanç ölçüm hatası
+seviyesine indi.
+
+FreeRDP'nin codec modülünü ve winpr'ın bir alt kümesini emscripten ile
+derlemek, üstüne GFX yüzey modelini (cache slotları, SolidFill,
+SurfaceToSurface, CacheToSurface) tarayıcıda yeniden kurmak ve bunu kalıcı
+olarak bakmak — %25 için. **Yapılmayacak.** Ucuz olan çözüm pahalı olanı
+gereksiz kıldı.

@@ -54,6 +54,13 @@
 #define DEFAULT_PORT 3390
 #define MAX_FRAME_PAYLOAD (16u * 1024u * 1024u)
 
+/* Past this a print job is a runaway rather than a document, and holding
+ * it would make the printer's problem the bridge's memory. */
+#define MAX_PRINT_JOB_BYTES (256u * 1024u * 1024u)
+
+/* A PDF is routinely larger than one wire frame, so it goes in pieces. */
+#define PRINT_CHUNK_BYTES (4u * 1024u * 1024u)
+
 /*
  * How often the fallback may paint, and how many surfaces it tracks while it
  * waits.
@@ -123,6 +130,14 @@ typedef struct
 	UINT64 rectBytesRaw;
 	UINT64 rectBytesSent;
 	UINT64 audioBytes;
+
+	/* The print job being collected, if any. PostScript on the way in, a PDF on
+	 * the way out; see termix_print_write. */
+	BYTE* printJob;
+	size_t printJobSize;
+	size_t printJobCapacity;
+	unsigned printJobId;
+	UINT32 printJobsSent;
 
 	/* What the fallback still owes the viewer, and when it last paid. */
 	pendingSurface pending[MAX_TRACKED_SURFACES];
@@ -653,6 +668,208 @@ static BOOL region_is_picture(const BYTE* rgba, UINT32 width, UINT32 height)
  * itself without a separate announcement to miss, and a recording that still
  * knows how to play its audio years later.
  */
+/*
+ * A print job, on its way to becoming a file the viewer can open.
+ *
+ * Called from FreeRDP's printer driver -- see printer_termix.c. What arrives
+ * is PostScript, because the printer is announced to Windows under the name of
+ * a PostScript driver, and nothing in a browser can open PostScript. So the
+ * job is collected and handed to ghostscript when it closes.
+ *
+ * Collected rather than streamed because that is what the conversion needs: a
+ * PDF is written back to front, with its cross-reference table at the end, so
+ * there is nothing to send until the whole job has been converted.
+ */
+static void print_job_reset(termixContext* ctx)
+{
+	free(ctx->printJob);
+	ctx->printJob = NULL;
+	ctx->printJobSize = 0;
+	ctx->printJobCapacity = 0;
+	ctx->printJobId = 0;
+}
+
+void termix_print_write(unsigned job, const void* data, size_t size)
+{
+	termixContext* ctx = g_session;
+	if (!ctx || !data || size == 0)
+		return;
+
+	/* A new id means the previous job never closed. Keeping its bytes would
+	 * splice two documents into one. */
+	if (ctx->printJob && ctx->printJobId != job)
+		print_job_reset(ctx);
+	ctx->printJobId = job;
+
+	if (ctx->printJobSize + size > MAX_PRINT_JOB_BYTES)
+	{
+		if (ctx->printJobSize <= MAX_PRINT_JOB_BYTES)
+		{
+			fprintf(stderr, "[%s] print job %u exceeds %u MB; dropping it\n", TAG, job,
+			        MAX_PRINT_JOB_BYTES / (1024u * 1024u));
+			fflush(stderr);
+		}
+		/* Marked past the limit so the rest of the job is discarded in silence
+		 * rather than warning once per chunk. */
+		ctx->printJobSize = MAX_PRINT_JOB_BYTES + 1;
+		return;
+	}
+
+	if (ctx->printJobSize + size > ctx->printJobCapacity)
+	{
+		size_t capacity = ctx->printJobCapacity ? ctx->printJobCapacity * 2 : 256u * 1024u;
+		while (capacity < ctx->printJobSize + size)
+			capacity *= 2;
+		BYTE* grown = (BYTE*)realloc(ctx->printJob, capacity);
+		if (!grown)
+		{
+			print_job_reset(ctx);
+			return;
+		}
+		ctx->printJob = grown;
+		ctx->printJobCapacity = capacity;
+	}
+
+	memcpy(ctx->printJob + ctx->printJobSize, data, size);
+	ctx->printJobSize += size;
+}
+
+/*
+ * Converts the collected job and sends it.
+ *
+ * ghostscript is spawned rather than linked: it is a large program with a
+ * licence of its own, and a crash in it should cost a print job rather than
+ * the session. Temporary files rather than pipes because pdfwrite seeks
+ * around its output as it builds the cross-reference table, which a pipe
+ * cannot do.
+ */
+static BYTE* convert_to_pdf(const BYTE* postscript, size_t size, size_t* pdfSize)
+{
+	char inPath[] = "/tmp/termix-print-XXXXXX";
+	char outPath[] = "/tmp/termix-print-XXXXXX";
+	BYTE* pdf = NULL;
+	*pdfSize = 0;
+
+	const int inFd = mkstemp(inPath);
+	if (inFd < 0)
+		return NULL;
+	const int outFd = mkstemp(outPath);
+	if (outFd < 0)
+	{
+		close(inFd);
+		unlink(inPath);
+		return NULL;
+	}
+	close(outFd);
+
+	if (!write_all(inFd, postscript, size))
+	{
+		close(inFd);
+		goto done;
+	}
+	close(inFd);
+
+	{
+		const pid_t pid = fork();
+		if (pid < 0)
+			goto done;
+
+		if (pid == 0)
+		{
+			/* Ghostscript is chatty on stdout and this process's stdout is the
+			 * wire. Everything it has to say goes to stderr with the rest of the
+			 * logging. */
+			(void)dup2(STDERR_FILENO, STDOUT_FILENO);
+			execlp("gs", "gs", "-q", "-dNOPAUSE", "-dBATCH", "-dSAFER", "-sDEVICE=pdfwrite",
+			       "-sOutputFile", outPath, inPath, (char*)NULL);
+			_exit(127);
+		}
+
+		int status = 0;
+		if (waitpid(pid, &status, 0) < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+		{
+			fprintf(stderr, "[%s] ghostscript could not convert the print job (status %d)\n", TAG,
+			        status);
+			fflush(stderr);
+			goto done;
+		}
+	}
+
+	{
+		FILE* out = fopen(outPath, "rb");
+		if (!out)
+			goto done;
+
+		fseek(out, 0, SEEK_END);
+		const long length = ftell(out);
+		fseek(out, 0, SEEK_SET);
+		if (length > 0 && (size_t)length <= MAX_PRINT_JOB_BYTES)
+		{
+			pdf = (BYTE*)malloc((size_t)length);
+			if (pdf && fread(pdf, 1, (size_t)length, out) == (size_t)length)
+				*pdfSize = (size_t)length;
+			else
+			{
+				free(pdf);
+				pdf = NULL;
+			}
+		}
+		fclose(out);
+	}
+
+done:
+	unlink(inPath);
+	unlink(outPath);
+	return pdf;
+}
+
+void termix_print_close(unsigned job)
+{
+	termixContext* ctx = g_session;
+	if (!ctx)
+		return;
+
+	if (!ctx->printJob || ctx->printJobSize == 0 || ctx->printJobSize > MAX_PRINT_JOB_BYTES)
+	{
+		print_job_reset(ctx);
+		return;
+	}
+
+	size_t pdfSize = 0;
+	BYTE* pdf = convert_to_pdf(ctx->printJob, ctx->printJobSize, &pdfSize);
+	fprintf(stderr, "[%s] print job %u: %zu bytes of postscript -> %zu bytes of pdf\n", TAG, job,
+	        ctx->printJobSize, pdfSize);
+	fflush(stderr);
+	print_job_reset(ctx);
+
+	if (!pdf || pdfSize == 0)
+		return;
+
+	/*
+	 * In pieces, with the id in front of each, so the browser can reassemble a
+	 * document larger than a wire frame. Flag 0 opens, 1 carries, 2 closes.
+	 */
+	BYTE header[8];
+	put_u32(header, (UINT32)job);
+
+	char name[64];
+	const int nameLength =
+	    snprintf(name, sizeof(name), "print-%u.pdf", ++ctx->printJobsSent);
+	put_u32(header + 4, 0);
+	wire_send_parts(ctx, "PRNJ", header, sizeof(header), name, (size_t)nameLength);
+
+	for (size_t at = 0; at < pdfSize; at += PRINT_CHUNK_BYTES)
+	{
+		const size_t piece = pdfSize - at < PRINT_CHUNK_BYTES ? pdfSize - at : PRINT_CHUNK_BYTES;
+		put_u32(header + 4, 1);
+		wire_send_parts(ctx, "PRNJ", header, sizeof(header), pdf + at, piece);
+	}
+
+	put_u32(header + 4, 2);
+	wire_send_parts(ctx, "PRNJ", header, sizeof(header), NULL, 0);
+	free(pdf);
+}
+
 void termix_audio_sink(const void* pcm, size_t bytes, unsigned rate, unsigned channels,
                        unsigned bits)
 {
@@ -1401,6 +1618,28 @@ static BOOL tx_pre_connect(freerdp* instance)
 			/* Not fatal. A session without sound is a session; refusing to connect
 			 * because of it would trade the whole desktop for the audio. */
 			fprintf(stderr, "[%s] could not enable audio; continuing without it\n", TAG);
+			fflush(stderr);
+		}
+	}
+
+	/*
+	 * Printing, to a file rather than to paper.
+	 *
+	 * "termix" resolves to libprinter-client-termix.so, which announces one
+	 * printer under the name of a PostScript driver and hands the job here
+	 * instead of to a queue. BRIDGE_PRINTER=0 leaves it unasked for.
+	 */
+	const char* printerEnv = getenv("BRIDGE_PRINTER");
+	if (!(printerEnv && printerEnv[0] == '0'))
+	{
+		/* Name, then driver. The backend is the half after the colon, which the
+		 * channel strips before telling Windows what driver it is talking to --
+		 * and what Windows is told decides whether the job arrives as PostScript
+		 * or as XPS this side could not read. */
+		const char* args[] = { "printer", "Termix", "MS Publisher Imagesetter:termix" };
+		if (!freerdp_client_add_device_channel(settings, ARRAYSIZE(args), args))
+	{
+			fprintf(stderr, "[%s] could not enable printing; continuing without it\n", TAG);
 			fflush(stderr);
 		}
 	}

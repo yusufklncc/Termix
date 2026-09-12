@@ -11,6 +11,7 @@ import {
   RdpFrameReader,
 } from "./rdp-wire.ts";
 import { createRdpRenderer } from "./rdp-render.ts";
+import type { PrintedDocument } from "./rdp-print.ts";
 import {
   PTR_FLAGS_DOWN,
   PTR_FLAGS_MOVE,
@@ -74,6 +75,8 @@ export interface RdpDirectOptions {
    * fallback is carrying the picture.
    */
   onNotice?(code: string): void;
+  /** A document the remote desktop printed, ready to save. */
+  onPrinted?(document: PrintedDocument): void;
 }
 
 export interface RdpDirectHandle {
@@ -103,6 +106,7 @@ export function connectRdpDirect({
   onStats,
   onKeyboardLock,
   onNotice,
+  onPrinted,
 }: RdpDirectOptions): RdpDirectHandle {
   const base = buildRdpDirectUrl({
     isDev: import.meta.env.DEV,
@@ -135,7 +139,7 @@ export function connectRdpDirect({
   const offscreen = canvas.transferControlToOffscreen();
   worker.postMessage({ type: "init", canvas: offscreen }, [offscreen]);
 
-  const renderer = createRdpRenderer({ worker, surface, onResize });
+  const renderer = createRdpRenderer({ worker, surface, onResize, onPrinted });
 
   // A browser will not start audio until the page has been interacted with.
   // The click that focuses the session is that interaction, so the first one

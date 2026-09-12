@@ -5,8 +5,9 @@
 # in the Termix one: only deployments that opt into the direct RDP path pay for
 # the build, exactly as guacd is optional today.
 #
-# Drive/serial redirection are switched off: drive redirection needs FUSE and
-# neither is in scope.
+# Drive and serial redirection are switched off: drive redirection needs FUSE,
+# and Termix's own file manager already reaches these hosts. Printing is on --
+# there is no other way to get a document out of a remote desktop.
 #
 # ALSA and PulseAudio are off too, and that one is not a size decision. This
 # container has no sound card and must never look for one: remote audio is
@@ -49,7 +50,6 @@ RUN cmake -GNinja -S FreeRDP -B build \
       -DWITH_MANPAGES=OFF \
       -DWITH_FUSE=OFF \
       -DCHANNEL_DRIVE=OFF \
-      -DCHANNEL_PRINTER=OFF \
       -DCHANNEL_PARALLEL=OFF \
       -DCHANNEL_SERIAL=OFF \
     && cmake --build build --parallel \
@@ -59,6 +59,12 @@ RUN cmake -GNinja -S FreeRDP -B build \
 # browser rather than a sound card, and a device plugin is the supported place
 # to intercept it -- the static addins built into the library are tried first
 # and this is the fallback the loader reaches for "termix".
+COPY printer_termix.c /src/bridge/printer_termix.c
+RUN mkdir -p /usr/local/lib/freerdp3 \
+    && gcc -O2 -Wall -Wextra -fPIC -shared \
+      -o /usr/local/lib/freerdp3/libprinter-client-termix.so /src/bridge/printer_termix.c \
+      $(pkg-config --cflags freerdp3 winpr3)
+
 COPY rdpsnd_termix.c /src/bridge/rdpsnd_termix.c
 RUN mkdir -p /usr/local/lib/freerdp3 \
     && gcc -O2 -Wall -Wextra -fPIC -shared \
@@ -78,6 +84,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libssl3t64 libavcodec60 libavutil58 libswscale7 libcjson1 libkrb5-3 \
       libgsm1 zlib1g libwebp7 ca-certificates libusb-1.0-0 libasound2t64 \
+      ghostscript \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --no-create-home --shell /usr/sbin/nologin termix
 

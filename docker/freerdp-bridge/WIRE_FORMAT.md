@@ -148,6 +148,40 @@ u16 width, u16 height
 RGBA piksel verisi   (width * height * 4 bayt)
 ```
 
+## `PRNJ` — uzak masaüstünde yazdırılan belge
+
+```
+u32 jobId
+u32 flag              0 = başlangıç, 1 = veri, 2 = bitiş
+payload               başlangıçta dosya adı (UTF-8), veride PDF baytları,
+                      bitişte boş
+```
+
+Parçalı, çünkü bir belge çoğu zaman tek bir wire çerçevesinden büyük. Tarayıcı
+parçaları birleştiriyor ve yalnızca iş kapandığında kullanıcıya sunuyor: yarım
+bir PDF daha küçük bir PDF değil, çapraz referans tablosu sonda olduğu için
+hiçbir işe yaramaz.
+
+FreeRDP yazdırmayı bir sürücü eklentisiyle yönlendiriyor ve kendi gönderdiği
+eklenti işi CUPS'a veriyor — yani istemciyi çalıştıran makinedeki bir kuyruğa,
+kâğıda bağlı. Bu bağlantının yanlış ucu: yazdır'a basan kişi bir tarayıcıda ve
+geri istediği şey bir dosya. `libprinter-client-termix.so` tek bir yazıcı
+duyuruyor ve işi kuyruğa değil köprüye veriyor.
+
+Gelen şey **PostScript**, çünkü yazıcı Windows'a bir PostScript sürücüsünün
+adıyla ("MS Publisher Imagesetter") duyuruluyor ve Windows konuştuğunu
+sandığı şeye göre render ediyor. Aynı numarayı FreeRDP'nin kendi CUPS
+backend'i de, ondan önce Guacamole da kullanıyor. Alternatifi XPS olurdu ve
+onu bu tarafta okumak .NET gerektirirdi.
+
+PostScript'i tarayıcıda açabilecek bir şey olmadığı için köprü işi toplayıp
+kapanışta ghostscript'e veriyor. Toplayarak, çünkü dönüşümün ihtiyacı bu: PDF
+sondan başa yazılıyor, yani iş bitmeden gönderilecek bir şey yok. ghostscript
+ayrı bir süreç olarak çalıştırılıyor — kendi lisansı olan büyük bir program ve
+oradaki bir çökme oturuma değil yalnızca o yazdırma işine mal olmalı.
+
+`BRIDGE_PRINTER=0` kanalı hiç istemez.
+
 ## `SNDA` — uzak ses
 
 ```

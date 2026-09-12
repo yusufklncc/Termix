@@ -60,6 +60,7 @@ Hiçbiri zorunlu değil; hepsi teşhis ve A/B içindir.
 | `BRIDGE_RECT_QUALITY`    | içeriğe göre | _Her_ bölgeyi bu WebP kalitesinde encode eder (1-100). 24 kata kadar küçültür, metni bulanıklaştırır         |
 | `BRIDGE_RECT_LOSSLESS`   | `0`          | `1` ise resim benzeri bölgeler de kayıpsız kalır                                                             |
 | `BRIDGE_AUDIO`           | `1`          | `0` ise ses kanalı hiç istenmez                                                                              |
+| `BRIDGE_PRINTER`         | `1`          | `0` ise yazıcı kanalı hiç istenmez                                                                           |
 | `BRIDGE_DUMP_RECT`       | kapalı       | Ham bölgeleri dosyaya yazar. Sıkıştırma stratejisini gerçek veriyle ölçmek için                              |
 | `BRIDGE_DUMP_AVC`        | kapalı       | İletilen bitstream'i dosyaya yazar. Tarayıcı bir akışı reddettiğinde `ffprobe`'a sormak için                 |
 

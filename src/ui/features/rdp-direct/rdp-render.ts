@@ -1,5 +1,6 @@
 import { readHelo, type RdpFrame } from "./rdp-wire.ts";
 import { createRdpAudio, type RdpAudio } from "./rdp-audio.ts";
+import { createPrintCollector, type PrintedDocument } from "./rdp-print.ts";
 
 /**
  * The half of the session that is only pictures.
@@ -30,11 +31,16 @@ export function createRdpRenderer({
   worker,
   surface,
   onResize,
+  onPrinted,
 }: {
   worker: Worker;
   surface: RdpRenderSurface;
   onResize?: (width: number, height: number) => void;
+  /** A document the remote desktop printed, finished and ready to save. */
+  onPrinted?: (document: PrintedDocument) => void;
 }): RdpRenderer {
+  const printing = createPrintCollector();
+
   // Opened on the first chunk that arrives, so a session without sound never
   // builds an audio graph and never asks the browser for permission to.
   let audio: RdpAudio | null = null;
@@ -129,6 +135,12 @@ export function createRdpRenderer({
         case "CURD":
           surface.style.cursor = "default";
           return true;
+
+        case "PRNJ": {
+          const document = printing.handle(frame.payload);
+          if (document) onPrinted?.(document);
+          return true;
+        }
 
         case "SNDA": {
           // Rate, channels and bits ride in front of every chunk, so nothing

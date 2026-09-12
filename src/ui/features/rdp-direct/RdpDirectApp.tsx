@@ -11,6 +11,33 @@ import { Button } from "@/components/button.tsx";
 import { SimpleLoader } from "@/lib/SimpleLoader.tsx";
 import { logActivity } from "@/main-axios.ts";
 import { statsLogger } from "@/lib/frontend-logger";
+import type { PrintedDocument } from "@/features/rdp-direct/rdp-print.ts";
+
+interface Notice {
+  key: string;
+  text: string;
+  action?: { label: string; run: () => void };
+}
+
+/**
+ * Hands a printed document to the browser's own save dialog.
+ *
+ * The object URL is released on the next turn rather than immediately: the
+ * click has only been queued when this returns, and revoking before the
+ * browser reads it cancels the download.
+ */
+function saveDocument(document_: PrintedDocument) {
+  const url = URL.createObjectURL(
+    new Blob([document_.bytes], { type: "application/pdf" }),
+  );
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = document_.name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 import {
   connectRdpDirect,
   type RdpDirectHandle,
@@ -49,6 +76,10 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
     const [shortcutsEscape, setShortcutsEscape] = useState(false);
     const [noticeCode, setNoticeCode] = useState<string | null>(null);
     const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+    /* Documents the remote desktop printed, waiting to be saved. Kept until
+       the viewer acts on them: a print that scrolls away unnoticed is a print
+       that was lost, and they cannot be asked for again. */
+    const [printed, setPrinted] = useState<PrintedDocument[]>([]);
 
     const dismiss = useCallback(
       (key: string) => setDismissed((prev) => new Set(prev).add(key)),
@@ -91,6 +122,7 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
             );
           },
           onNotice: setNoticeCode,
+          onPrinted: (document) => setPrinted((queue) => [...queue, document]),
           onStats: (stats) => {
             statsLogger.info(
               `Direct RDP painted ${stats.fps.toFixed(1)} fps ` +
@@ -151,10 +183,15 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
       noticeCode === "server-decode"
         ? { key: "server-decode", text: t("rdpDirect.serverDecode") }
         : null,
-    ].filter(
-      (n): n is { key: string; text: string } =>
-        n !== null && !dismissed.has(n.key),
-    );
+      ...printed.map((document, index) => ({
+        key: `print-${index}-${document.name}`,
+        text: t("rdpDirect.printed", { name: document.name }),
+        action: {
+          label: t("rdpDirect.save"),
+          run: () => saveDocument(document),
+        },
+      })),
+    ].filter((n): n is Notice => n !== null && !dismissed.has(n.key));
 
     return (
       <div
@@ -168,7 +205,7 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
             happened, or is about to, and is worth reading at leisure. */}
         {state === "connected" && notices.length > 0 && (
           <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 flex flex-col gap-2 max-w-lg">
-            {notices.map(({ key, text }) => (
+            {notices.map(({ key, text, action }) => (
               <div
                 key={key}
                 className="flex items-start gap-2 rounded-md border px-3 py-2 shadow-md"
@@ -187,6 +224,16 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
                 >
                   {text}
                 </p>
+                {action && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 -mt-0.5 shrink-0"
+                    onClick={action.run}
+                  >
+                    {action.label}
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="sm"

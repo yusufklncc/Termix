@@ -51,6 +51,29 @@
 #define DEFAULT_PORT 3390
 #define MAX_FRAME_PAYLOAD (16u * 1024u * 1024u)
 
+/*
+ * How often the fallback may paint, and how many surfaces it tracks while it
+ * waits.
+ *
+ * Raw pixels are enormous -- a full-screen update on a 850x1338 desktop is
+ * 4.5 MB, and a server redrawing at 30 Hz would ask this path for 136 MB/s.
+ * Nothing downstream can take that: the browser tab stops answering, which
+ * stops input, which looks exactly like a frozen session.
+ *
+ * So the dirty region is accumulated and paid out on a clock. Coalescing is
+ * why this is a delay rather than a loss -- two updates to the same pixels
+ * before a flush cost one copy of them, and the viewer sees the later state.
+ */
+#define FALLBACK_FLUSH_MS 50u
+#define MAX_TRACKED_SURFACES 8u
+
+typedef struct
+{
+	UINT16 id;
+	BOOL used;
+	REGION16 region;
+} pendingSurface;
+
 typedef struct
 {
 	rdpContext context;
@@ -80,6 +103,10 @@ typedef struct
 
 	UINT32 cursorsSent;
 	UINT32 rectsSent;
+
+	/* What the fallback still owes the viewer, and when it last paid. */
+	pendingSurface pending[MAX_TRACKED_SURFACES];
+	UINT64 lastFlushTick;
 	/* Set when the browser reports it cannot decode this stream. From then on
 	 * the GDI decodes everything and pixels are sent instead. */
 	BOOL serverDecode;
@@ -483,11 +510,20 @@ static UINT send_surface_rect(termixContext* ctx, RdpgfxClientContext* gfx, UINT
 	put_u16(payload + 6, (UINT16)width);
 	put_u16(payload + 8, (UINT16)height);
 
-	const UINT32 bpp = FreeRDPGetBytesPerPixel(surface->format);
-	for (UINT32 y = 0; y < height; y++)
+	/*
+	 * RGBA, which is what an ImageData holds.
+	 *
+	 * Sending the surface's own byte order instead would make the browser swap
+	 * channels for every pixel in a JavaScript loop -- four million writes for
+	 * a full-screen update, in the worker that also has to paint it. Here it is
+	 * one call into the library's optimised converter.
+	 */
+	if (!freerdp_image_copy_no_overlap(payload + 10, PIXEL_FORMAT_RGBA32, width * 4u, 0, 0, width,
+	                                   height, surface->data, surface->format, surface->scanline,
+	                                   left, top, NULL, FREERDP_FLIP_NONE))
 	{
-		const BYTE* src = surface->data + (size_t)(top + y) * surface->scanline + (size_t)left * bpp;
-		memcpy(payload + 10 + (size_t)y * width * 4u, src, (size_t)width * 4u);
+		free(payload);
+		return CHANNEL_RC_OK;
 	}
 
 	ctx->rectsSent++;
@@ -497,7 +533,8 @@ static UINT send_surface_rect(termixContext* ctx, RdpgfxClientContext* gfx, UINT
 }
 
 /*
- * Sends everything that changed in the frame that is ending.
+ * Records everything that changed in the frame that is ending, and pays it out
+ * on a clock.
  *
  * A surface command is neither the only thing that changes a surface nor a
  * reliable description of what it changed. A desktop drawn without H.264 is
@@ -518,6 +555,29 @@ static UINT send_surface_rect(termixContext* ctx, RdpgfxClientContext* gfx, UINT
  * and this copy is blank wherever the video is, so sending its pixels would
  * paint holes rather than fill them.
  */
+static pendingSurface* pending_for(termixContext* ctx, UINT16 surfaceId)
+{
+	pendingSurface* free_slot = NULL;
+	for (UINT32 i = 0; i < MAX_TRACKED_SURFACES; i++)
+	{
+		pendingSurface* slot = &ctx->pending[i];
+		if (slot->used && slot->id == surfaceId)
+			return slot;
+		if (!slot->used && !free_slot)
+			free_slot = slot;
+	}
+
+	/* More surfaces than slots means dropping one, and a dropped region is a
+	 * region that never repaints. Eight is far past what a session uses. */
+	if (!free_slot)
+		return NULL;
+
+	free_slot->used = TRUE;
+	free_slot->id = surfaceId;
+	region16_init(&free_slot->region);
+	return free_slot;
+}
+
 static void flush_invalid_regions(termixContext* ctx, RdpgfxClientContext* gfx)
 {
 	if (!ctx->serverDecode && ctx->frameCount > 0)
@@ -532,18 +592,41 @@ static void flush_invalid_regions(termixContext* ctx, RdpgfxClientContext* gfx)
 
 	for (UINT16 i = 0; i < count; i++)
 	{
-		gdiGfxSurface* surface = (gdiGfxSurface*)gfx->GetSurfaceData(gfx, ids[i]);
-		if (!surface || !surface->data)
+		const gdiGfxSurface* surface = (const gdiGfxSurface*)gfx->GetSurfaceData(gfx, ids[i]);
+		if (!surface || !surface->data || region16_is_empty(&surface->invalidRegion))
+			continue;
+
+		pendingSurface* slot = pending_for(ctx, ids[i]);
+		if (!slot)
 			continue;
 
 		UINT32 nbRects = 0;
 		const RECTANGLE_16* rects = region16_rects(&surface->invalidRegion, &nbRects);
 		for (UINT32 r = 0; r < nbRects; r++)
-			send_surface_rect(ctx, gfx, ids[i], rects[r].left, rects[r].top, rects[r].right,
-			                  rects[r].bottom);
+			region16_union_rect(&slot->region, &slot->region, &rects[r]);
 	}
 
 	free(ids);
+
+	const UINT64 now = GetTickCount64();
+	if (now - ctx->lastFlushTick < FALLBACK_FLUSH_MS)
+		return;
+	ctx->lastFlushTick = now;
+
+	for (UINT32 i = 0; i < MAX_TRACKED_SURFACES; i++)
+	{
+		pendingSurface* slot = &ctx->pending[i];
+		if (!slot->used)
+			continue;
+
+		UINT32 nbRects = 0;
+		const RECTANGLE_16* rects = region16_rects(&slot->region, &nbRects);
+		for (UINT32 r = 0; r < nbRects; r++)
+			send_surface_rect(ctx, gfx, slot->id, rects[r].left, rects[r].top, rects[r].right,
+			                  rects[r].bottom);
+
+		region16_clear(&slot->region);
+	}
 }
 
 /*

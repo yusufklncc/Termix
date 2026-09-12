@@ -84,7 +84,7 @@ Fark ölçülebilir:
 
 |                | Politika açık   | Politika kapalı         |
 | -------------- | --------------- | ----------------------- |
-| Taşınan veri   | H.264 bitstream | Ham BGRA bölgeler       |
+| Taşınan veri   | H.264 bitstream | Ham piksel bölgeleri    |
 | Sunucu CPU     | ~%4             | Belirgin şekilde yüksek |
 | Bant genişliği | ~3 Mbps         | ~10 kat fazla           |
 | Gecikme        | Düşük           | Gözle görülür           |

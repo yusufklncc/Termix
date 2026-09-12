@@ -472,16 +472,15 @@ self.onmessage = async (event: MessageEvent<InboundMessage>) => {
       if (width === 0 || height === 0) return;
       if (bytes.length < 10 + width * height * 4) return;
 
-      const image = ctx.createImageData(width, height);
-      // BGRA on the wire, RGBA in an ImageData.
-      for (let i = 0; i < width * height; i++) {
-        const src = 10 + i * 4;
-        const dst = i * 4;
-        image.data[dst] = bytes[src + 2];
-        image.data[dst + 1] = bytes[src + 1];
-        image.data[dst + 2] = bytes[src];
-        image.data[dst + 3] = 255;
-      }
+      // The bridge already sends RGBA, which is what an ImageData holds, so the
+      // pixels are wrapped rather than copied. Swapping channels here instead
+      // was four million writes for a full-screen update, in the same worker
+      // that then has to paint it -- enough to stop answering altogether.
+      const image = new ImageData(
+        new Uint8ClampedArray(message.payload, 10, width * height * 4),
+        width,
+        height,
+      );
       ctx.putImageData(image, left, top);
       decodedCount++;
       break;

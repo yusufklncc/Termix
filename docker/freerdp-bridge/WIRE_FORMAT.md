@@ -145,8 +145,13 @@ aynı şeyi yapıyor.
 u16 surfaceId
 u16 left, u16 top
 u16 width, u16 height
-BGRA piksel verisi   (width * height * 4 bayt)
+RGBA piksel verisi   (width * height * 4 bayt)
 ```
+
+Kanal sırası `CURS`'ten farklı ve bilerek öyle: `RECT` doğrudan bir `ImageData`
+olarak sarılıyor, kopyalanmadan. Kanalları tarayıcıda çevirmek tam ekran bir
+güncellemede dört milyon yazma demekti — hem de boyamayı da yapan worker'da.
+Dönüşümü köprü, FreeRDP'nin optimize edilmiş dönüştürücüsüyle yapıyor.
 
 Bir Windows host'u H.264'ü ancak "Prioritize H.264/AVC 444" politikası açıkken
 sunuyor. Açık değilse masaüstünün tamamı ClearCodec ve progressive ile

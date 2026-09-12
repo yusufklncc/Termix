@@ -129,9 +129,12 @@ typedef struct
 	 * the GDI decodes everything and pixels are sent instead. */
 	BOOL serverDecode;
 
-	/* 0 keeps regions lossless. Above it, the WebP quality to encode them at
-	 * -- a link where 24x matters more than crisp glyphs. */
+	/* 0 leaves the choice to the content. Above it, every region is encoded
+	 * at this WebP quality -- a link where 24x matters more than glyphs. */
 	UINT32 rectQuality;
+	/* Set to keep every region lossless, whatever it holds. */
+	BOOL losslessOnly;
+	UINT32 rectsLossy;
 
 	/* Clipboard. `outgoing` is what the browser last copied, held until the
 	 * server asks for it -- RDP pushes a format list first and pulls the bytes
@@ -305,6 +308,8 @@ static void log_codec_mix(termixContext* ctx)
 	        ctx->pointerEvents, ctx->inputRejected);
 	/* What each path costs. The ratio is the whole argument for compressing
 	 * the pixel path, so it is measured rather than assumed. */
+	fprintf(stderr, "[%s] regions: %u lossless, %u as pictures\n", TAG,
+	        ctx->rectsSent - ctx->rectsLossy, ctx->rectsLossy);
 	fprintf(stderr, "[%s] wire: avc=%lluKB rects=%lluKB (raw %lluKB, %.1fx)\n", TAG,
 	        (unsigned long long)(ctx->avcBytes / 1024u),
 	        (unsigned long long)(ctx->rectBytesSent / 1024u),
@@ -562,6 +567,75 @@ static UINT send_avc_frame(termixContext* ctx, const RDPGFX_SURFACE_COMMAND* cmd
  * design, and guacd's cost. This path only runs for hosts that never send
  * H.264, and the notice in the UI says so.
  */
+/*
+ * Whether a region is a picture rather than a user interface.
+ *
+ * The measurement that chose WebP also said lossy q=90 is four times smaller
+ * again than lossless. The reason not to take it is text: lossy encoding of
+ * antialiased glyphs is exactly what makes a remote desktop look like one.
+ *
+ * But most of a desktop is not text, and the bytes are not in the text. A
+ * wallpaper, a photograph, a video frame the server chose not to encode --
+ * these are where the megabytes go, and they are also where lossy costs
+ * nothing anyone can see. So the two are told apart and each gets what suits
+ * it.
+ *
+ * The signal is how many distinct colours a sample holds. A window, a menu, a
+ * page of text: a few flat fills plus the shades its edges are smoothed with,
+ * so a small fraction of the pixels are distinct. A photograph: very nearly
+ * all of them.
+ *
+ * The threshold is deliberately far to the safe side. Calling a picture an
+ * interface only costs bytes; calling text a picture costs the thing this
+ * whole path exists to deliver.
+ */
+#define PHOTO_MIN_PIXELS 16384u
+#define PHOTO_SAMPLES 1024u
+#define PHOTO_TABLE 4096u /* a power of two, four times the sample */
+#define PHOTO_DISTINCT_PERCENT 60u
+/* High enough that the difference is not visible on a photograph, which is the
+ * only thing it is ever applied to. */
+#define PICTURE_QUALITY 90u
+
+static BOOL region_is_picture(const BYTE* rgba, UINT32 width, UINT32 height)
+{
+	const UINT32 pixels = width * height;
+
+	/* Small regions are the interface almost by definition -- a caret, a
+	 * button, a line of text -- and too cheap for the choice to matter. */
+	if (pixels < PHOTO_MIN_PIXELS)
+		return FALSE;
+
+	UINT32 table[PHOTO_TABLE];
+	memset(table, 0, sizeof(table));
+
+	/* Spread the sample. A picture often sits inside a flat border, and a
+	 * corner would describe the border rather than the picture. */
+	const UINT32 step = pixels / PHOTO_SAMPLES ? pixels / PHOTO_SAMPLES : 1;
+	UINT32 distinct = 0;
+	UINT32 sampled = 0;
+	for (UINT32 i = 0; i < pixels; i += step)
+	{
+		const size_t at = (size_t)i * 4u;
+		const UINT32 key =
+		    ((UINT32)rgba[at] << 16) | ((UINT32)rgba[at + 1] << 8) | (UINT32)rgba[at + 2];
+
+		/* Open addressing, with the key stored one above itself so that zero
+		 * can mean empty without excluding black. */
+		UINT32 slot = (key * 2654435761u) & (PHOTO_TABLE - 1u);
+		while (table[slot] && table[slot] != key + 1u)
+			slot = (slot + 1u) & (PHOTO_TABLE - 1u);
+		if (!table[slot])
+		{
+			table[slot] = key + 1u;
+			distinct++;
+		}
+		sampled++;
+	}
+
+	return sampled > 0 && distinct * 100u > sampled * PHOTO_DISTINCT_PERCENT;
+}
+
 static UINT send_surface_rect(termixContext* ctx, RdpgfxClientContext* gfx, UINT16 surfaceId,
                               UINT32 rectLeft, UINT32 rectTop, UINT32 rectRight,
                               UINT32 rectBottom)
@@ -686,11 +760,16 @@ static UINT send_surface_rect(termixContext* ctx, RdpgfxClientContext* gfx, UINT
 
 	if (WebPConfigInit(&config) && WebPPictureInit(&picture))
 	{
-		if (ctx->rectQuality > 0)
+		const BOOL asPicture =
+		    !ctx->losslessOnly && region_is_picture(payload + 10, width, height);
+
+		if (ctx->rectQuality > 0 || asPicture)
 		{
 			config.lossless = 0;
-			config.quality = (float)ctx->rectQuality;
+			config.quality =
+			    (float)(ctx->rectQuality > 0 ? ctx->rectQuality : PICTURE_QUALITY);
 			config.method = 0;
+			ctx->rectsLossy++;
 		}
 		else
 			WebPConfigLosslessPreset(&config, 0);
@@ -1814,6 +1893,14 @@ static int run_session(int sock, const char* json)
 	/* Regions are lossless unless told otherwise. The measured alternative is
 	 * 24x smaller and blurs text, which is the wrong default for a desktop but
 	 * the right one for a link that cannot carry the lossless rate. */
+	const char* losslessEnv = getenv("BRIDGE_RECT_LOSSLESS");
+	if (losslessEnv && losslessEnv[0] == '1')
+	{
+		ctx->losslessOnly = TRUE;
+		fprintf(stderr, "[%s] every region kept lossless\n", TAG);
+		fflush(stderr);
+	}
+
 	const char* qualityEnv = getenv("BRIDGE_RECT_QUALITY");
 	if (qualityEnv && *qualityEnv)
 	{

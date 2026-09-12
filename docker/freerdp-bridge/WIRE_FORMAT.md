@@ -168,11 +168,20 @@ WebP lossless bir takas değil: hepsinden iyi sıkıştırıyor ve yerini aldı�
 deflate'ten daha ucuz. Sebebi, kestiricilerinin resim için tasarlanmış olması;
 deflate ise metin olmayan bir veride tekrar eden bayt dizileri arıyor.
 
-Burada oran değil kayıpsızlık belirleyici. Aynı ölçüm lossy q=75'i 23.7x
-veriyor — ta ki bu yolun büyük kısmının metin olduğunu hatırlayana kadar.
-Kenarları yumuşatılmış glif'leri lossy encode etmek, bir uzak masaüstünü uzak
-masaüstü gibi gösteren şeyin ta kendisi. Bu takasa değecek hatlar için
-`BRIDGE_RECT_QUALITY` ile açılabiliyor.
+Kayıplı/kayıpsız kararı bölge bazında ve içeriğe bakarak veriliyor. Metni lossy
+encode etmek, bir uzak masaüstünü uzak masaüstü gibi gösteren şeyin ta kendisi —
+ama masaüstünün çoğu metin değil, ve baytlar da metinde değil. Duvar kağıdı, bir
+fotoğraf, sunucunun encode etmemeye karar verdiği bir video karesi: megabaytlar
+oraya gidiyor ve lossy'nin kimsenin göremeyeceği tek yer de orası.
+
+Ayırt edici sinyal, bir örneklemin kaç ayrı renk taşıdığı. Bir pencere, bir menü,
+bir sayfa metin: birkaç düz dolgu artı kenarlarının yumuşatıldığı tonlar, yani
+piksellerin küçük bir kısmı ayrı. Bir fotoğraf: neredeyse hepsi. Eşik bilerek
+güvenli tarafa uzak — bir resme arayüz demek yalnızca bayta mal olur, metne resim
+demek bu yolun taşımak için var olduğu şeye.
+
+`BRIDGE_RECT_QUALITY` her bölgeyi zorla lossy yapar; `BRIDGE_RECT_LOSSLESS=1`
+kararı tamamen kapatır.
 
 WebP'nin reddettiği bölge, ham olarak `RECT` ile gidiyor. Yani iki magic'i de
 beklemek gerekiyor.

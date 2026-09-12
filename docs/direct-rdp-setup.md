@@ -50,16 +50,17 @@ Ayrıntı: `src/backend/utils/rdp-bridge-config.ts`.
 
 Hiçbiri zorunlu değil; hepsi teşhis ve A/B içindir.
 
-| Değişken                 | Varsayılan | Ne işe yarar                                                                                                 |
-| ------------------------ | ---------- | ------------------------------------------------------------------------------------------------------------ |
-| `BRIDGE_PORT`            | `3390`     | Dinlenen port                                                                                                |
-| `BRIDGE_GFX_AVC444`      | açık       | 10.x capset'lerini reklam eder. **Kapatma** — kapalıyken Windows 8.0 capset'ine düşer ve H.264 hiç göndermez |
-| `BRIDGE_RDP_NETWORK`     | ayarlanmaz | `lan` / `broadband` / `wan` / `modem` / `auto`. Ölçümde kare hızını değiştirmedi                             |
-| `BRIDGE_GFX_SUSPEND_ACK` | kapalı     | Kare onaylarını askıya alır. Ölçümde etkisi olmadı, geri basıncı kaybettirir                                 |
-| `BRIDGE_GFX_MODE=gdi`    | kapalı     | FreeRDP'nin kendi pipeline'ı. Yalnızca hata ayıklama                                                         |
-| `BRIDGE_RECT_QUALITY`    | kayıpsız   | Bölgeleri bu WebP kalitesinde encode eder (1-100). 24 kata kadar küçültür, metni bulanıklaştırır             |
-| `BRIDGE_DUMP_RECT`       | kapalı     | Ham bölgeleri dosyaya yazar. Sıkıştırma stratejisini gerçek veriyle ölçmek için                              |
-| `BRIDGE_DUMP_AVC`        | kapalı     | İletilen bitstream'i dosyaya yazar. Tarayıcı bir akışı reddettiğinde `ffprobe`'a sormak için                 |
+| Değişken                 | Varsayılan   | Ne işe yarar                                                                                                 |
+| ------------------------ | ------------ | ------------------------------------------------------------------------------------------------------------ |
+| `BRIDGE_PORT`            | `3390`       | Dinlenen port                                                                                                |
+| `BRIDGE_GFX_AVC444`      | açık         | 10.x capset'lerini reklam eder. **Kapatma** — kapalıyken Windows 8.0 capset'ine düşer ve H.264 hiç göndermez |
+| `BRIDGE_RDP_NETWORK`     | ayarlanmaz   | `lan` / `broadband` / `wan` / `modem` / `auto`. Ölçümde kare hızını değiştirmedi                             |
+| `BRIDGE_GFX_SUSPEND_ACK` | kapalı       | Kare onaylarını askıya alır. Ölçümde etkisi olmadı, geri basıncı kaybettirir                                 |
+| `BRIDGE_GFX_MODE=gdi`    | kapalı       | FreeRDP'nin kendi pipeline'ı. Yalnızca hata ayıklama                                                         |
+| `BRIDGE_RECT_QUALITY`    | içeriğe göre | _Her_ bölgeyi bu WebP kalitesinde encode eder (1-100). 24 kata kadar küçültür, metni bulanıklaştırır         |
+| `BRIDGE_RECT_LOSSLESS`   | `0`          | `1` ise resim benzeri bölgeler de kayıpsız kalır                                                             |
+| `BRIDGE_DUMP_RECT`       | kapalı       | Ham bölgeleri dosyaya yazar. Sıkıştırma stratejisini gerçek veriyle ölçmek için                              |
+| `BRIDGE_DUMP_AVC`        | kapalı       | İletilen bitstream'i dosyaya yazar. Tarayıcı bir akışı reddettiğinde `ffprobe`'a sormak için                 |
 
 ---
 

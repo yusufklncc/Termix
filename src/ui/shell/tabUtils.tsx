@@ -178,6 +178,7 @@ const tabSurfaceLoaders: Partial<Record<TabType, () => Promise<unknown>>> = {
   rdp: loadGuacamoleApp,
   vnc: loadGuacamoleApp,
   telnet: loadGuacamoleApp,
+  stream: loadStreamApp,
 };
 
 /** Download a likely next tab without starting a connection or mounting UI. */
@@ -189,11 +190,11 @@ export function preloadTabSurface(type: TabType): void {
 export function markTabSurfaceUsed(type: TabType): void {
   markAdaptiveResourceUsed("module", `tab:${type}`);
 }
-const StreamApp = lazy(() =>
+const loadStreamApp = () =>
   import("@/features/stream/StreamApp").then((m) => ({
     default: m.default,
-  })),
-);
+  }));
+const StreamApp = lazy(loadStreamApp);
 const RdpDirectApp = lazy(() =>
   import("@/features/rdp-direct/RdpDirectApp").then((m) => ({
     default: m.default,

@@ -100,6 +100,11 @@ const loadGuacamoleApp = () =>
     default: m.default,
   }));
 const GuacamoleApp = lazy(loadGuacamoleApp);
+const loadStreamApp = () =>
+  import("@/features/stream/StreamApp").then((m) => ({
+    default: m.default,
+  }));
+const StreamApp = lazy(loadStreamApp);
 const DashboardTab = lazy(() =>
   import("@/dashboard/DashboardTab").then((m) => ({
     default: m.DashboardTab,
@@ -190,11 +195,6 @@ export function preloadTabSurface(type: TabType): void {
 export function markTabSurfaceUsed(type: TabType): void {
   markAdaptiveResourceUsed("module", `tab:${type}`);
 }
-const loadStreamApp = () =>
-  import("@/features/stream/StreamApp").then((m) => ({
-    default: m.default,
-  }));
-const StreamApp = lazy(loadStreamApp);
 const RdpDirectApp = lazy(() =>
   import("@/features/rdp-direct/RdpDirectApp").then((m) => ({
     default: m.default,

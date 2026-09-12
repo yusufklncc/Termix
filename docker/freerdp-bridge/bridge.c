@@ -292,7 +292,19 @@ static pcRdpgfxStartFrame gdi_StartFrameFn = NULL;
 static pcRdpgfxEndFrame gdi_EndFrameFn = NULL;
 static pcRdpgfxSurfaceCommand gdi_SurfaceCommandFn = NULL;
 
-static void flush_invalid_regions(termixContext* ctx, RdpgfxClientContext* gfx);
+static BOOL has_pending_regions(const termixContext* ctx)
+{
+	for (UINT32 i = 0; i < MAX_TRACKED_SURFACES; i++)
+	{
+		if (ctx->pending[i].used && !region16_is_empty(&ctx->pending[i].region))
+			return TRUE;
+	}
+	return FALSE;
+}
+
+static BOOL has_pending_regions(const termixContext* ctx);
+static void accumulate_invalid_regions(termixContext* ctx, RdpgfxClientContext* gfx);
+static void flush_pending_regions(termixContext* ctx, RdpgfxClientContext* gfx);
 
 static UINT tx_ResetGraphics(RdpgfxClientContext* gfx, const RDPGFX_RESET_GRAPHICS_PDU* pdu)
 {
@@ -365,7 +377,8 @@ static UINT tx_EndFrame(RdpgfxClientContext* gfx, const RDPGFX_END_FRAME_PDU* pd
 	if (ctx)
 	{
 		/* Before the GDI, which clears the invalid region as it paints. */
-		flush_invalid_regions(ctx, gfx);
+		accumulate_invalid_regions(ctx, gfx);
+		flush_pending_regions(ctx, gfx);
 
 		BYTE payload[4];
 		put_u32(payload, pdu->frameId);
@@ -550,10 +563,20 @@ static UINT send_surface_rect(termixContext* ctx, RdpgfxClientContext* gfx, UINT
  * which is also the moment before the GDI paints it and clears it. So that is
  * read instead of second-guessed.
  *
- * Only while this side still holds the whole desktop: once a frame has been
- * passed through, the picture the viewer sees lives in the browser's decoder
- * and this copy is blank wherever the video is, so sending its pixels would
- * paint holes rather than fill them.
+ * Both paths run at once, because a Windows host mixes them: it encodes the
+ * video-like part of the screen in H.264 and draws everything around it --
+ * window chrome, text, the taskbar -- in ClearCodec and progressive. Treating
+ * the first H.264 frame as proof that the whole desktop had moved to the fast
+ * path froze everything except the one region that was moving.
+ *
+ * They do not collide. H.264 never reaches the GDI, so it never marks anything
+ * invalid, and what is flushed here is by construction the part of the screen
+ * the video is not carrying.
+ *
+ * The exception is a copy order that reads from a region the video painted:
+ * this side has no pixels there, so it would blit blanks. That is a small and
+ * self-healing artifact next to a desktop that stops repainting, and it is not
+ * worth losing the rest of the screen to avoid.
  */
 static pendingSurface* pending_for(termixContext* ctx, UINT16 surfaceId)
 {
@@ -578,10 +601,8 @@ static pendingSurface* pending_for(termixContext* ctx, UINT16 surfaceId)
 	return free_slot;
 }
 
-static void flush_invalid_regions(termixContext* ctx, RdpgfxClientContext* gfx)
+static void accumulate_invalid_regions(termixContext* ctx, RdpgfxClientContext* gfx)
 {
-	if (!ctx->serverDecode && ctx->frameCount > 0)
-		return;
 	if (!gfx->GetSurfaceIds || !gfx->GetSurfaceData)
 		return;
 
@@ -607,6 +628,20 @@ static void flush_invalid_regions(termixContext* ctx, RdpgfxClientContext* gfx)
 	}
 
 	free(ids);
+}
+
+/*
+ * Pays out what has been accumulated, at most once per flush interval.
+ *
+ * Called from the frame handler and from the event loop, because a repaint is
+ * not always followed by another one: close a window and the server sends the
+ * area behind it once and goes quiet. Flushing only on the next frame would
+ * leave that last update sitting here until something else happened to move.
+ */
+static void flush_pending_regions(termixContext* ctx, RdpgfxClientContext* gfx)
+{
+	if (!gfx)
+		return;
 
 	const UINT64 now = GetTickCount64();
 	if (now - ctx->lastFlushTick < FALLBACK_FLUSH_MS)
@@ -1648,6 +1683,7 @@ static int run_session(int sock, const char* json)
 	const char* reason = "unknown";
 	UINT32 idleSeconds = 0;
 	UINT64 statsTick = GetTickCount64();
+	const UINT64 startTick = statsTick;
 	UINT32 statsFrames = 0;
 	BOOL warnedNoH264 = FALSE;
 	for (;;)
@@ -1674,7 +1710,11 @@ static int run_session(int sock, const char* json)
 			 * 444" policy is on, which is a target-side setting no amount of
 			 * client code can substitute for. Say so once, rather than leaving
 			 * a working connection that shows nothing. */
-			if (!warnedNoH264 && ctx->frameCount == 0)
+			/* Only once the session has had time to show its hand. A host
+			 * that mixes codecs draws in ClearCodec for many seconds before
+			 * the first H.264 frame, and warning at five would be wrong about
+			 * a session that is about to be fine. */
+			if (!warnedNoH264 && ctx->frameCount == 0 && now - startTick >= 15000)
 			{
 				UINT32 otherCodecs = 0;
 				for (UINT16 id = 0; id < ARRAYSIZE(ctx->codecCounts); id++)
@@ -1706,7 +1746,11 @@ static int run_session(int sock, const char* json)
 			break;
 		}
 
-		const DWORD wait = WaitForMultipleObjects(count, handles, FALSE, 1000);
+		/* A repaint that nothing follows must not sit in the pending region
+		 * until the next one. While something is owed the loop wakes on the
+		 * flush interval instead of the idle one. */
+		const DWORD timeout = has_pending_regions(ctx) ? FALLBACK_FLUSH_MS : 1000;
+		const DWORD wait = WaitForMultipleObjects(count, handles, FALSE, timeout);
 		if (wait == WAIT_FAILED)
 		{
 			reason = "WaitForMultipleObjects failed";
@@ -1715,10 +1759,13 @@ static int run_session(int sock, const char* json)
 
 		if (wait == WAIT_TIMEOUT)
 		{
+			/* The wake this loop asked for when something was owed. */
+			flush_pending_regions(ctx, ctx->gfx);
+
 			/* Nothing happened this second. Say so periodically: silence here
 			 * is itself the symptom when a server accepts the session and then
-			 * never sends a frame. */
-			if (++idleSeconds % 5 == 0)
+			 * never sends a frame. The short wake does not count as a second. */
+			if (timeout == 1000 && ++idleSeconds % 5 == 0)
 			{
 				fprintf(stderr, "[%s] idle %us, frames=%u\n", TAG, idleSeconds,
 				        ctx->frameCount);

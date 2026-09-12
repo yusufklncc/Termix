@@ -36,6 +36,7 @@
 #include <freerdp/gdi/gfx.h>
 #include <freerdp/graphics.h>
 #include <freerdp/codec/color.h>
+#include <freerdp/codec/region.h>
 #include <freerdp/channels/channels.h>
 #include <freerdp/channels/rdpgfx.h>
 #include <freerdp/channels/cliprdr.h>
@@ -49,9 +50,6 @@
 
 #define DEFAULT_PORT 3390
 #define MAX_FRAME_PAYLOAD (16u * 1024u * 1024u)
-
-/* Cache slots the bitmap cache may address (MS-RDPEGFX 2.2.2.13). */
-#define RDPGFX_CACHE_SLOTS 4096u
 
 typedef struct
 {
@@ -82,12 +80,6 @@ typedef struct
 
 	UINT32 cursorsSent;
 	UINT32 rectsSent;
-
-	/* Cache slot sizes. A CacheToSurface names a slot and a destination point
-	 * but no size -- that came with the SurfaceToCache that filled the slot,
-	 * and it is the only way to know which region a cached blit repaints. */
-	UINT16 cacheWidth[RDPGFX_CACHE_SLOTS];
-	UINT16 cacheHeight[RDPGFX_CACHE_SLOTS];
 	/* Set when the browser reports it cannot decode this stream. From then on
 	 * the GDI decodes everything and pixels are sent instead. */
 	BOOL serverDecode;
@@ -272,10 +264,8 @@ static pcRdpgfxMapSurfaceToOutput gdi_MapSurfaceToOutputFn = NULL;
 static pcRdpgfxStartFrame gdi_StartFrameFn = NULL;
 static pcRdpgfxEndFrame gdi_EndFrameFn = NULL;
 static pcRdpgfxSurfaceCommand gdi_SurfaceCommandFn = NULL;
-static pcRdpgfxSolidFill gdi_SolidFillFn = NULL;
-static pcRdpgfxSurfaceToSurface gdi_SurfaceToSurfaceFn = NULL;
-static pcRdpgfxSurfaceToCache gdi_SurfaceToCacheFn = NULL;
-static pcRdpgfxCacheToSurface gdi_CacheToSurfaceFn = NULL;
+
+static void flush_invalid_regions(termixContext* ctx, RdpgfxClientContext* gfx);
 
 static UINT tx_ResetGraphics(RdpgfxClientContext* gfx, const RDPGFX_RESET_GRAPHICS_PDU* pdu)
 {
@@ -347,6 +337,9 @@ static UINT tx_EndFrame(RdpgfxClientContext* gfx, const RDPGFX_END_FRAME_PDU* pd
 	termixContext* ctx = g_session;
 	if (ctx)
 	{
+		/* Before the GDI, which clears the invalid region as it paints. */
+		flush_invalid_regions(ctx, gfx);
+
 		BYTE payload[4];
 		put_u32(payload, pdu->frameId);
 		wire_send(ctx, "FEND", payload, sizeof(payload));
@@ -504,110 +497,53 @@ static UINT send_surface_rect(termixContext* ctx, RdpgfxClientContext* gfx, UINT
 }
 
 /*
- * The updates that carry no bitmap at all.
+ * Sends everything that changed in the frame that is ending.
  *
- * A surface command is not the only thing that changes a surface. A desktop
- * drawn without H.264 is largely built out of three other GFX orders: a solid
- * fill, a copy from another surface, and a blit from the bitmap cache. The GDI
- * applies all three to its own surface and none of them produce a surface
- * command -- so a pass-through that watches only surface commands never learns
- * that those regions changed, and the viewer keeps whatever was there before.
+ * A surface command is neither the only thing that changes a surface nor a
+ * reliable description of what it changed. A desktop drawn without H.264 is
+ * largely built out of orders that carry no bitmap at all -- a solid fill, a
+ * copy from another surface, a blit from the bitmap cache -- and the one codec
+ * that does carry bitmaps, progressive, reports its command rect as 0x0 and
+ * keeps the real rects inside the bitstream. Forwarding each command's own rect
+ * therefore sent the small ClearCodec updates and nothing else, which is the
+ * block-by-block black desktop a host without the H.264 policy showed.
  *
- * On a freshly connected session that is black, and it is exactly the
- * block-by-block black desktop a host without the "Prioritize H.264/AVC 444"
- * policy shows: the regions the server happened to send as a bitmap appear, the
- * ones it filled or blitted from cache do not.
+ * The GDI already knows. Every one of those paths unions what it touched into
+ * the surface's invalid region, and the region is complete at end of frame --
+ * which is also the moment before the GDI paints it and clears it. So that is
+ * read instead of second-guessed.
  *
- * So each of the three is chained: the GDI does the work, then the destination
- * region is forwarded as pixels.
+ * Only while this side still holds the whole desktop: once a frame has been
+ * passed through, the picture the viewer sees lives in the browser's decoder
+ * and this copy is blank wherever the video is, so sending its pixels would
+ * paint holes rather than fill them.
  */
-
-/*
- * Whether the bridge's own surface still holds the whole desktop.
- *
- * It does while every update is decoded here -- either the browser reported it
- * cannot decode this stream, or no H.264 ever arrived. It stops being true the
- * moment a frame is passed through: from then on the picture the viewer sees
- * lives in the browser's decoder, and this copy is blank wherever the video is.
- *
- * Copies read the surface, so they may only be forwarded while this holds. A
- * solid fill does not read anything and is correct either way.
- */
-static BOOL gdi_holds_desktop(const termixContext* ctx)
+static void flush_invalid_regions(termixContext* ctx, RdpgfxClientContext* gfx)
 {
-	return ctx->serverDecode || ctx->frameCount == 0;
-}
+	if (!ctx->serverDecode && ctx->frameCount > 0)
+		return;
+	if (!gfx->GetSurfaceIds || !gfx->GetSurfaceData)
+		return;
 
-static UINT tx_SolidFill(RdpgfxClientContext* gfx, const RDPGFX_SOLID_FILL_PDU* pdu)
-{
-	termixContext* ctx = g_session;
-	const UINT rc = gdi_SolidFillFn ? gdi_SolidFillFn(gfx, pdu) : CHANNEL_RC_OK;
-	if (rc != CHANNEL_RC_OK || !ctx || !pdu)
-		return rc;
+	UINT16* ids = NULL;
+	UINT16 count = 0;
+	if (gfx->GetSurfaceIds(gfx, &ids, &count) != CHANNEL_RC_OK || !ids)
+		return;
 
-	for (UINT16 i = 0; i < pdu->fillRectCount; i++)
+	for (UINT16 i = 0; i < count; i++)
 	{
-		const RECTANGLE_16* r = &pdu->fillRects[i];
-		send_surface_rect(ctx, gfx, pdu->surfaceId, r->left, r->top, r->right, r->bottom);
+		gdiGfxSurface* surface = (gdiGfxSurface*)gfx->GetSurfaceData(gfx, ids[i]);
+		if (!surface || !surface->data)
+			continue;
+
+		UINT32 nbRects = 0;
+		const RECTANGLE_16* rects = region16_rects(&surface->invalidRegion, &nbRects);
+		for (UINT32 r = 0; r < nbRects; r++)
+			send_surface_rect(ctx, gfx, ids[i], rects[r].left, rects[r].top, rects[r].right,
+			                  rects[r].bottom);
 	}
-	return rc;
-}
 
-static UINT tx_SurfaceToSurface(RdpgfxClientContext* gfx,
-                                const RDPGFX_SURFACE_TO_SURFACE_PDU* pdu)
-{
-	termixContext* ctx = g_session;
-	const UINT rc = gdi_SurfaceToSurfaceFn ? gdi_SurfaceToSurfaceFn(gfx, pdu) : CHANNEL_RC_OK;
-	if (rc != CHANNEL_RC_OK || !ctx || !pdu || !gdi_holds_desktop(ctx))
-		return rc;
-
-	const UINT32 width = pdu->rectSrc.right - pdu->rectSrc.left;
-	const UINT32 height = pdu->rectSrc.bottom - pdu->rectSrc.top;
-	for (UINT16 i = 0; i < pdu->destPtsCount; i++)
-	{
-		const RDPGFX_POINT16* pt = &pdu->destPts[i];
-		send_surface_rect(ctx, gfx, pdu->surfaceIdDest, pt->x, pt->y, pt->x + width,
-		                  pt->y + height);
-	}
-	return rc;
-}
-
-static UINT tx_SurfaceToCache(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_TO_CACHE_PDU* pdu)
-{
-	termixContext* ctx = g_session;
-	const UINT rc = gdi_SurfaceToCacheFn ? gdi_SurfaceToCacheFn(gfx, pdu) : CHANNEL_RC_OK;
-	if (rc != CHANNEL_RC_OK || !ctx || !pdu || pdu->cacheSlot >= RDPGFX_CACHE_SLOTS)
-		return rc;
-
-	/* Nothing is drawn here -- this only records the size, so the blit out of
-	 * this slot later knows the region it covers. */
-	ctx->cacheWidth[pdu->cacheSlot] = (UINT16)(pdu->rectSrc.right - pdu->rectSrc.left);
-	ctx->cacheHeight[pdu->cacheSlot] = (UINT16)(pdu->rectSrc.bottom - pdu->rectSrc.top);
-	return rc;
-}
-
-static UINT tx_CacheToSurface(RdpgfxClientContext* gfx, const RDPGFX_CACHE_TO_SURFACE_PDU* pdu)
-{
-	termixContext* ctx = g_session;
-	const UINT rc = gdi_CacheToSurfaceFn ? gdi_CacheToSurfaceFn(gfx, pdu) : CHANNEL_RC_OK;
-	if (rc != CHANNEL_RC_OK || !ctx || !pdu || !gdi_holds_desktop(ctx))
-		return rc;
-
-	/* A slot filled before this session attached, or by a persistent cache
-	 * import, has no recorded size and nothing can be said about the region. */
-	if (pdu->cacheSlot >= RDPGFX_CACHE_SLOTS)
-		return rc;
-	const UINT32 width = ctx->cacheWidth[pdu->cacheSlot];
-	const UINT32 height = ctx->cacheHeight[pdu->cacheSlot];
-	if (width == 0 || height == 0)
-		return rc;
-
-	for (UINT16 i = 0; i < pdu->destPtsCount; i++)
-	{
-		const RDPGFX_POINT16* pt = &pdu->destPts[i];
-		send_surface_rect(ctx, gfx, pdu->surfaceId, pt->x, pt->y, pt->x + width, pt->y + height);
-	}
-	return rc;
+	free(ids);
 }
 
 /*
@@ -922,10 +858,6 @@ static void tx_OnChannelConnected(void* context, const ChannelConnectedEventArgs
 		gdi_EndFrameFn = gfx->EndFrame;
 		gdi_SurfaceCommandFn = gfx->SurfaceCommand;
 		gdi_CapsConfirmFn = gfx->CapsConfirm;
-		gdi_SolidFillFn = gfx->SolidFill;
-		gdi_SurfaceToSurfaceFn = gfx->SurfaceToSurface;
-		gdi_SurfaceToCacheFn = gfx->SurfaceToCache;
-		gdi_CacheToSurfaceFn = gfx->CacheToSurface;
 
 		gfx->CapsConfirm = tx_CapsConfirm;
 		gfx->ResetGraphics = tx_ResetGraphics;
@@ -938,13 +870,6 @@ static void tx_OnChannelConnected(void* context, const ChannelConnectedEventArgs
 		/* DeactivateClientDecoding leaves this null, which is why the frames
 		 * can be taken without the library ever decoding one. */
 		gfx->SurfaceCommand = tx_SurfaceCommand;
-
-		/* The orders that change a surface without carrying a bitmap. Without
-		 * these a desktop drawn without H.264 arrives full of black holes. */
-		gfx->SolidFill = tx_SolidFill;
-		gfx->SurfaceToSurface = tx_SurfaceToSurface;
-		gfx->SurfaceToCache = tx_SurfaceToCache;
-		gfx->CacheToSurface = tx_CacheToSurface;
 
 		fprintf(stderr, "[%s] graphics pipeline attached (gdi bookkeeping + avc420 passthrough)\n",
 		        TAG);

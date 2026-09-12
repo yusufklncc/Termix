@@ -512,7 +512,9 @@
     "saveFailed": "Failed to save",
     "required": "Required",
     "play": "Play",
-    "pause": "Pause"
+    "pause": "Pause",
+    "fullscreen": "Fullscreen",
+    "exitFullscreen": "Exit fullscreen"
   },
   "nav": {
     "home": "Home",

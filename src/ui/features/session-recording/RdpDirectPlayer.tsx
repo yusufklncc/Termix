@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pause, Play } from "lucide-react";
+import { Maximize, Minimize, Pause, Play } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { RdpFrameReader } from "@/features/rdp-direct/rdp-wire.ts";
 import { createRdpRenderer } from "@/features/rdp-direct/rdp-render.ts";
@@ -25,6 +25,9 @@ import {
 export function RdpDirectPlayer({ blob }: { blob: Blob }) {
   const { t } = useTranslation();
   const surfaceRef = useRef<HTMLDivElement | null>(null);
+  // Fullscreen takes the frame rather than the canvas, so the controls go
+  // with it -- a full screen you cannot pause is worse than a small one.
+  const frameRef = useRef<HTMLDivElement | null>(null);
 
   const workerRef = useRef<Worker | null>(null);
   const rendererRef = useRef<ReturnType<typeof createRdpRenderer> | null>(null);
@@ -37,6 +40,7 @@ export function RdpDirectPlayer({ blob }: { blob: Blob }) {
   const [unreadable, setUnreadable] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(0);
+  const [fullscreen, setFullscreen] = useState(false);
 
   const duration = records ? recordingDuration(records) : 0;
 
@@ -140,6 +144,20 @@ export function RdpDirectPlayer({ blob }: { blob: Blob }) {
     return () => cancelAnimationFrame(frame);
   }, [playing, records, duration, feed]);
 
+  // The browser owns this state: Escape and the window chrome both leave
+  // fullscreen without going through the button.
+  useEffect(() => {
+    const sync = () =>
+      setFullscreen(document.fullscreenElement === frameRef.current);
+    document.addEventListener("fullscreenchange", sync);
+    return () => document.removeEventListener("fullscreenchange", sync);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void frameRef.current?.requestFullscreen().catch(() => {});
+  };
+
   if (unreadable) {
     return (
       <div className="p-4 text-xs text-muted-foreground">
@@ -156,10 +174,16 @@ export function RdpDirectPlayer({ blob }: { blob: Blob }) {
   };
 
   return (
-    <div className="flex flex-col gap-2">
+    <div
+      ref={frameRef}
+      className="flex flex-col gap-2 bg-background data-[fullscreen=true]:justify-center data-[fullscreen=true]:h-full data-[fullscreen=true]:p-3"
+      data-fullscreen={fullscreen}
+    >
       <div
         ref={surfaceRef}
-        className="relative w-full bg-black aspect-video overflow-hidden"
+        className={`relative w-full bg-black overflow-hidden ${
+          fullscreen ? "flex-1 min-h-0" : "aspect-video"
+        }`}
       />
       <div className="flex items-center gap-3">
         <button
@@ -187,6 +211,20 @@ export function RdpDirectPlayer({ blob }: { blob: Blob }) {
         <span className="text-[10px] tabular-nums text-muted-foreground">
           {seconds(position)} / {seconds(duration)}
         </span>
+        <button
+          type="button"
+          onClick={toggleFullscreen}
+          className="size-7 flex items-center justify-center border border-border text-foreground"
+          aria-label={t(
+            fullscreen ? "common.exitFullscreen" : "common.fullscreen",
+          )}
+        >
+          {fullscreen ? (
+            <Minimize className="size-3.5" />
+          ) : (
+            <Maximize className="size-3.5" />
+          )}
+        </button>
       </div>
     </div>
   );

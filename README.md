@@ -58,41 +58,108 @@ Termix is free and open source. If you find it useful, consider [donating](https
 
 > ### This is a fork
 >
-> Upstream is [Termix-SSH/Termix](https://github.com/Termix-SSH/Termix), and everything below
-> is theirs. This fork tracks it and adds a second way to render a remote desktop.
+> Upstream is [Termix-SSH/Termix](https://github.com/Termix-SSH/Termix), and everything outside
+> the section below is theirs. This fork tracks upstream and adds a second, faster way to render
+> remote desktops, plus a protocol type for machines that already stream their own desktop over
+> WebRTC.
 >
-> **Direct H.264.** Termix's remote desktop runs through guacd, which decodes what the server
-> sends and re-encodes it as image tiles — there is no video codec pass-through, so a server
-> already sending H.264 has it decoded and encoded again before it reaches the browser. The
-> direct renderer connects with FreeRDP 3 and hands the H.264 bitstream to the browser
-> untouched, decoding it with WebCodecs on a worker thread.
+> **All development in this fork was done with Claude Opus 5**, Anthropic's model, working
+> through Claude Code. The maintainer directed the work, made the design decisions and tested it
+> on real hardware.
 >
-> Measured against the same host: **1.6× the frame rate, 23× less server CPU, 9× less traffic
-> to the browser** — [`docs/phase4-comparison.md`](docs/phase4-comparison.md).
->
-> A Windows host only offers H.264 with the "Prioritize H.264/AVC 444" policy on. Without it
-> the session still works: the bridge decodes what the server does send and forwards pixels as
-> WebP, chosen lossless or lossy per region so text stays sharp — 14× smaller than sending them
-> raw, and [measured rather than guessed](docs/phase3-measurements.md).
->
-> Text clipboard, audio, printing to PDF, session recording and playback, pinned resolution,
-> jump hosts and keyboard lock all work on this path. Drive redirection, the RDP performance
-> flags and session sharing do not. It is opt-in per host, the default stays
-> Guacamole, and there is deliberately no automatic fallback — a path that quietly degrades is
-> a path nobody notices is degraded. Setup:
-> [`docs/direct-rdp-setup.md`](docs/direct-rdp-setup.md).
->
-> **Stream hosts.** A protocol type for machines that already publish their own desktop over
-> WebRTC (Selkies, neko) — for accelerated 3D or a session with several viewers, which RDP and
-> VNC cannot carry. Termix relays only the signalling; the video never passes through it.
->
-> Running it needs the FreeRDP bridge sidecar and an image built from this repository rather
-> than upstream's published one:
->
-> ```bash
-> cd docker
-> docker compose -f docker-compose.yml -f compose-fork.yml up -d --build
-> ```
+> See [How this fork differs from upstream](#how-this-fork-differs-from-upstream).
+
+<br />
+
+## How this fork differs from upstream
+
+### Added: a direct H.264 render engine for RDP
+
+Upstream renders RDP, VNC and Telnet through guacd, which decodes what the server sends and
+re-encodes it as image tiles. There is no video pass-through, so an H.264 stream from the server
+is decoded and encoded again before it reaches the browser.
+
+This fork adds a per-host **render engine** choice for RDP hosts. _Direct H.264_ connects through
+a FreeRDP 3 sidecar (`rdp-bridge`) and hands the H.264 bitstream to the browser untouched, where
+WebCodecs decodes it on a worker thread.
+
+Measured against the same host ([`docs/phase4-comparison.md`](docs/phase4-comparison.md)):
+
+|                        | Guacamole   | Direct H.264 |
+| ---------------------- | ----------- | ------------ |
+| Frame rate             | 26 – 30 fps | 47 fps       |
+| Server CPU             | 86%         | 3.7%         |
+| Traffic to the browser | 26.9 Mbps   | 3.0 Mbps     |
+
+What works on the direct path:
+
+- H.264 pass-through, including the 4:2:0 half of AVC444 streams
+- Hosts that do not send H.264, such as Windows without the "Prioritize H.264/AVC 444" policy:
+  the bridge decodes what the server sends and forwards regions as WebP, lossless for text and
+  lossy for photographic content, 14× smaller than raw pixels
+  ([measurements](docs/phase3-measurements.md))
+- Remote cursor, text clipboard, pinned resolution and jump hosts
+- Keyboard lock in fullscreen, so shortcuts such as Alt+Tab reach the remote desktop in browsers
+  that support it
+- Audio
+- Session recording, played back with audio from Session Logs
+- Printing to PDF, enabled per host
+
+What it does not do: drive redirection, multiple monitors, RemoteApp, the RDP performance flags
+and session sharing (the share button is hidden for these tabs). Reconnecting after a dropped
+connection is manual. VNC and Telnet stay on Guacamole.
+
+Design decisions:
+
+- Guacamole stays the default. The direct engine is opt-in per host.
+- There is no automatic fallback to Guacamole. A direct session that cannot run shows why,
+  instead of quietly degrading.
+- The direct engine needs HTTPS, because browsers only expose WebCodecs and AudioWorklet on
+  secure pages. Termix's built-in `ENABLE_SSL` is enough.
+- Decoding the non-H.264 codecs in the browser with WebAssembly was measured at 1.25× over the
+  WebP path and not built.
+
+Setup: [`docs/direct-rdp-setup.md`](docs/direct-rdp-setup.md).
+
+### Added: stream hosts
+
+A new protocol type for machines that already publish their own desktop over WebRTC, such as
+[Selkies](https://github.com/selkies-project/selkies) for GPU-accelerated Linux desktops or
+[neko](https://github.com/m1k1o/neko) for a browser several people watch at once. It covers what
+RDP and VNC carry poorly: accelerated 3D, smooth video and sessions with several viewers.
+
+- **Embed** mode opens the stream's own page inside Termix.
+- **WebRTC** mode negotiates the connection through a signaling gateway in Termix, with adapters
+  for neko and Selkies, and forwards keyboard and mouse to Selkies hosts. The video goes straight
+  from the machine to the browser and never passes through Termix
+  ([measurements](docs/stream-webrtc-measurement.md)).
+
+Stream hosts work with folders, tags, favourites, permissions and split screen like any other
+host. Session sharing is not supported for them.
+
+### Changed
+
+- The Guacamole path is unchanged apart from a passive frame-rate report used for the comparison
+  above.
+- The database gains columns on `ssh_data` for stream hosts, the render engine and printing, with
+  migrations for SQLite, PostgreSQL and MySQL.
+- `docker-compose.yml` includes the `rdp-bridge` service, and the image exposes ports 30013
+  (WebRTC signaling) and 30014 (direct RDP).
+
+### Running this fork
+
+Upstream's published image does not contain these changes. This fork publishes its own images on
+Docker Hub, [`yusufklncc/termix`](https://hub.docker.com/r/yusufklncc/termix) and
+[`yusufklncc/termix-rdp-bridge`](https://hub.docker.com/r/yusufklncc/termix-rdp-bridge):
+
+```bash
+cd docker
+docker compose -f docker-compose.yml -f compose-fork.yml up -d
+```
+
+To use the direct engine from another machine, set `ENABLE_SSL: "true"`, publish port 8443 and
+open Termix over `https://`. Tags follow `<upstream version>-rdp.<n>`: `2.7.1-rdp.2` is upstream
+2.7.1 plus this fork's second release. Images are built for `linux/amd64`.
 
 <br />
 

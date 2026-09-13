@@ -110,6 +110,16 @@ export function createRdpAudio(): RdpAudio {
       sampleRate: nextRate,
       latencyHint: "interactive",
     });
+    // AudioWorklet exists only in a secure context. Without it there is no
+    // playback to build, and throwing here would escape into the frame loop
+    // that called push().
+    if (!context.audioWorklet) {
+      console.warn(
+        "[rdp-direct] no audio: AudioWorklet needs a secure context",
+      );
+      return;
+    }
+
     const url = URL.createObjectURL(
       new Blob([PROCESSOR_SOURCE], { type: "application/javascript" }),
     );

@@ -11,6 +11,20 @@ import { Button } from "@/components/button.tsx";
 import { SimpleLoader } from "@/lib/SimpleLoader.tsx";
 import { logActivity } from "@/main-axios.ts";
 import { statsLogger } from "@/lib/frontend-logger";
+
+/*
+ * WebCodecs and AudioWorklet exist only in a secure context -- HTTPS, or
+ * localhost. Over plain HTTP the session would connect, paint nothing and
+ * explain nothing: the decoder constructor is simply undefined inside the
+ * worker. Development happens on localhost, which is why this only shows up
+ * once Termix is opened from another machine.
+ *
+ * Decided once, at load: a page does not change security context.
+ */
+const CAN_DECODE =
+  typeof window !== "undefined" &&
+  window.isSecureContext &&
+  typeof VideoDecoder !== "undefined";
 import type { PrintedDocument } from "@/features/rdp-direct/rdp-print.ts";
 
 interface Notice {
@@ -94,6 +108,11 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
 
       setState("connecting");
       setDetail(null);
+
+      if (!CAN_DECODE) {
+        setState("failed");
+        return;
+      }
 
       // This renderer is experimental and sits inside the same React tree as
       // everything else. An exception escaping here would unmount the whole
@@ -261,7 +280,7 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
                     className="text-xs max-w-md text-center"
                     style={{ color: "var(--foreground-secondary)" }}
                   >
-                    {detail}
+                    {CAN_DECODE ? detail : t("rdpDirect.insecureContext")}
                   </p>
                 )}
                 <Button variant="outline" size="sm" onClick={reconnect}>

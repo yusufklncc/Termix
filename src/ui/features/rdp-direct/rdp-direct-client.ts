@@ -148,6 +148,13 @@ export function connectRdpDirect({
   surface.addEventListener("pointerdown", resumeAudio);
   surface.addEventListener("keydown", resumeAudio);
 
+  // An exception thrown inside the worker never reaches onmessage. Without
+  // this it is logged to the console and the session stays connected,
+  // painting nothing -- the one failure a viewer has no way to diagnose.
+  worker.addEventListener("error", (event) => {
+    onState("failed", event.message || "decoder worker failed");
+  });
+
   worker.onmessage = (event: MessageEvent) => {
     if (event.data?.type === "error") onState("failed", event.data.message);
     else if (event.data?.type === "decoder-unusable") {

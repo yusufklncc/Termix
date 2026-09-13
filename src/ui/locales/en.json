@@ -4736,7 +4736,8 @@
     "noH264": "This host draws without H.264, so the session falls back to decoding on the server — it works, but costs far more CPU and bandwidth. Enable \"Prioritize H.264/AVC 444 graphics mode\" on the target and restart it for the fast path.",
     "serverDecode": "This browser could not decode this host's video, so the session falls back to decoding on the server — it works, but costs far more CPU and bandwidth than the direct path.",
     "printed": "{{name}} was printed on the remote desktop.",
-    "save": "Save"
+    "save": "Save",
+    "insecureContext": "The direct renderer needs HTTPS. Browsers only allow video decoding and audio on secure pages, and this page was opened over plain HTTP. Enable SSL on the Termix server (ENABLE_SSL) and open it over https://, or switch this host to the Guacamole renderer."
   },
   "sessionRecording": {
     "unreadable": "This recording is not in a format this player understands.",

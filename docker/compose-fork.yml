@@ -7,11 +7,8 @@
 #
 #   docker compose -f docker-compose.yml -f compose-fork.yml up -d
 #
-# The bridge is named here too, so a server pulls it instead of building
-# FreeRDP from source -- which works but takes a quarter of an hour.
-#
 # To build from a checkout rather than pull, drop this overlay and use
-# compose-dev.yml, or delete the image lines below.
+# compose-dev.yml, which builds both the application and the bridge.
 #
 # Removing the rdp-bridge service and RDP_BRIDGE_URL from docker-compose.yml
 # opts out of the direct renderer entirely; hosts stay on the Guacamole path
@@ -19,10 +16,3 @@
 services:
   termix:
     image: yusufklncc/termix:latest
-
-  rdp-bridge:
-    image: yusufklncc/termix-rdp-bridge:latest
-    # !reset drops the build block docker-compose.yml declares. Without it a
-    # server with no local image builds FreeRDP from source instead of pulling,
-    # which works and costs a quarter of an hour.
-    build: !reset null

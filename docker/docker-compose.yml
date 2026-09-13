@@ -29,8 +29,9 @@ services:
   # Experimental direct RDP renderer. Remove this service and the RDP_BRIDGE_URL
   # above to opt out entirely -- hosts stay on the Guacamole path either way.
   rdp-bridge:
-    build:
-      context: ./freerdp-bridge
+    # Pulled rather than built: building means building FreeRDP from source.
+    # compose-dev.yml builds it from this checkout instead.
+    image: yusufklncc/termix-rdp-bridge:latest
     container_name: termix-rdp-bridge
     restart: unless-stopped
     networks:

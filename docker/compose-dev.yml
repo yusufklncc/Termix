@@ -15,8 +15,17 @@ services:
       GUACD_HOST: "guacd-dev"
       GUACD_TUNNEL_HOST: "termix-dev"
       GUACD_RECORDING_PATH: "/termix-data/session_recordings/guacamole"
+      RDP_BRIDGE_URL: "rdp-bridge-dev:3390"
     depends_on:
       - guacd-dev
+    networks:
+      - termix-dev-net
+
+  rdp-bridge-dev:
+    build:
+      context: ./freerdp-bridge
+    container_name: rdp-bridge-dev
+    restart: unless-stopped
     networks:
       - termix-dev-net
 

@@ -66,6 +66,26 @@ Hiçbiri zorunlu değil; hepsi teşhis ve A/B içindir.
 
 ---
 
+> **HTTPS şart.** Direct renderer tarayıcıda WebCodecs ve AudioWorklet kullanıyor,
+> ve tarayıcılar ikisini de yalnızca güvenli sayfalarda açıyor: HTTPS ya da
+> `localhost`. Geliştirirken `localhost` kullanıldığı için fark edilmiyor. Termix'i
+> başka bir makineden düz HTTP ile açınca oturum başlamaz, sebebini söyleyen bir
+> hata gösterilir. Guacamole yolu düz HTTP'de de çalışır.
+>
+> Termix'in yerleşik SSL'i yeterli. `termix` servisine ekleyin:
+>
+> ```yaml
+> ports:
+>   - "8443:8443"
+> environment:
+>   ENABLE_SSL: "true"
+> ```
+>
+> Sonra `https://SUNUCU:8443` ile açın. Sertifika kendinden imzalı ve adı
+> `SSL_DOMAIN`'e göre (varsayılan `localhost`) üretiliyor, sunucunun IP'si
+> sertifikada yok. Bu yüzden tarayıcı bir kez uyarı gösterir. Kalıcı çözüm, önüne
+> gerçek sertifikalı bir reverse proxy koymak.
+
 ## 2. Hedef makine (Windows)
 
 Bu adımlar olmadan oturum **açılır ve görüntü gelir**, ama yolun var olma

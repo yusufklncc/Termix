@@ -325,7 +325,7 @@ decode edilip piksel olarak gidiyor — 580 MB/dk'dan 41 MB/dk'ya indi.
 - [x] ~~Sürücü yönlendirme~~ — **yapılmayacak, kullanıcı kararı.** guacd'nin
       yaptığı da konteyner içi bir klasör; Termix'in dosya yöneticisi bu
       host'lara zaten erişiyor
-- [ ] Sesli bir oturumu kaydedip oynatmak — denenmedi
+- [x] Sesli bir oturumu kaydedip oynatmak — kullanıcı doğruladı, kayıtlar sesli
 - [ ] Yazıcının birden fazla Windows sürümünde denenmesi. Yazdırma rdpdr
       üzerinden gidiyor ve rdpdr isteğe bağlı değil: yüklenemeyen bir cihaz
       **tüm bağlantıyı** düşürüyor. Varsayılanın kapalı olma sebebi bu
@@ -337,6 +337,36 @@ decode edilip piksel olarak gidiyor — 580 MB/dk'dan 41 MB/dk'ya indi.
       `SimpleLoader` ve `GuacamoleDisplay` bunları kullanıyor. Direct yolun
       bildirim kutusunda okunmazlığa sebep oldu ve orada gerçek token'larla
       düzeltildi; diğerleri koyu zemin üstünde fark edilmiyor. Ayrı iş
+
+---
+
+## Faz 6 — Upstream 2.7.1 ve yayın
+
+- [x] Upstream 2.7.0 ve 2.7.1 birleştirildi (30 çakışma). Upstream migration geçmişini
+      baştan üretmişti; bizim kolonlar tek migration olarak yeniden üretildi (sqlite `0011`,
+      pg/mysql `0015`). `SidebarTree` upstream'de `tree/` dizinine bölünmüştü, stream desteği
+      yeni yapıya taşındı. Geri dönüş dalı: `backup/pre-upstream-2.7.1`
+- [x] Fork: [yusufklncc/Termix](https://github.com/yusufklncc/Termix), remote adı `fork`.
+      `origin` upstream'dir, oraya push yapılmaz
+- [x] Docker Hub: `yusufklncc/termix` (`2.7.1-rdp.2`) ve `yusufklncc/termix-rdp-bridge`
+      (`2.7.1-rdp.1`), ikisi de `latest`. Etiket şeması `<upstream sürümü>-rdp.<n>`
+- [x] Sunucu kurulumu: tek dosyalık compose, `ENABLE_SSL`, `https://SUNUCU:8443`. Direct RDP
+      sunucuda çalıştığı doğrulandı
+- [x] Direct RDP güvenli bağlam (HTTPS) olmadan başlamıyor ve sebebini söylüyor. İlk gerçek
+      kurulumda ortaya çıktı: geliştirme `localhost`'ta yapıldığı için görünmüyordu
+- [x] README: fork'un upstream'den farkları ve Claude Opus 5 notu
+- [x] Yayından önce dokümanlardan iç ağ adresi ve kullanıcı adı temizlendi
+
+### Açık kalanlar
+
+- [ ] Yazıcının birden fazla Windows sürümünde denenmesi. Varsayılanın kapalı olma sebebi bu
+- [ ] Direct RDP sekmesi ön yüklenmiyor: sekme tipi `rdp` olduğu için üstüne gelince
+      Guacamole iniyor. Upstream'in API'sine dokunmayı gerektirdiği için bilerek yapılmadı
+- [ ] Jump host tünelinin gerçek bir jump host'la doğrulanması
+- [ ] Uçtan uca gecikmenin fiziksel ölçümü
+- [ ] `npm run verify:dialect` (gerçek bir Postgres/MySQL `DATABASE_URL` gerekiyor)
+- [ ] Electron standalone'un fiilen çalıştırılması
+- [ ] İmajlar yalnızca `linux/amd64`; ARM sunucu gerekirse çok mimarili derleme
 
 ---
 

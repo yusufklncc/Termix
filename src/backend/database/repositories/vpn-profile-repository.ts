@@ -1,6 +1,6 @@
 import { desc, eq } from "drizzle-orm";
 import { DataCrypto } from "../../utils/data-crypto.js";
-import { vpnProfiles } from "../db/schema.js";
+import { hosts, vpnProfiles } from "../db/schema.js";
 import type { DatabaseContext } from "./database-context.js";
 import { rowsAffected } from "./mutation-result.js";
 import {
@@ -125,6 +125,23 @@ export class VpnProfileRepository {
 
     if (updated) await this.afterWrite();
     return updated ?? null;
+  }
+
+  /**
+   * How many hosts still reach their target through this profile.
+   *
+   * The column is ON DELETE SET NULL, so deleting a profile would leave those
+   * hosts with no tunnel and nothing to say about it -- and a host with no
+   * tunnel connects directly, out of the server's own route. The count is what
+   * lets the API refuse instead.
+   */
+  async countHostsUsing(id: number): Promise<number> {
+    const rows = await this.context.drizzle
+      .select({ id: hosts.id })
+      .from(hosts)
+      .where(eq(hosts.vpnProfileId, id));
+
+    return rows.length;
   }
 
   async deleteById(id: number): Promise<boolean> {

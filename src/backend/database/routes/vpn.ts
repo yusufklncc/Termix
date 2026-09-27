@@ -129,8 +129,23 @@ router.delete("/:id", authenticateJWT, async (req, res: Response) => {
       return res.status(404).json({ error: "Network profile not found" });
     }
 
-    // Hosts referencing it are left pointing at nothing by the schema's ON
-    // DELETE SET NULL, which the connect path reads as "no tunnel asked for".
+    /*
+     * Refused while hosts still use it.
+     *
+     * The column is ON DELETE SET NULL, so deleting would quietly detach them
+     * -- and a host with no profile connects directly, out of the server's own
+     * route, which is the one thing a host pointed at someone else's network
+     * must never do. The foreign key stays permissive as a last resort; this
+     * is where the decision is made.
+     */
+    const inUse = await repository.countHostsUsing(id);
+    if (inUse > 0) {
+      return res.status(409).json({
+        error: `This profile is still used by ${inUse} host${inUse === 1 ? "" : "s"}. Move them to another profile first.`,
+        hostsUsing: inUse,
+      });
+    }
+
     await repository.deleteById(id);
     res.json({ message: "Network profile deleted" });
   } catch (error) {

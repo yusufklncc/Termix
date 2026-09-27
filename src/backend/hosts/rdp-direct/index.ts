@@ -7,6 +7,8 @@ import { sshLogger } from "../../utils/logger.js";
 import { resolveRdpBridgeOptions } from "../../utils/rdp-bridge-config.js";
 import { resolveDisplaySize } from "./display-size.js";
 import { startRecording, type RdpRecorder } from "./recording.js";
+import { resolveHostGateway } from "../host-network.js";
+import { openGatewayTunnel } from "../gateway-tunnel.js";
 import {
   openJumpTunnel,
   parseJumpHosts,
@@ -83,7 +85,9 @@ async function resolveBridge(): Promise<{ host: string; port: number }> {
 wss.on("connection", async (ws: WebSocket, req) => {
   let userId: string | undefined;
   let bridge: net.Socket | null = null;
-  let tunnel: JumpTunnel | null = null;
+  // Either kind of tunnel: both present the bridge with a local address
+  // and both are closed with the session.
+  let tunnel: (JumpTunnel & { close(): void }) | null = null;
   let recorder: RdpRecorder | null = null;
 
   const fail = (code: number, message: string) => {
@@ -241,6 +245,70 @@ wss.on("connection", async (ws: WebSocket, req) => {
           userId,
         });
         fail(1011, "Failed to reach the host through its jump hosts");
+        return;
+      }
+    }
+
+    /*
+     * A host reached through a network profile gets the same treatment: the
+     * bridge takes a host and a port, so it is handed a local listener that
+     * comes out inside that network.
+     */
+    const gateway = await resolveHostGateway({
+      id: hostId,
+      vpnProfileId: record.vpnProfileId as number | null | undefined,
+      useSocks5: record.useSocks5 as boolean | undefined,
+      socks5Host: record.socks5Host as string | undefined,
+      socks5Port: record.socks5Port as number | undefined,
+      socks5Username: record.socks5Username as string | undefined,
+      socks5Password: record.socks5Password as string | undefined,
+      socks5ProxyChain: record.socks5ProxyChain,
+    }).catch((error: unknown) => {
+      sshLogger.error("Failed to resolve the host's network", error, {
+        operation: "rdp_direct_network_error",
+        hostId,
+        userId,
+      });
+      return undefined;
+    });
+
+    if (gateway === undefined) {
+      fail(1011, "This host's network could not be resolved");
+      return;
+    }
+
+    if (gateway && jumpHosts.length > 0) {
+      // Nesting a jump chain inside a gateway is meaningful but unbuilt, and
+      // guessing which one wins would send the traffic somewhere nobody
+      // chose.
+      fail(
+        1011,
+        "This host uses both jump hosts and a network profile, which is not supported yet",
+      );
+      return;
+    }
+
+    if (gateway) {
+      try {
+        tunnel = await openGatewayTunnel({
+          gateway,
+          target: { host: connectRequest.host, port: connectRequest.port },
+          consumerHost: bridgeHost,
+        });
+        connectRequest.host = tunnel.host;
+        connectRequest.port = tunnel.port;
+        sshLogger.info("Direct RDP tunnelled through a network profile", {
+          operation: "rdp_direct_gateway_tunnel",
+          hostId,
+          userId,
+        });
+      } catch (error) {
+        sshLogger.error("Failed to open the network tunnel", error, {
+          operation: "rdp_direct_gateway_tunnel_error",
+          hostId,
+          userId,
+        });
+        fail(1011, "Failed to reach the host through its network profile");
         return;
       }
     }

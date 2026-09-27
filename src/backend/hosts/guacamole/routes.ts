@@ -28,6 +28,8 @@ import {
   getRequestMeta,
 } from "../../utils/audit-logger.js";
 import { resolveJumpTunnelEndpoint } from "./jump-tunnel-endpoint.js";
+import { resolveHostGateway } from "../host-network.js";
+import { openGatewayTunnel } from "../gateway-tunnel.js";
 import {
   buildRdpSettings,
   resolveRdpAuthTypeForConnect,
@@ -528,7 +530,51 @@ router.post(
 
       let tunnelEndpoint: ReturnType<typeof resolveJumpTunnelEndpoint> | null =
         null;
-      if (jumpHosts.length > 0 || (connectionType === "vnc" && !username)) {
+      /*
+       * Which network this host is reached through.
+       *
+       * guacd dials its own target, so a profile is applied the same way a
+       * jump chain is: by handing it a local address that comes out inside
+       * that network. This is also the first time the guacd path honours a
+       * host's own proxy settings at all -- it never read them before.
+       */
+      let gateway: Awaited<ReturnType<typeof resolveHostGateway>> = null;
+      try {
+        gateway = await resolveHostGateway({
+          id: hostId,
+          vpnProfileId: host.vpnProfileId as number | null | undefined,
+          useSocks5: host.useSocks5 as boolean | undefined,
+          socks5Host: host.socks5Host as string | undefined,
+          socks5Port: host.socks5Port as number | undefined,
+          socks5Username: host.socks5Username as string | undefined,
+          socks5Password: host.socks5Password as string | undefined,
+          socks5ProxyChain: host.socks5ProxyChain,
+        });
+      } catch (error) {
+        guacLogger.error("Failed to resolve the host's network", error, {
+          operation: "guac_network_error",
+          hostId,
+        });
+        return res.status(500).json({
+          error: "This host's network could not be resolved",
+        });
+      }
+
+      if (gateway && jumpHosts.length > 0) {
+        // Nesting a jump chain inside a gateway is meaningful but unbuilt,
+        // and guessing which wins would send the traffic somewhere nobody
+        // chose.
+        return res.status(400).json({
+          error:
+            "This host uses both jump hosts and a network profile, which is not supported yet",
+        });
+      }
+
+      if (
+        jumpHosts.length > 0 ||
+        gateway ||
+        (connectionType === "vnc" && !username)
+      ) {
         let guacdUrl: string | undefined;
         try {
           guacdUrl =
@@ -605,6 +651,33 @@ router.post(
           });
           return res.status(500).json({
             error: "Failed to establish SSH tunnel to remote host",
+          });
+        }
+      }
+
+      if (gateway) {
+        try {
+          const tunnel = await openGatewayTunnel({
+            gateway,
+            target: { host: hostname, port },
+            endpoint: tunnelEndpoint!,
+          });
+          hostname = tunnel.host;
+          port = tunnel.port;
+          setTimeout(tunnel.close, 60 * 60 * 1000).unref();
+          guacLogger.info("Network profile tunnel established", {
+            operation: "guac_gateway_tunnel",
+            hostId,
+            tunnelPort: port,
+          });
+        } catch (tunnelError) {
+          guacLogger.error(
+            "Failed to establish the network tunnel",
+            tunnelError,
+            { operation: "guac_gateway_tunnel_error", hostId },
+          );
+          return res.status(500).json({
+            error: "Failed to reach the host through its network profile",
           });
         }
       }

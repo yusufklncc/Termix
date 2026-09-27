@@ -423,6 +423,7 @@ const CONNECT_LEVEL_FIELDS = new Set([
   // The recipient has to know which renderer to open.
   "rdpRenderEngine",
   "rdpEnablePrinting",
+  "vpnProfileId",
   "vncPort",
   "telnetPort",
   // A stream recipient needs the embed target itself; without these the tab
@@ -555,6 +556,7 @@ export function transformHostResponse(
     rdpSecurity: host.rdpSecurity || undefined,
     rdpRenderEngine: host.rdpRenderEngine || undefined,
     rdpEnablePrinting: host.rdpEnablePrinting ?? undefined,
+    vpnProfileId: host.vpnProfileId ?? undefined,
     rdpIgnoreCert: !!host.rdpIgnoreCert,
     vncUser: host.vncUser || undefined,
     telnetUser: host.telnetUser || undefined,

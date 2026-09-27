@@ -15,6 +15,7 @@ import {
 import { sendC2SMessage, writeC2SRemoteChunk } from "./c2s-relay-utils.js";
 import { getTunnelMode } from "./utils.js";
 import { createCurrentHostResolutionRepository } from "../../database/repositories/factory.js";
+import { resolveHostGateway } from "../host-network.js";
 
 export type C2SOpenMessage = {
   type: "open" | "test";
@@ -171,23 +172,22 @@ async function connectC2SSourceClient(
     authMethod: tunnelConfig.sourceAuthMethod,
   });
 
-  if (
-    tunnelConfig.useSocks5 &&
-    (tunnelConfig.socks5Host ||
-      (tunnelConfig.socks5ProxyChain &&
-        tunnelConfig.socks5ProxyChain.length > 0))
-  ) {
+  // One resolver decides this for every path: null means the host wants a
+  // direct connection, and anything else it cannot honour throws.
+  const gateway = await resolveHostGateway({
+    useSocks5: tunnelConfig.useSocks5,
+    socks5Host: tunnelConfig.socks5Host,
+    socks5Port: tunnelConfig.socks5Port,
+    socks5Username: tunnelConfig.socks5Username,
+    socks5Password: tunnelConfig.socks5Password,
+    socks5ProxyChain: tunnelConfig.socks5ProxyChain,
+  });
+
+  if (gateway) {
     const socks5Socket = await createSocks5Connection(
       tunnelConfig.sourceIP,
       tunnelConfig.sourceSSHPort,
-      {
-        useSocks5: tunnelConfig.useSocks5,
-        socks5Host: tunnelConfig.socks5Host,
-        socks5Port: tunnelConfig.socks5Port,
-        socks5Username: tunnelConfig.socks5Username,
-        socks5Password: tunnelConfig.socks5Password,
-        socks5ProxyChain: tunnelConfig.socks5ProxyChain,
-      },
+      gateway,
     );
     if (socks5Socket) {
       connOptions.sock = socks5Socket;

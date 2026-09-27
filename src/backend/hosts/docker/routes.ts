@@ -17,7 +17,6 @@ import { DataCrypto } from "../../utils/data-crypto.js";
 import { AuthManager } from "../../utils/auth-manager.js";
 import {
   type AuthenticatedRequest,
-  type ProxyNode,
   type SSHHost,
 } from "../../../types/index.js";
 import {
@@ -37,6 +36,7 @@ import {
   getRuntimeLabel,
 } from "./container-runtime.js";
 import { resolveSshConnectConfigHost } from "../ssh-dns.js";
+import { resolveHostGateway } from "../host-network.js";
 import {
   type SSHSession,
   sshSessions,
@@ -889,19 +889,16 @@ export function registerDockerSshRoutes(app: express.Express): void {
         },
       );
 
-      const proxyConfig: SOCKS5Config | null =
-        useSocks5 &&
-        (socks5Host ||
-          (socks5ProxyChain && (socks5ProxyChain as ProxyNode[]).length > 0))
-          ? {
-              useSocks5,
-              socks5Host,
-              socks5Port,
-              socks5Username,
-              socks5Password,
-              socks5ProxyChain: socks5ProxyChain as ProxyNode[],
-            }
-          : null;
+      const proxyConfig: SOCKS5Config | null = await resolveHostGateway({
+        id: host.id,
+        vpnProfileId: host.vpnProfileId,
+        useSocks5,
+        socks5Host,
+        socks5Port,
+        socks5Username,
+        socks5Password,
+        socks5ProxyChain,
+      });
 
       const hasJumpHosts = host.jumpHosts && host.jumpHosts.length > 0;
 

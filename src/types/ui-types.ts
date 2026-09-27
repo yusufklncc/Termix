@@ -64,6 +64,7 @@ export type Host = {
   terminalConfig?: Partial<TerminalConfig>;
 
   useSocks5?: boolean;
+  vpnProfileId?: number | null;
   socks5Host?: string;
   socks5Port?: number;
   connectionOrigin?: "local" | "remote" | null;

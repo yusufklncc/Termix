@@ -103,11 +103,13 @@ import {
   statusPollLimiter,
 } from "./state.js";
 import { listenOnServicePort } from "../../utils/service-listen.js";
+import { resolveHostGateway } from "../host-network.js";
 
 const authManager = AuthManager.getInstance();
 const permissionManager = PermissionManager.getInstance();
 
 interface SSHHostWithCredentials {
+  vpnProfileId?: number | null;
   id: number;
   name: string;
   ip: string;
@@ -1516,19 +1518,7 @@ function createSshFactory(host: SSHHostWithCredentials): () => Promise<Client> {
       await setupVaultSshSignerAuth(config, client, host);
     }
 
-    const proxyConfig: SOCKS5Config | null =
-      host.useSocks5 &&
-      (host.socks5Host ||
-        (host.socks5ProxyChain && host.socks5ProxyChain.length > 0))
-        ? {
-            useSocks5: host.useSocks5,
-            socks5Host: host.socks5Host,
-            socks5Port: host.socks5Port,
-            socks5Username: host.socks5Username,
-            socks5Password: host.socks5Password,
-            socks5ProxyChain: host.socks5ProxyChain,
-          }
-        : null;
+    const proxyConfig: SOCKS5Config | null = await resolveHostGateway(host);
 
     const hasJumpHosts =
       host.jumpHosts && host.jumpHosts.length > 0 && host.userId;
@@ -2704,22 +2694,22 @@ app.post("/metrics/start/:id", validateHostId, async (req, res) => {
               reject(error);
             }
           });
-      } else if (
-        host.useSocks5 &&
-        (host.socks5Host ||
-          (host.socks5ProxyChain && host.socks5ProxyChain.length > 0))
-      ) {
+      } else if (host.useSocks5 || host.vpnProfileId) {
         connectionLogs.push(
           createConnectionLog("info", "proxy", "Connecting via SOCKS5 proxy"),
         );
-        createSocks5Connection(host.ip, host.port, {
-          useSocks5: host.useSocks5,
-          socks5Host: host.socks5Host,
-          socks5Port: host.socks5Port,
-          socks5Username: host.socks5Username,
-          socks5Password: host.socks5Password,
-          socks5ProxyChain: host.socks5ProxyChain,
-        })
+        resolveHostGateway(host)
+          .then((gateway) => {
+            // Entered only because the host asked for another network, so a
+            // null here is a configuration that cannot be honoured -- not a
+            // host that wanted a direct connection.
+            if (!gateway) {
+              throw new Error(
+                "This host is configured to reach its target through another network, which could not be opened",
+              );
+            }
+            return createSocks5Connection(host.ip, host.port, gateway);
+          })
           .then((socks5Socket) => {
             if (socks5Socket) {
               config.sock = socks5Socket;

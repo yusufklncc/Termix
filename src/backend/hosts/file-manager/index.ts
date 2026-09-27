@@ -17,7 +17,6 @@ import { fileLogger } from "../../utils/logger.js";
 import { AuthManager } from "../../utils/auth-manager.js";
 import {
   type AuthenticatedRequest,
-  type ProxyNode,
   type SSHHost,
 } from "../../../types/index.js";
 import {
@@ -70,6 +69,7 @@ import { registerFileActionRoutes } from "./action-routes.js";
 import { applyAgentAuth } from "../terminal-auth-helpers.js";
 import { applyCACertIfPresent } from "./ca-cert-auth.js";
 import { listenOnServicePort } from "../../utils/service-listen.js";
+import { resolveHostGateway } from "../host-network.js";
 
 /**
  * The host id came from whichever database the client is displaying. If this
@@ -364,19 +364,7 @@ async function startDedicatedTransferConnect(
   host: SSHHost,
   userId: string,
 ): Promise<void> {
-  const proxyConfig: SOCKS5Config | null =
-    host.useSocks5 &&
-    (host.socks5Host ||
-      (host.socks5ProxyChain && host.socks5ProxyChain.length > 0))
-      ? {
-          useSocks5: host.useSocks5,
-          socks5Host: host.socks5Host,
-          socks5Port: host.socks5Port,
-          socks5Username: host.socks5Username,
-          socks5Password: host.socks5Password,
-          socks5ProxyChain: host.socks5ProxyChain,
-        }
-      : null;
+  const proxyConfig: SOCKS5Config | null = await resolveHostGateway(host);
 
   const jumpHosts = host.jumpHosts;
   const hasJumpHosts = jumpHosts && jumpHosts.length > 0;
@@ -843,6 +831,7 @@ app.post("/ssh/file_manager/ssh/connect", async (req, res) => {
   let resolvedSocks5Username = socks5Username;
   let resolvedSocks5Password = socks5Password;
   let resolvedSocks5ProxyChain = socks5ProxyChain;
+  let resolvedVpnProfileId: number | null = null;
   let resolvedVaultProfileId: number | null = null;
   if (hostId && userId && !password && !sshKey) {
     try {
@@ -873,6 +862,8 @@ app.post("/ssh/file_manager/ssh/connect", async (req, res) => {
         resolvedVaultProfileId =
           (resolvedHost.vaultProfile as { id?: number } | undefined)?.id ??
           null;
+        resolvedVpnProfileId =
+          (resolvedHost.vpnProfileId as number | null | undefined) ?? null;
         if (resolvedHost.useSocks5) {
           resolvedUseSocks5 = resolvedHost.useSocks5;
           resolvedSocks5Host = resolvedHost.socks5Host;
@@ -945,6 +936,8 @@ app.post("/ssh/file_manager/ssh/connect", async (req, res) => {
         resolvedVaultProfileId =
           (resolvedHost.vaultProfile as { id?: number } | undefined)?.id ??
           null;
+        resolvedVpnProfileId =
+          (resolvedHost.vpnProfileId as number | null | undefined) ?? null;
         if (resolvedHost.useSocks5) {
           resolvedUseSocks5 = resolvedHost.useSocks5;
           resolvedSocks5Host = resolvedHost.socks5Host;
@@ -1780,20 +1773,15 @@ app.post("/ssh/file_manager/ssh/connect", async (req, res) => {
     },
   );
 
-  const proxyConfig: SOCKS5Config | null =
-    resolvedUseSocks5 &&
-    (resolvedSocks5Host ||
-      (resolvedSocks5ProxyChain &&
-        (resolvedSocks5ProxyChain as ProxyNode[]).length > 0))
-      ? {
-          useSocks5: resolvedUseSocks5,
-          socks5Host: resolvedSocks5Host,
-          socks5Port: resolvedSocks5Port,
-          socks5Username: resolvedSocks5Username,
-          socks5Password: resolvedSocks5Password,
-          socks5ProxyChain: resolvedSocks5ProxyChain as ProxyNode[],
-        }
-      : null;
+  const proxyConfig: SOCKS5Config | null = await resolveHostGateway({
+    vpnProfileId: resolvedVpnProfileId,
+    useSocks5: resolvedUseSocks5,
+    socks5Host: resolvedSocks5Host,
+    socks5Port: resolvedSocks5Port,
+    socks5Username: resolvedSocks5Username,
+    socks5Password: resolvedSocks5Password,
+    socks5ProxyChain: resolvedSocks5ProxyChain,
+  });
 
   const hasJumpHosts =
     resolvedJumpHosts && resolvedJumpHosts.length > 0 && userId;

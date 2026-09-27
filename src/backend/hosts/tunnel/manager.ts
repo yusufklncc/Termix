@@ -47,6 +47,7 @@ import { resolveSshConnectConfigHost } from "../ssh-dns.js";
 import { PermissionManager } from "../../utils/permission-manager.js";
 import { handleSocks5Connect } from "./socks5-relay.js";
 import { notifyAutomationInternalEvent } from "../automation-events.js";
+import { resolveHostGateway } from "../host-network.js";
 
 export const activeTunnels = new Map<string, Client>();
 export const retryCounters = new Map<string, number>();
@@ -1570,24 +1571,23 @@ export async function connectSSHTunnel(
     });
   }
 
-  if (
-    tunnelConfig.useSocks5 &&
-    (tunnelConfig.socks5Host ||
-      (tunnelConfig.socks5ProxyChain &&
-        tunnelConfig.socks5ProxyChain.length > 0))
-  ) {
+  // One resolver decides this for every path: null means the host wants a
+  // direct connection, and anything else it cannot honour throws.
+  const gateway = await resolveHostGateway({
+    useSocks5: tunnelConfig.useSocks5,
+    socks5Host: tunnelConfig.socks5Host,
+    socks5Port: tunnelConfig.socks5Port,
+    socks5Username: tunnelConfig.socks5Username,
+    socks5Password: tunnelConfig.socks5Password,
+    socks5ProxyChain: tunnelConfig.socks5ProxyChain,
+  });
+
+  if (gateway) {
     try {
       const socks5Socket = await createSocks5Connection(
         tunnelConfig.sourceIP,
         tunnelConfig.sourceSSHPort,
-        {
-          useSocks5: tunnelConfig.useSocks5,
-          socks5Host: tunnelConfig.socks5Host,
-          socks5Port: tunnelConfig.socks5Port,
-          socks5Username: tunnelConfig.socks5Username,
-          socks5Password: tunnelConfig.socks5Password,
-          socks5ProxyChain: tunnelConfig.socks5ProxyChain,
-        },
+        gateway,
       );
 
       if (socks5Socket) {
@@ -1779,24 +1779,23 @@ export async function killRemoteTunnelByMarker(
       connOptions.password = resolvedSourceCredentials.password;
     }
 
-    if (
-      tunnelConfig.useSocks5 &&
-      (tunnelConfig.socks5Host ||
-        (tunnelConfig.socks5ProxyChain &&
-          tunnelConfig.socks5ProxyChain.length > 0))
-    ) {
+    // One resolver decides this for every path: null means the host wants a
+    // direct connection, and anything else it cannot honour throws.
+    const gateway = await resolveHostGateway({
+      useSocks5: tunnelConfig.useSocks5,
+      socks5Host: tunnelConfig.socks5Host,
+      socks5Port: tunnelConfig.socks5Port,
+      socks5Username: tunnelConfig.socks5Username,
+      socks5Password: tunnelConfig.socks5Password,
+      socks5ProxyChain: tunnelConfig.socks5ProxyChain,
+    });
+
+    if (gateway) {
       try {
         const socks5Socket = await createSocks5Connection(
           tunnelConfig.sourceIP,
           tunnelConfig.sourceSSHPort,
-          {
-            useSocks5: tunnelConfig.useSocks5,
-            socks5Host: tunnelConfig.socks5Host,
-            socks5Port: tunnelConfig.socks5Port,
-            socks5Username: tunnelConfig.socks5Username,
-            socks5Password: tunnelConfig.socks5Password,
-            socks5ProxyChain: tunnelConfig.socks5ProxyChain,
-          },
+          gateway,
         );
 
         if (socks5Socket) {

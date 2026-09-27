@@ -242,6 +242,7 @@ export type Host = {
   notes?: string;
 
   useSocks5?: boolean;
+  vpnProfileId?: number | null;
   socks5Host?: string;
   socks5Port?: number;
   socks5Username?: string;
@@ -416,6 +417,7 @@ export interface HostData {
   notes?: string;
 
   useSocks5?: boolean;
+  vpnProfileId?: number | null;
   socks5Host?: string;
   socks5Port?: number;
   socks5Username?: string;
@@ -636,6 +638,7 @@ export interface TunnelConfig {
   isPinned: boolean;
 
   useSocks5?: boolean;
+  vpnProfileId?: number | null;
   socks5Host?: string;
   socks5Port?: number;
   socks5Username?: string;

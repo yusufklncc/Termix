@@ -30,7 +30,6 @@ import {
   type SOCKS5Config,
 } from "../../utils/socks5-helper.js";
 import { SSHAuthManager } from "../auth-manager.js";
-import type { ProxyNode } from "../../../types/index.js";
 import { SSHHostKeyVerifier } from "../host-key-verifier.js";
 import { createJumpHostChain, JumpHostChainError } from "../jump-host-chain.js";
 import {
@@ -74,6 +73,7 @@ import {
   waitForWebSocketOpen,
 } from "../cloudflare-websocket.js";
 import { hostSessionStatus } from "../host-session-status.js";
+import { resolveHostGateway } from "../host-network.js";
 
 interface ConnectToHostData {
   cols: number;
@@ -3266,19 +3266,7 @@ wss.on("connection", async (ws: WebSocket, req) => {
     }
 
     const proxyConfig: SOCKS5Config | null =
-      hostConfig.useSocks5 &&
-      (hostConfig.socks5Host ||
-        (hostConfig.socks5ProxyChain &&
-          (hostConfig.socks5ProxyChain as ProxyNode[]).length > 0))
-        ? {
-            useSocks5: hostConfig.useSocks5,
-            socks5Host: hostConfig.socks5Host,
-            socks5Port: hostConfig.socks5Port,
-            socks5Username: hostConfig.socks5Username,
-            socks5Password: hostConfig.socks5Password,
-            socks5ProxyChain: hostConfig.socks5ProxyChain as ProxyNode[],
-          }
-        : null;
+      await resolveHostGateway(hostConfig);
 
     const hasJumpHosts =
       hostConfig.jumpHosts &&

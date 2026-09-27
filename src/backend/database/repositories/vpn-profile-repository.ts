@@ -31,6 +31,14 @@ export interface VpnProfileCreateInput {
   gatewayPort: number;
   gatewayUsername?: string | null;
   gatewayPassword?: string | null;
+  /** Managed kinds only; a declared profile leaves these unset. */
+  provider?: string | null;
+  serverHost?: string | null;
+  serverPort?: number | null;
+  authUsername?: string | null;
+  authPassword?: string | null;
+  trustedFingerprint?: string | null;
+  extraConfig?: string | null;
 }
 
 export type VpnProfileUpdateInput = Partial<
@@ -74,6 +82,13 @@ export class VpnProfileRepository {
         gatewayPort: input.gatewayPort,
         gatewayUsername: input.gatewayUsername,
         gatewayPassword: input.gatewayPassword,
+        provider: input.provider ?? null,
+        serverHost: input.serverHost ?? null,
+        serverPort: input.serverPort ?? null,
+        authUsername: input.authUsername ?? null,
+        authPassword: input.authPassword ?? null,
+        trustedFingerprint: input.trustedFingerprint ?? null,
+        extraConfig: input.extraConfig ?? null,
       },
       input.userId,
       userDataKey,
@@ -124,11 +139,14 @@ export class VpnProfileRepository {
       userDataKey,
     );
 
+    // Scoped to the owner as well as the id. The route checks ownership
+    // before calling, but a profile reaches a gateway with stored
+    // credentials, and that is not a thing to guard in one place only.
     const [updated] = await updateReturning(
       this.context,
       vpnProfiles,
       patch,
-      eq(vpnProfiles.id, id),
+      and(eq(vpnProfiles.id, id), eq(vpnProfiles.userId, userId)),
     );
 
     if (updated) await this.afterWrite();

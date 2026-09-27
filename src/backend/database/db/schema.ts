@@ -1073,6 +1073,19 @@ export const vpnProfiles = sqliteTable("vpn_profiles", {
   gatewayPort: integer("gateway_port").notNull(),
   gatewayUsername: text("gateway_username"),
   gatewayPassword: text("gateway_password"),
+  // Managed kinds only: what the manager needs to raise the tunnel. A
+  // declared profile leaves every one of these null -- the operator raised
+  // its tunnel themselves and Termix only knows the address.
+  provider: text("provider"),
+  serverHost: text("server_host"),
+  serverPort: integer("server_port"),
+  authUsername: text("auth_username"),
+  authPassword: text("auth_password"),
+  trustedFingerprint: text("trusted_fingerprint"),
+  extraConfig: text("extra_config"),
+  // Last word from the manager, so the editor can say more than "saved".
+  lastState: text("last_state"),
+  lastError: text("last_error"),
   createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
   updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
 });

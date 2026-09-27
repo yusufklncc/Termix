@@ -4,6 +4,10 @@ import { createCurrentVpnProfileRepository } from "../database/repositories/fact
 import type { VpnProfileRecord } from "../database/repositories/vpn-profile-repository.js";
 import { sshLogger } from "../utils/logger.js";
 import { getErrorMessage } from "../utils/error-message.js";
+import {
+  managedDoorPort,
+  resolveNetManagerOptions,
+} from "../utils/net-manager-client.js";
 
 /**
  * Which network a host is reached through, decided in one place.
@@ -53,6 +57,28 @@ const loadProfileFromDatabase: ProfileLoader = (id, userId) =>
 /** A gateway speaking HTTP CONNECT is expressed as a one-node chain, which is
  * the path proxy-helper already has for mixed chains. */
 function profileToConfig(profile: VpnProfileRecord): SOCKS5Config {
+  /*
+   * A managed network's address is worked out, not remembered.
+   *
+   * Termix raised this tunnel, so it knows where the doorway is: the manager,
+   * on a port derived from the profile's id. Trusting the stored copy would
+   * mean a row edited by hand, or written before the manager moved, could
+   * send a customer's traffic to another customer's doorway.
+   */
+  if (profile.kind === "managed") {
+    const manager = resolveNetManagerOptions();
+    if (!manager) {
+      throw new Error(
+        "This host's network is managed by Termix, but no network manager is configured",
+      );
+    }
+    return {
+      useSocks5: true,
+      socks5Host: manager.host,
+      socks5Port: managedDoorPort(profile.id),
+    };
+  }
+
   if (profile.gatewayType === "http") {
     return {
       useSocks5: true,

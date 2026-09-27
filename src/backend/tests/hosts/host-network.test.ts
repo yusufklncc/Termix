@@ -202,3 +202,49 @@ describe("a profile belongs to someone", () => {
     expect(asked).toEqual([[9, "owner-7"]]);
   });
 });
+
+describe("a managed network's address", () => {
+  it("is the manager's, on a port derived from the id", async () => {
+    process.env.NET_MANAGER_TOKEN = "s";
+    process.env.NET_MANAGER_URL = "netmgr:3392";
+    const config = await resolveHostGateway(
+      { vpnProfileId: 12, userId: "user-1" },
+      async () => profile({ id: 12, kind: "managed" }),
+    );
+    expect(config).toMatchObject({
+      useSocks5: true,
+      socks5Host: "netmgr",
+      socks5Port: 20012,
+    });
+    delete process.env.NET_MANAGER_TOKEN;
+    delete process.env.NET_MANAGER_URL;
+  });
+
+  it("is not the stored one, which an edited row could have moved", async () => {
+    process.env.NET_MANAGER_TOKEN = "s";
+    process.env.NET_MANAGER_URL = "netmgr:3392";
+    const config = await resolveHostGateway(
+      { vpnProfileId: 12, userId: "user-1" },
+      async () =>
+        profile({
+          id: 12,
+          kind: "managed",
+          gatewayHost: "somewhere-else",
+          gatewayPort: 9999,
+        }),
+    );
+    expect(config?.socks5Host).not.toBe("somewhere-else");
+    expect(config?.socks5Port).not.toBe(9999);
+    delete process.env.NET_MANAGER_TOKEN;
+    delete process.env.NET_MANAGER_URL;
+  });
+
+  it("refuses when no manager is configured, rather than connecting directly", async () => {
+    delete process.env.NET_MANAGER_TOKEN;
+    await expect(
+      resolveHostGateway({ vpnProfileId: 12, userId: "user-1" }, async () =>
+        profile({ id: 12, kind: "managed" }),
+      ),
+    ).rejects.toThrow(/no network manager is configured/i);
+  });
+});

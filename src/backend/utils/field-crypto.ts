@@ -36,7 +36,10 @@ class FieldCrypto {
       "telnetPassword",
       "streamPassword",
     ]),
-    vpn_profiles: new Set(["gatewayPassword"]),
+    // authPassword is the VPN account's; extraConfig holds a provider's own
+    // secret material (a WireGuard key, say). Both are presented to a gateway
+    // rather than verified, so they are encrypted and not hashed.
+    vpn_profiles: new Set(["gatewayPassword", "authPassword", "extraConfig"]),
     ssh_credentials: new Set([
       "password",
       "privateKey",

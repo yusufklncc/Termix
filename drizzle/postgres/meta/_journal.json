@@ -190,6 +190,13 @@
       "when": 1790512728598,
       "tag": "0026_salty_hercules",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1790540525064,
+      "tag": "0027_past_thundra",
+      "breakpoints": true
     }
   ]
 }

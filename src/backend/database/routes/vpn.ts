@@ -5,6 +5,12 @@ import type { AuthenticatedRequest } from "../../../types/index.js";
 import { authLogger } from "../../utils/logger.js";
 import { AuthManager } from "../../utils/auth-manager.js";
 import { findVpnProfileError } from "./vpn-validation.js";
+import {
+  dropManagedNetwork,
+  managedDoorPort,
+  raiseManagedNetwork,
+  resolveNetManagerOptions,
+} from "../../utils/net-manager-client.js";
 
 /**
  * Network profiles: the tunnels hosts are reached through.
@@ -19,10 +25,67 @@ const router = express.Router();
 const authManager = AuthManager.getInstance();
 const authenticateJWT = authManager.createAuthMiddleware();
 
-/** Never let the gateway secret back out; say only whether one is set. */
+/** Never let a secret back out; say only whether one is set. */
 function toResponse(profile: VpnProfileRecord) {
-  const { gatewayPassword, ...rest } = profile;
-  return { ...rest, hasGatewayPassword: !!gatewayPassword };
+  const { gatewayPassword, authPassword, extraConfig, ...rest } =
+    profile as VpnProfileRecord & {
+      authPassword?: string | null;
+      extraConfig?: string | null;
+    };
+  return {
+    ...rest,
+    hasGatewayPassword: !!gatewayPassword,
+    hasAuthPassword: !!authPassword,
+    hasExtraConfig: !!extraConfig,
+  };
+}
+
+/** The fields a managed profile carries, kept together so adding one reaches
+ * both routes rather than whichever was remembered. */
+function managedFieldsFrom(body: Record<string, unknown>) {
+  return {
+    provider: (body.provider as string) ?? null,
+    serverHost: (body.serverHost as string) ?? null,
+    serverPort: body.serverPort == null ? null : Number(body.serverPort),
+    authUsername: (body.authUsername as string) ?? null,
+    authPassword: (body.authPassword as string) ?? null,
+    trustedFingerprint: (body.trustedFingerprint as string) ?? null,
+    extraConfig: (body.extraConfig as string) ?? null,
+  };
+}
+
+/**
+ * Hand a managed profile to the manager and record what came back.
+ *
+ * A network that will not come up is still saved: hosts can be put on it, and
+ * they will refuse to connect with the reason the resolver already gives.
+ * Refusing the save instead would lose the configuration over a gateway that
+ * happens to be down.
+ */
+async function raiseAndRecord(
+  profile: VpnProfileRecord & Record<string, unknown>,
+): Promise<VpnProfileRecord> {
+  const result = await raiseManagedNetwork(
+    {
+      id: profile.id,
+      provider: profile.provider,
+      serverHost: profile.serverHost,
+      serverPort: profile.serverPort ?? 443,
+      trustedFingerprint: profile.trustedFingerprint,
+    },
+    {
+      username: profile.authUsername,
+      password: profile.authPassword,
+      extra: profile.extraConfig,
+    },
+  );
+
+  const repository = createCurrentVpnProfileRepository();
+  const updated = await repository.updateById(profile.id, profile.userId, {
+    lastState: result.state,
+    lastError: result.error ?? null,
+  } as never);
+  return updated ?? profile;
 }
 
 router.get("/profiles", authenticateJWT, async (req, res: Response) => {
@@ -46,19 +109,46 @@ router.post("/profiles", authenticateJWT, async (req, res: Response) => {
   if (invalid) return res.status(400).json({ error: invalid });
 
   try {
-    const created = await createCurrentVpnProfileRepository().create({
+    const kind = String(req.body.kind ?? "declared");
+    const managed = kind === "managed";
+    const manager = resolveNetManagerOptions();
+
+    if (managed && !manager) {
+      return res.status(400).json({
+        error:
+          "No network manager is configured, so Termix cannot raise a tunnel itself",
+      });
+    }
+
+    const repository = createCurrentVpnProfileRepository();
+    let created = await repository.create({
       userId,
       name: String(req.body.name).trim(),
       description: req.body.description ?? null,
       folder: req.body.folder ?? null,
       tags: req.body.tags ?? null,
-      kind: req.body.kind ?? "declared",
+      kind,
       gatewayType: req.body.gatewayType ?? "socks5",
-      gatewayHost: String(req.body.gatewayHost).trim(),
-      gatewayPort: Number(req.body.gatewayPort),
-      gatewayUsername: req.body.gatewayUsername ?? null,
-      gatewayPassword: req.body.gatewayPassword ?? null,
+      // A managed profile's address is the manager's, on a port worked out
+      // from the id -- which only exists once the row does, so it is written
+      // back below rather than guessed here.
+      gatewayHost: managed
+        ? manager!.host
+        : String(req.body.gatewayHost).trim(),
+      gatewayPort: managed ? 1 : Number(req.body.gatewayPort),
+      gatewayUsername: managed ? null : (req.body.gatewayUsername ?? null),
+      gatewayPassword: managed ? null : (req.body.gatewayPassword ?? null),
+      ...(managed ? managedFieldsFrom(req.body) : {}),
     });
+
+    if (managed) {
+      created =
+        (await repository.updateById(created.id, userId, {
+          gatewayPort: managedDoorPort(created.id),
+        })) ?? created;
+      created = await raiseAndRecord(created as never);
+    }
+
     res.status(201).json(toResponse(created));
   } catch (error) {
     authLogger.error("Failed to create VPN profile", error, {
@@ -90,20 +180,41 @@ router.put("/profiles/:id", authenticateJWT, async (req, res: Response) => {
     const invalid = findVpnProfileError(merged);
     if (invalid) return res.status(400).json({ error: invalid });
 
-    const updated = await repository.updateById(id, userId, {
+    // The kind is fixed at creation: a declared profile has an address the
+    // operator gave, a managed one has a tunnel Termix raised, and turning one
+    // into the other mid-life is a different operation than editing it.
+    const managed = String(existing.kind) === "managed";
+
+    let updated = await repository.updateById(id, userId, {
       name: String(merged.name).trim(),
       description: merged.description ?? null,
       folder: merged.folder ?? null,
       tags: merged.tags ?? null,
       gatewayType: merged.gatewayType ?? "socks5",
-      gatewayHost: String(merged.gatewayHost).trim(),
-      gatewayPort: Number(merged.gatewayPort),
-      gatewayUsername: merged.gatewayUsername ?? null,
+      gatewayHost: managed
+        ? existing.gatewayHost
+        : String(merged.gatewayHost).trim(),
+      gatewayPort: managed ? existing.gatewayPort : Number(merged.gatewayPort),
+      gatewayUsername: managed ? null : (merged.gatewayUsername ?? null),
       // Absent means "leave the stored secret alone"; empty means "clear it".
-      ...(req.body.gatewayPassword === undefined
+      ...(req.body.gatewayPassword === undefined || managed
         ? {}
         : { gatewayPassword: req.body.gatewayPassword || null }),
+      ...(managed
+        ? {
+            ...managedFieldsFrom(merged as Record<string, unknown>),
+            ...(req.body.authPassword === undefined
+              ? { authPassword: existing.authPassword }
+              : { authPassword: req.body.authPassword || null }),
+          }
+        : {}),
     });
+
+    // An edited tunnel is raised again: the server, the account or the pin may
+    // be what changed, and the one that is running was built from the old ones.
+    if (managed && updated) {
+      updated = await raiseAndRecord(updated as never);
+    }
 
     res.json(updated ? toResponse(updated) : { error: "Not found" });
   } catch (error) {
@@ -145,6 +256,12 @@ router.delete("/profiles/:id", authenticateJWT, async (req, res: Response) => {
         error: `This profile is still used by ${inUse} host${inUse === 1 ? "" : "s"}. Move them to another profile first.`,
         hostsUsing: inUse,
       });
+    }
+
+    // The tunnel goes before the row does. Leaving it up would keep a
+    // namespace and a VPN session alive for a profile nothing points at.
+    if (String(existing.kind) === "managed") {
+      await dropManagedNetwork(id);
     }
 
     await repository.deleteById(id);

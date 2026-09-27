@@ -1992,6 +1992,15 @@ const migrateSchema = () => {
           gateway_port INTEGER NOT NULL,
           gateway_username TEXT,
           gateway_password TEXT,
+          provider TEXT,
+          server_host TEXT,
+          server_port INTEGER,
+          auth_username TEXT,
+          auth_password TEXT,
+          trusted_fingerprint TEXT,
+          extra_config TEXT,
+          last_state TEXT,
+          last_error TEXT,
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
@@ -2002,6 +2011,39 @@ const migrateSchema = () => {
         operation: "schema_migration",
         error: createError,
       });
+    }
+  }
+
+  /*
+   * A table that already exists does not get new columns from the CREATE
+   * above, so they are added here -- the same shape ssh_data has, and for the
+   * same reason: a column the code writes but the database lacks fails the
+   * whole write, and a column it reads but lacks reads as absent.
+   */
+  const vpnProfileMigrations: Array<{ column: string; sql: string }> = [
+    { column: "provider", sql: "ALTER TABLE vpn_profiles ADD COLUMN provider TEXT" },
+    { column: "server_host", sql: "ALTER TABLE vpn_profiles ADD COLUMN server_host TEXT" },
+    { column: "server_port", sql: "ALTER TABLE vpn_profiles ADD COLUMN server_port INTEGER" },
+    { column: "auth_username", sql: "ALTER TABLE vpn_profiles ADD COLUMN auth_username TEXT" },
+    { column: "auth_password", sql: "ALTER TABLE vpn_profiles ADD COLUMN auth_password TEXT" },
+    { column: "trusted_fingerprint", sql: "ALTER TABLE vpn_profiles ADD COLUMN trusted_fingerprint TEXT" },
+    { column: "extra_config", sql: "ALTER TABLE vpn_profiles ADD COLUMN extra_config TEXT" },
+    { column: "last_state", sql: "ALTER TABLE vpn_profiles ADD COLUMN last_state TEXT" },
+    { column: "last_error", sql: "ALTER TABLE vpn_profiles ADD COLUMN last_error TEXT" },
+  ];
+
+  for (const migration of vpnProfileMigrations) {
+    try {
+      sqlite.prepare(`SELECT ${migration.column} FROM vpn_profiles LIMIT 1`).get();
+    } catch {
+      try {
+        sqlite.exec(migration.sql);
+      } catch (alterError) {
+        databaseLogger.warn(`Failed to add ${migration.column} column`, {
+          operation: "schema_migration",
+          error: alterError,
+        });
+      }
     }
   }
 

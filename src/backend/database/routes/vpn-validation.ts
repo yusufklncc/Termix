@@ -8,7 +8,9 @@
  */
 
 const GATEWAY_TYPES = new Set(["socks5", "http"]);
-const KINDS = new Set(["declared"]);
+const KINDS = new Set(["declared", "managed"]);
+/** One on purpose: the gateway this can be measured against. */
+const PROVIDERS = new Set(["fortinet"]);
 
 export function findVpnProfileError(input: unknown): string | null {
   const data = (input ?? {}) as Record<string, unknown>;
@@ -16,6 +18,18 @@ export function findVpnProfileError(input: unknown): string | null {
   const name = data.name;
   if (typeof name !== "string" || name.trim().length === 0) {
     return "A network profile needs a name";
+  }
+
+  if (data.kind !== undefined && !KINDS.has(String(data.kind))) {
+    return "Unsupported profile kind";
+  }
+
+  /*
+   * A managed profile has no address to give: Termix raises the tunnel, so it
+   * works the address out. What it needs instead is what to dial and as whom.
+   */
+  if (String(data.kind ?? "declared") === "managed") {
+    return findManagedProfileError(data);
   }
 
   const host = data.gatewayHost;
@@ -40,10 +54,34 @@ export function findVpnProfileError(input: unknown): string | null {
     return "Unsupported gateway type";
   }
 
-  // Managed tunnels (wireguard, openvpn) are phase 8 A1; accepting the value
-  // now would promise something nothing implements yet.
-  if (data.kind !== undefined && !KINDS.has(String(data.kind))) {
-    return "Unsupported profile kind";
+  return null;
+}
+
+function findManagedProfileError(data: Record<string, unknown>): string | null {
+  if (!PROVIDERS.has(String(data.provider ?? ""))) {
+    return "Unsupported VPN provider";
+  }
+
+  const server = data.serverHost;
+  if (typeof server !== "string" || server.trim().length === 0) {
+    return "A managed network needs the VPN gateway's address";
+  }
+
+  const port = data.serverPort;
+  if (
+    port !== undefined &&
+    port !== null &&
+    (typeof port !== "number" ||
+      !Number.isInteger(port) ||
+      port < 1 ||
+      port > 65535)
+  ) {
+    return "A managed network needs a valid VPN gateway port";
+  }
+
+  const username = data.authUsername;
+  if (typeof username !== "string" || username.trim().length === 0) {
+    return "A managed network needs the VPN account's username";
   }
 
   return null;

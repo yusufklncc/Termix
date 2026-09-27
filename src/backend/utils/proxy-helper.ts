@@ -53,7 +53,18 @@ export async function createSocks5Connection(
     return createSingleProxyConnection(targetHost, targetPort, socks5Config);
   }
 
-  return null;
+  /*
+   * A host asked to go through a proxy and there is none to go through.
+   *
+   * Returning null here would be indistinguishable from "this host does not
+   * use a proxy", and every caller writes `if (socket) config.sock = socket`.
+   * The connection would then be made directly, out of the server's own
+   * route -- the traffic leaving exactly the path it was configured to avoid,
+   * with nothing logged and nothing shown. Failing is the only safe answer.
+   */
+  throw new Error(
+    "This host is configured to connect through a proxy, but no proxy address is set",
+  );
 }
 
 async function createSingleProxyConnection(

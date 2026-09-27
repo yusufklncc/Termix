@@ -11,6 +11,7 @@ import {
   sanitizeHostForRecipient,
   stripSensitiveFields,
   transformHostResponse,
+  findProxyConfigError,
 } from "../../../database/routes/host-normalizers.js";
 
 describe("applyHostKeyTypeUpdate", () => {
@@ -480,5 +481,45 @@ describe("sanitizeHostForRecipient", () => {
     expect(result.notes).toBeUndefined();
     expect(result.quickActions).toBeUndefined();
     expect(result.password).toBeUndefined();
+  });
+});
+
+describe("findProxyConfigError", () => {
+  it("accepts a host that does not use a proxy", () => {
+    expect(findProxyConfigError({ useSocks5: false })).toBeNull();
+    expect(findProxyConfigError({})).toBeNull();
+  });
+
+  it("accepts a proxy with an address", () => {
+    expect(
+      findProxyConfigError({ useSocks5: true, socks5Host: "10.0.0.9" }),
+    ).toBeNull();
+  });
+
+  it("accepts a proxy chain", () => {
+    expect(
+      findProxyConfigError({
+        useSocks5: true,
+        socks5ProxyChain: [{ type: "socks5", host: "10.0.0.9", port: 1080 }],
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects a proxy that was switched on and never addressed", () => {
+    // Saving this used to be allowed, and the connection was then made
+    // directly -- out of the server's own route, silently.
+    expect(findProxyConfigError({ useSocks5: true })).toMatch(/proxy address/i);
+  });
+
+  it("rejects an address that was cleared but left switched on", () => {
+    expect(
+      findProxyConfigError({ useSocks5: true, socks5Host: "   " }),
+    ).toMatch(/proxy address/i);
+  });
+
+  it("rejects an empty proxy chain", () => {
+    expect(
+      findProxyConfigError({ useSocks5: true, socks5ProxyChain: [] }),
+    ).toMatch(/proxy address/i);
   });
 });

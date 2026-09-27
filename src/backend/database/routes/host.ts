@@ -39,6 +39,7 @@ import {
   isOptionalBoolean,
   isValidPort,
   normalizeProtocolEnableFields,
+  findProxyConfigError,
   OWNER_PRIVATE_AUTH_FIELDS,
   OWNER_PRIVATE_TERMINAL_CONFIG_FIELDS,
   sanitizeHostForRecipient,
@@ -276,6 +277,11 @@ router.post(
       streamMode,
       streamPublisher,
     } = hostData;
+
+    const proxyConfigError = findProxyConfigError(hostData);
+    if (proxyConfigError) {
+      return res.status(400).json({ error: proxyConfigError });
+    }
     databaseLogger.info("Creating SSH host", {
       operation: "host_create",
       userId,
@@ -1019,6 +1025,11 @@ router.put(
       streamMode,
       streamPublisher,
     } = hostData;
+
+    const proxyConfigError = findProxyConfigError(hostData);
+    if (proxyConfigError) {
+      return res.status(400).json({ error: proxyConfigError });
+    }
     databaseLogger.info("Updating SSH host", {
       operation: "host_update",
       userId,

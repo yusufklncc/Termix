@@ -31,6 +31,31 @@ const PROTOCOL_ENABLE_FIELDS = [
   "enableTelnet",
 ] as const;
 
+/**
+ * Rejects a host that is set to use a proxy without saying which one.
+ *
+ * Connecting would not fail: the proxy helper is handed a flag with nothing
+ * behind it, and the connection would be made directly instead -- out of the
+ * server's own route, which for a host configured to stay inside someone
+ * else's network is the traffic leaving by the one path it was meant to
+ * avoid. The connect path now refuses that, and this refuses it a step
+ * earlier, where the person can still see why.
+ */
+export function findProxyConfigError(hostData: unknown): string | null {
+  const data = (hostData ?? {}) as {
+    useSocks5?: unknown;
+    socks5Host?: unknown;
+    socks5ProxyChain?: unknown;
+  };
+  if (!data.useSocks5) return null;
+
+  const chain = data.socks5ProxyChain;
+  if (Array.isArray(chain) && chain.length > 0) return null;
+  if (isNonEmptyString(data.socks5Host)) return null;
+
+  return "A host set to connect through a proxy needs a proxy address";
+}
+
 export function normalizeProtocolEnableFields(
   values: Record<string, unknown>,
 ): Partial<Record<(typeof PROTOCOL_ENABLE_FIELDS)[number], 0 | 1>> {

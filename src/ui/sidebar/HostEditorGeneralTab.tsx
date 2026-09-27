@@ -1,11 +1,13 @@
-import React from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import type { ProxyNode } from "@/types/index";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/button";
 import { Input } from "@/components/input";
 import { PasswordInput } from "@/components/password-input";
 import { FakeSwitch, SectionCard, SettingRow } from "@/components/section-card";
-import type { Host } from "@/types/ui-types";
+import type { Host, VpnProfile } from "@/types/ui-types";
+import { getVpnProfiles } from "@/main-axios";
+import { VpnProfileManager } from "./VpnProfileManager";
 import {
   Globe,
   LayoutGrid,
@@ -48,6 +50,19 @@ export function HostEditorGeneralTab({
   /** Hides organizational/advanced fields; their values still save unchanged. */
   simpleMode?: boolean;
 }) {
+  const [vpnProfiles, setVpnProfiles] = useState<VpnProfile[]>([]);
+  const [showVpnManager, setShowVpnManager] = useState(false);
+
+  const loadVpnProfiles = useCallback(() => {
+    getVpnProfiles()
+      .then((rows) => setVpnProfiles(rows as unknown as VpnProfile[]))
+      // A host can still be edited without them; the selector simply stays
+      // empty rather than blocking the form.
+      .catch(() => setVpnProfiles([]));
+  }, []);
+
+  useEffect(loadVpnProfiles, [loadVpnProfiles]);
+
   const { t } = useTranslation();
 
   // Tracks which picker is shown, independent of whether a value is set yet
@@ -501,6 +516,52 @@ export function HostEditorGeneralTab({
           </div>
         </div>
         <div className="flex flex-col gap-4 border-t border-border pt-4 pb-2">
+          {/* The network this host is reached through. The tunnel itself is run
+              beside Termix, one per network; a profile records where its
+              doorway is. */}
+          <SettingRow
+            label={t("hosts.vpn.profile")}
+            description={t("hosts.vpn.profileDesc")}
+          >
+            <div className="flex items-center gap-2">
+              <select
+                className="h-8 min-w-48 border border-border bg-background px-2 text-xs"
+                value={form.vpnProfileId}
+                onChange={(e) => setField("vpnProfileId", e.target.value)}
+              >
+                <option value="">{t("hosts.vpn.direct")}</option>
+                {vpnProfiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </option>
+                ))}
+              </select>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2 text-[10px]"
+                onClick={() => setShowVpnManager((open) => !open)}
+              >
+                {t("hosts.vpn.manage")}
+              </Button>
+            </div>
+          </SettingRow>
+
+          {showVpnManager && (
+            <VpnProfileManager
+              profiles={vpnProfiles}
+              onChanged={loadVpnProfiles}
+              onClose={() => setShowVpnManager(false)}
+            />
+          )}
+
+          {form.vpnProfileId && form.useSocks5 && (
+            <p className="text-[10px] text-muted-foreground">
+              {t("hosts.vpn.overridesProxy")}
+            </p>
+          )}
+
           <SettingRow
             label={t("hosts.useSocks5Proxy")}
             description={t("hosts.useSocks5ProxyDesc")}

@@ -1890,6 +1890,26 @@
       "selkiesWebrtcNote": "Selkies streams over plain WebSockets by default. Enable its WebRTC transport for this mode to work.",
       "whatItIs": "For machines that already publish their own desktop over WebRTC -- Selkies for a GPU-accelerated Linux desktop, neko for a browser several people watch at once. Use it when RDP and VNC cannot carry what the machine draws: hardware-accelerated 3D, smooth video, or a session with more than one viewer.",
       "notAProtocol": "Unlike the others this is not a protocol Termix speaks, so there is no port to set and no render engine to choose. What it gets you is the rest of Termix around someone else's stream: folders, tags, favourites, permissions and split screen."
+    },
+    "vpn": {
+      "profile": "Network",
+      "profileDesc": "Reach this host through a network Termix is not otherwise on. The tunnel runs beside Termix, one per network; a profile records where its doorway is.",
+      "direct": "Direct connection",
+      "manage": "Manage networks",
+      "managerHint": "Termix does not dial the VPN itself. Each network runs as its own sidecar next to Termix, and a profile records the address it accepts traffic on.",
+      "none": "No networks yet.",
+      "add": "Add a network",
+      "name": "Name",
+      "gatewayHost": "Gateway address",
+      "gatewayPort": "Gateway port",
+      "gatewayUsername": "Gateway username",
+      "gatewayPassword": "Gateway password",
+      "passwordUnchanged": "Leave blank to keep the stored password",
+      "saved": "Network profile saved",
+      "saveFailed": "Could not save the network profile",
+      "deleted": "Network profile deleted",
+      "deleteFailed": "Could not delete the network profile",
+      "overridesProxy": "This host has both a network and its own proxy. The network is used; the proxy settings below are ignored."
     }
   },
   "commandPalette": {

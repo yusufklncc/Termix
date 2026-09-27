@@ -2133,6 +2133,14 @@ export {
   type VaultProfilePayload,
 } from "@/api/vault-profiles-api";
 
+export {
+  getVpnProfiles,
+  createVpnProfile,
+  updateVpnProfile,
+  deleteVpnProfile,
+  type VpnProfilePayload,
+} from "@/api/vpn-profiles-api";
+
 // ============================================================================
 // SNIPPETS API
 // ============================================================================

@@ -316,6 +316,7 @@ export function createHostEditorForm(
     rdpRenderEngine: (host?.rdpRenderEngine ?? "guacamole") as
       "guacamole" | "direct",
     rdpEnablePrinting: !!host?.rdpEnablePrinting,
+    vpnProfileId: host?.vpnProfileId != null ? String(host.vpnProfileId) : "",
     rdpAuthType: (host?.rdpAuthType ??
       (host?.rdpCredentialId ? "credential" : "direct")) as
       "direct" | "credential" | "none",
@@ -655,6 +656,7 @@ export function buildHostEditorPayload(
     // The editor keeps ids as strings; the API and every backend lookup take
     // a number, and a string id does not compare equal on Postgres/MySQL.
     jumpHosts: form.jumpHosts.map((j) => ({ hostId: Number(j.hostId) })),
+    vpnProfileId: form.vpnProfileId ? Number(form.vpnProfileId) : null,
     portKnockSequence: form.portKnockSequence,
     tunnelConnections: form.serverTunnels,
     quickActions: form.quickActions.map((a) => ({

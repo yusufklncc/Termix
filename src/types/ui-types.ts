@@ -253,6 +253,21 @@ export type VaultProfile = {
   owned: boolean;
 };
 
+/** A network a host is reached through: one operator-run tunnel's doorway. */
+export type VpnProfile = {
+  id: string;
+  name: string;
+  description?: string;
+  folder?: string;
+  tags?: string;
+  kind: string;
+  gatewayType: string;
+  gatewayHost: string;
+  gatewayPort: number;
+  gatewayUsername?: string;
+  hasGatewayPassword: boolean;
+};
+
 export type HostFolder = {
   name: string;
   children: (Host | HostFolder)[];

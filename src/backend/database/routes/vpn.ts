@@ -25,7 +25,7 @@ function toResponse(profile: VpnProfileRecord) {
   return { ...rest, hasGatewayPassword: !!gatewayPassword };
 }
 
-router.get("/", authenticateJWT, async (req, res: Response) => {
+router.get("/profiles", authenticateJWT, async (req, res: Response) => {
   const userId = (req as AuthenticatedRequest).userId;
   try {
     const profiles =
@@ -40,7 +40,7 @@ router.get("/", authenticateJWT, async (req, res: Response) => {
   }
 });
 
-router.post("/", authenticateJWT, async (req, res: Response) => {
+router.post("/profiles", authenticateJWT, async (req, res: Response) => {
   const userId = (req as AuthenticatedRequest).userId;
   const invalid = findVpnProfileError(req.body);
   if (invalid) return res.status(400).json({ error: invalid });
@@ -69,7 +69,7 @@ router.post("/", authenticateJWT, async (req, res: Response) => {
   }
 });
 
-router.put("/:id", authenticateJWT, async (req, res: Response) => {
+router.put("/profiles/:id", authenticateJWT, async (req, res: Response) => {
   const userId = (req as AuthenticatedRequest).userId;
   const id = Number.parseInt(String(req.params.id), 10);
   if (!Number.isInteger(id)) {
@@ -115,7 +115,7 @@ router.put("/:id", authenticateJWT, async (req, res: Response) => {
   }
 });
 
-router.delete("/:id", authenticateJWT, async (req, res: Response) => {
+router.delete("/profiles/:id", authenticateJWT, async (req, res: Response) => {
   const userId = (req as AuthenticatedRequest).userId;
   const id = Number.parseInt(String(req.params.id), 10);
   if (!Number.isInteger(id)) {

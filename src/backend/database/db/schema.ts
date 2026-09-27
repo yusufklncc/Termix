@@ -295,6 +295,10 @@ export const hosts = sqliteTable(
     rdpEnablePrinting: integer("rdp_enable_printing", { mode: "boolean" }).default(
       false,
     ),
+    vpnProfileId: integer("vpn_profile_id").references(
+      () => vpnProfiles.id,
+      { onDelete: "set null" },
+    ),
     rdpAuthType: text("rdp_auth_type"),
     vncAuthType: text("vnc_auth_type"),
     telnetAuthType: text("telnet_auth_type"),
@@ -1040,6 +1044,39 @@ export const opksshTokens = sqliteTable(
 // are intended to be shared across users (shared === true makes a profile
 // visible to every user on the server). Each user authenticates to Vault via an
 // interactive OIDC flow at connect time; no tokens or keys are stored here.
+/**
+ * A network a host is reached through, rather than directly.
+ *
+ * Phase 8 A2: the tunnel itself is run by the operator -- one sidecar per VPN,
+ * each in its own network namespace because two corporate VPNs cannot share
+ * one (both push a default route, and customer subnets overlap). Termix only
+ * records where that sidecar's doorway is and which hosts go through it.
+ *
+ * "gateway" rather than "proxy" on purpose: the VPN is real and lives in the
+ * sidecar; this is the address Termix hands its traffic to in order to enter
+ * it.
+ */
+export const vpnProfiles = sqliteTable("vpn_profiles", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  folder: text("folder"),
+  tags: text("tags"),
+  // "declared" is the operator-run tunnel. Managed kinds (wireguard, openvpn)
+  // come with phase 8 A1 and add their own columns.
+  kind: text("kind").notNull().default("declared"),
+  gatewayType: text("gateway_type").notNull().default("socks5"),
+  gatewayHost: text("gateway_host").notNull(),
+  gatewayPort: integer("gateway_port").notNull(),
+  gatewayUsername: text("gateway_username"),
+  gatewayPassword: text("gateway_password"),
+  createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
+  updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
+});
+
 export const vaultProfiles = sqliteTable("vault_profiles", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   userId: text("user_id")

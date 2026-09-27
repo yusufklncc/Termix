@@ -1773,6 +1773,7 @@ const migrateSchema = () => {
     { column: "stream_publisher", sql: "ALTER TABLE ssh_data ADD COLUMN stream_publisher TEXT" },
     { column: "rdp_render_engine", sql: "ALTER TABLE ssh_data ADD COLUMN rdp_render_engine TEXT" },
     { column: "rdp_enable_printing", sql: "ALTER TABLE ssh_data ADD COLUMN rdp_enable_printing INTEGER DEFAULT 0" },
+    { column: "vpn_profile_id", sql: "ALTER TABLE ssh_data ADD COLUMN vpn_profile_id INTEGER REFERENCES vpn_profiles(id) ON DELETE SET NULL" },
   ];
 
   for (const migration of sshDataMigrations) {
@@ -1967,6 +1968,37 @@ const migrateSchema = () => {
       `);
     } catch (createError) {
       databaseLogger.warn("Failed to create opkssh_tokens table", {
+        operation: "schema_migration",
+        error: createError,
+      });
+    }
+  }
+
+  try {
+    sqlite.prepare("SELECT id FROM vpn_profiles LIMIT 1").get();
+  } catch {
+    try {
+      sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS vpn_profiles (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          description TEXT,
+          folder TEXT,
+          tags TEXT,
+          kind TEXT NOT NULL DEFAULT 'declared',
+          gateway_type TEXT NOT NULL DEFAULT 'socks5',
+          gateway_host TEXT NOT NULL,
+          gateway_port INTEGER NOT NULL,
+          gateway_username TEXT,
+          gateway_password TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        );
+      `);
+    } catch (createError) {
+      databaseLogger.warn("Failed to create vpn_profiles table", {
         operation: "schema_migration",
         error: createError,
       });

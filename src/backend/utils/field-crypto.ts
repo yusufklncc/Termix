@@ -36,6 +36,7 @@ class FieldCrypto {
       "telnetPassword",
       "streamPassword",
     ]),
+    vpn_profiles: new Set(["gatewayPassword"]),
     ssh_credentials: new Set([
       "password",
       "privateKey",

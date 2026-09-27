@@ -63,6 +63,7 @@ import { UserDataExportRepository } from "./user-data-export-repository.js";
 import { UserPreferenceRepository } from "./user-preference-repository.js";
 import { UserRepository } from "./user-repository.js";
 import { VaultProfileRepository } from "./vault-profile-repository.js";
+import { VpnProfileRepository } from "./vpn-profile-repository.js";
 import { VaultTokenRepository } from "./vault-token-repository.js";
 import { WorkspaceRepository } from "./workspace-repository.js";
 
@@ -574,6 +575,13 @@ export function createCurrentSecretSourceRepository(): SecretSourceRepository {
   return new SecretSourceRepository(
     createCurrentRepositoryContext(),
     createCurrentRepositoryWriteHook("secret_source_repository_write"),
+  );
+}
+
+export function createCurrentVpnProfileRepository(): VpnProfileRepository {
+  return new VpnProfileRepository(
+    createCurrentRepositoryContext(),
+    createCurrentRepositoryWriteHook("vpn_profile_repository_write"),
   );
 }
 

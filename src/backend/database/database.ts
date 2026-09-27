@@ -30,6 +30,7 @@ import termixIdRoutes from "./routes/termix-id.js";
 import { registerAuditLogRoutes } from "./routes/audit-log-routes.js";
 import { registerTailscaleRoutes } from "./routes/tailscale-routes.js";
 import vaultRoutes from "./routes/vault.js";
+import vpnRoutes from "./routes/vpn.js";
 import secretSourceRoutes from "./routes/secret-sources.js";
 import alertRulesRoutes from "./routes/alert-rules-routes.js";
 import aiRoutes from "../ai/index.js";
@@ -1772,6 +1773,7 @@ app.use("/termix-id", termixIdRoutes);
 registerAuditLogRoutes(app, authenticateJWT);
 registerTailscaleRoutes(app, authenticateJWT);
 app.use("/vault", vaultRoutes);
+app.use("/vpn", vpnRoutes);
 app.use("/secret-sources", secretSourceRoutes);
 // Before the alert routes, which are mounted at the root and would otherwise
 // have first claim on the path.

@@ -55,7 +55,14 @@ export function HostEditorGeneralTab({
 
   const loadVpnProfiles = useCallback(() => {
     getVpnProfiles()
-      .then((rows) => setVpnProfiles(rows as unknown as VpnProfile[]))
+      // A path the server does not route falls through to the SPA and answers
+      // 200 with HTML, which resolves rather than throws. Trusting it to be a
+      // list took the whole editor down instead of the one selector.
+      .then((rows) =>
+        setVpnProfiles(
+          Array.isArray(rows) ? (rows as unknown as VpnProfile[]) : [],
+        ),
+      )
       // A host can still be edited without them; the selector simply stays
       // empty rather than blocking the form.
       .catch(() => setVpnProfiles([]));

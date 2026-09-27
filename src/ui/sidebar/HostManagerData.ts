@@ -174,6 +174,10 @@ export function sshHostToHost(h: SSHHostWithStatus): Host {
     guacamoleConfig: parseJson(h.guacamoleConfig),
     forceKeyboardInteractive: h.forceKeyboardInteractive ?? false,
     useSocks5: h.useSocks5,
+    // The network this host is reached through. Dropped here once already,
+    // which made the editor show "Direct Connection" for a host that had one
+    // -- and saving from that form wrote the emptiness back.
+    vpnProfileId: (h as { vpnProfileId?: number | null }).vpnProfileId ?? null,
     socks5Host: h.socks5Host,
     socks5Port: h.socks5Port,
     socks5Username: h.socks5Username,

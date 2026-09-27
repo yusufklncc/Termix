@@ -106,3 +106,20 @@ describe("sshHostToHost stream fields", () => {
     expect(host.isShared).toBe(true);
   });
 });
+
+/**
+ * The same trap, caught a second time. A host's network profile saved and came
+ * back from the API correctly, but this mapper dropped it, so reopening the
+ * editor showed "Direct Connection" -- and saving again wrote that back, quietly
+ * undoing the assignment.
+ */
+describe("sshHostToHost network profile", () => {
+  it("carries the network profile through to the editor", () => {
+    const host = sshHostToHost(apiHost({ vpnProfileId: 7 }));
+    expect(host.vpnProfileId).toBe(7);
+  });
+
+  it("leaves a host with no network profile alone", () => {
+    expect(sshHostToHost(apiHost()).vpnProfileId ?? null).toBeNull();
+  });
+});

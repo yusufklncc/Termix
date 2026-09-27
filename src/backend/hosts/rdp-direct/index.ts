@@ -7,7 +7,11 @@ import { sshLogger } from "../../utils/logger.js";
 import { resolveRdpBridgeOptions } from "../../utils/rdp-bridge-config.js";
 import { resolveDisplaySize } from "./display-size.js";
 import { startRecording, type RdpRecorder } from "./recording.js";
-import { resolveHostGateway } from "../host-network.js";
+import {
+  hostNetworkFields,
+  resolveHostGateway,
+  type HostNetworkSource,
+} from "../host-network.js";
 import { openGatewayTunnel } from "../gateway-tunnel.js";
 import {
   openJumpTunnel,
@@ -255,14 +259,8 @@ wss.on("connection", async (ws: WebSocket, req) => {
      * comes out inside that network.
      */
     const gateway = await resolveHostGateway({
+      ...hostNetworkFields(record as HostNetworkSource),
       id: hostId,
-      vpnProfileId: record.vpnProfileId as number | null | undefined,
-      useSocks5: record.useSocks5 as boolean | undefined,
-      socks5Host: record.socks5Host as string | undefined,
-      socks5Port: record.socks5Port as number | undefined,
-      socks5Username: record.socks5Username as string | undefined,
-      socks5Password: record.socks5Password as string | undefined,
-      socks5ProxyChain: record.socks5ProxyChain,
     }).catch((error: unknown) => {
       sshLogger.error("Failed to resolve the host's network", error, {
         operation: "rdp_direct_network_error",

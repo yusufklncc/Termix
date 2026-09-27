@@ -891,6 +891,7 @@ export function registerDockerSshRoutes(app: express.Express): void {
 
       const proxyConfig: SOCKS5Config | null = await resolveHostGateway({
         id: host.id,
+        userId: host.userId,
         vpnProfileId: host.vpnProfileId,
         useSocks5,
         socks5Host,

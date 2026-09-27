@@ -78,6 +78,7 @@ import {
   requiresPersonalHostAuthentication,
   resolveRecipientSharedHostAuthentication,
 } from "../../utils/shared-host-auth-resolver.js";
+import { vpnProfileAssignmentError } from "./vpn-validation.js";
 
 const router = express.Router();
 
@@ -333,6 +334,16 @@ router.post(
       username || rdpUser || vncUser || telnetUser || streamUser || "";
     const effectiveName =
       name || (effectiveUsername ? `${effectiveUsername}@${ip}` : String(ip));
+    // A host may only be put on a network its owner has; see
+    // vpnProfileAssignmentError.
+    const vpnAssignmentError = await vpnProfileAssignmentError(
+      vpnProfileId,
+      userId!,
+    );
+    if (vpnAssignmentError) {
+      return res.status(400).json({ error: vpnAssignmentError });
+    }
+
     const sshDataObj: Record<string, unknown> = {
       userId: userId,
       connectionType: effectiveConnectionType,
@@ -1338,6 +1349,16 @@ router.put(
       }
 
       const ownerId = hostRecord.userId;
+
+      // A host may only be put on a network its owner has; see
+      // vpnProfileAssignmentError.
+      const vpnAssignmentError = await vpnProfileAssignmentError(
+        vpnProfileId,
+        ownerId,
+      );
+      if (vpnAssignmentError) {
+        return res.status(400).json({ error: vpnAssignmentError });
+      }
 
       if (!accessInfo.isOwner) {
         // Shared editors work on the owner's real record, but the owner's SSH

@@ -44,7 +44,7 @@ import {
 import type { SSHHost, AuthenticatedRequest } from "../../../types/index.js";
 import { getTmuxAuthBehavior } from "./auth-utils.js";
 import { listenOnServicePort } from "../../utils/service-listen.js";
-import { resolveHostGateway } from "../host-network.js";
+import { hostNetworkFields, resolveHostGateway } from "../host-network.js";
 
 const PANE_ID_RE = /^%\d+$/;
 // tmux session names cannot contain ":" or "."; keep to a conservative
@@ -133,7 +133,9 @@ export function connectToHost(host: SSHHost): () => Promise<Client> {
       await setupVaultSshSignerAuth(config, client, host);
     }
 
-    const proxyConfig: SOCKS5Config | null = await resolveHostGateway(host);
+    const proxyConfig: SOCKS5Config | null = await resolveHostGateway(
+      hostNetworkFields(host),
+    );
 
     let jumpClient: Client | null = null;
     if (host.jumpHosts && host.jumpHosts.length > 0 && host.userId) {

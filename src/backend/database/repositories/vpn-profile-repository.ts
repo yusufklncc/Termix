@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { DataCrypto } from "../../utils/data-crypto.js";
 import { hosts, vpnProfiles } from "../db/schema.js";
 import type { DatabaseContext } from "./database-context.js";
@@ -84,11 +84,19 @@ export class VpnProfileRepository {
     return created;
   }
 
-  async findById(id: number): Promise<VpnProfileRecord | null> {
+  /**
+   * Scoped to an owner, always.
+   *
+   * A profile id is a small integer and reaches a gateway with stored
+   * credentials. Loading one by id alone let a host carry someone else's id
+   * and send its traffic through that person's network, under their
+   * credentials, which is the one thing separate profiles exist to prevent.
+   */
+  async findById(id: number, userId: string): Promise<VpnProfileRecord | null> {
     const rows = await this.context.drizzle
       .select()
       .from(vpnProfiles)
-      .where(eq(vpnProfiles.id, id))
+      .where(and(eq(vpnProfiles.id, id), eq(vpnProfiles.userId, userId)))
       .limit(1);
 
     const row = rows[0];

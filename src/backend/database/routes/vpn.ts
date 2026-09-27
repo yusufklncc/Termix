@@ -78,10 +78,11 @@ router.put("/profiles/:id", authenticateJWT, async (req, res: Response) => {
 
   try {
     const repository = createCurrentVpnProfileRepository();
-    const existing = await repository.findById(id);
+    const existing = await repository.findById(id, userId);
     // A profile belonging to someone else is reported as absent rather than
-    // forbidden: whether it exists is not this user's business either.
-    if (!existing || existing.userId !== userId) {
+    // forbidden: whether it exists is not this user's business either. The
+    // lookup is scoped to the owner, so it is already absent here.
+    if (!existing) {
       return res.status(404).json({ error: "Network profile not found" });
     }
 
@@ -124,8 +125,8 @@ router.delete("/profiles/:id", authenticateJWT, async (req, res: Response) => {
 
   try {
     const repository = createCurrentVpnProfileRepository();
-    const existing = await repository.findById(id);
-    if (!existing || existing.userId !== userId) {
+    const existing = await repository.findById(id, userId);
+    if (!existing) {
       return res.status(404).json({ error: "Network profile not found" });
     }
 

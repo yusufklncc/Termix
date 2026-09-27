@@ -9,7 +9,11 @@ import {
 import { SSHHostKeyVerifier } from "./host-key-verifier.js";
 import { createJumpHostChain } from "./jump-host-chain.js";
 import { resolveSshConnectConfigHost } from "./ssh-dns.js";
-import { gatewayFailureMessage, resolveHostGateway } from "./host-network.js";
+import {
+  gatewayFailureMessage,
+  hostNetworkFields,
+  resolveHostGateway,
+} from "./host-network.js";
 
 /**
  * Non-interactive SSH connection helpers shared by fleet execution.
@@ -122,7 +126,9 @@ export function createFleetSshFactory(host: SSHHost): () => Promise<Client> {
     const config = await buildFleetSshConfig(host);
     const client = new Client();
 
-    const proxyConfig: SOCKS5Config | null = await resolveHostGateway(host);
+    const proxyConfig: SOCKS5Config | null = await resolveHostGateway(
+      hostNetworkFields(host),
+    );
 
     const hasJumpHosts =
       host.jumpHosts && host.jumpHosts.length > 0 && host.userId;

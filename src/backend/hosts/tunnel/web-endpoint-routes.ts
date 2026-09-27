@@ -13,6 +13,7 @@ import {
 import { forwardOut } from "./ssh-primitives.js";
 import { buildWebEndpointTunnelName } from "./utils.js";
 import type { TunnelConfig, WebEndpoint } from "../../../types/index.js";
+import { hostNetworkFields } from "../host-network.js";
 
 /** Matches the spec's ten minutes. */
 const WEB_ENDPOINT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -218,6 +219,9 @@ export async function handleWebEndpointOpen(
     tunnelIndex: 0,
     requestingUserId: userId,
     hostName: host.name || `${host.username}@${host.ip}`,
+    // How this host is reached, carried as a unit so the tunnel leaves by
+    // the same route a session would.
+    ...hostNetworkFields(host),
     sourceIP: host.ip,
     sourceSSHPort: host.port,
     sourceUsername: host.username,

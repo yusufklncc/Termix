@@ -74,7 +74,11 @@ import {
   waitForWebSocketOpen,
 } from "../cloudflare-websocket.js";
 import { hostSessionStatus } from "../host-session-status.js";
-import { gatewayFailureMessage, resolveHostGateway } from "../host-network.js";
+import {
+  gatewayFailureMessage,
+  hostNetworkFields,
+  resolveHostGateway,
+} from "../host-network.js";
 
 interface ConnectToHostData {
   cols: number;
@@ -1633,6 +1637,7 @@ wss.on("connection", async (ws: WebSocket, req) => {
           keyType?: string;
           authType?: string;
           jumpHosts?: Array<{ hostId: number }>;
+          userId?: string | null;
           vpnProfileId?: number | null;
           useSocks5?: boolean;
           socks5Host?: string;
@@ -1645,6 +1650,8 @@ wss.on("connection", async (ws: WebSocket, req) => {
           enableSessionLogging?: boolean;
         })
       | null = null;
+
+    let hostOwnerIdForNetwork: string | null = null;
 
     if (id && userId) {
       try {
@@ -1724,6 +1731,7 @@ wss.on("connection", async (ws: WebSocket, req) => {
           }
 
           hostConfig.vpnProfileId = resolveServerVpnProfileId(resolvedHostData);
+          hostOwnerIdForNetwork = resolvedHostData.userId ?? null;
 
           if (resolvedHostData.useSocks5) {
             hostConfig.useSocks5 = resolvedHostData.useSocks5;
@@ -3270,8 +3278,12 @@ wss.on("connection", async (ws: WebSocket, req) => {
       }
     }
 
-    const proxyConfig: SOCKS5Config | null =
-      await resolveHostGateway(hostConfig);
+    const proxyConfig: SOCKS5Config | null = await resolveHostGateway({
+      ...hostNetworkFields(hostConfig),
+      // A profile belongs to whoever owns the host, which for a shared host
+      // is not whoever is connecting.
+      userId: hostOwnerIdForNetwork ?? hostConfig.userId ?? null,
+    });
 
     const hasJumpHosts =
       hostConfig.jumpHosts &&

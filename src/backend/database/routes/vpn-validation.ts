@@ -48,3 +48,33 @@ export function findVpnProfileError(input: unknown): string | null {
 
   return null;
 }
+
+/**
+ * A host may only be put on a network its owner has.
+ *
+ * Profile ids are small integers and a profile reaches a gateway with stored
+ * credentials, so without this a host could name someone else's network and
+ * leave through it. The resolver refuses such a profile at connect time as
+ * well; this is so the refusal arrives while the host is being saved, where
+ * it can be understood.
+ */
+export async function vpnProfileAssignmentError(
+  vpnProfileId: unknown,
+  ownerId: string,
+  findProfile: (id: number, userId: string) => Promise<unknown> = async (
+    id,
+    userId,
+  ) =>
+    (await import("../repositories/factory.js"))
+      .createCurrentVpnProfileRepository()
+      .findById(id, userId),
+): Promise<string | null> {
+  if (vpnProfileId === undefined || vpnProfileId === null) return null;
+
+  const id = Number(vpnProfileId);
+  if (!Number.isInteger(id) || id <= 0) {
+    return "Invalid network profile";
+  }
+
+  return (await findProfile(id, ownerId)) ? null : "Network profile not found";
+}

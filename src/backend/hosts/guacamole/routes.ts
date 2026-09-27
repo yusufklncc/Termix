@@ -28,7 +28,11 @@ import {
   getRequestMeta,
 } from "../../utils/audit-logger.js";
 import { resolveJumpTunnelEndpoint } from "./jump-tunnel-endpoint.js";
-import { resolveHostGateway } from "../host-network.js";
+import {
+  hostNetworkFields,
+  resolveHostGateway,
+  type HostNetworkSource,
+} from "../host-network.js";
 import { openGatewayTunnel } from "../gateway-tunnel.js";
 import {
   buildRdpSettings,
@@ -541,14 +545,8 @@ router.post(
       let gateway: Awaited<ReturnType<typeof resolveHostGateway>> = null;
       try {
         gateway = await resolveHostGateway({
+          ...hostNetworkFields(host as HostNetworkSource),
           id: hostId,
-          vpnProfileId: host.vpnProfileId as number | null | undefined,
-          useSocks5: host.useSocks5 as boolean | undefined,
-          socks5Host: host.socks5Host as string | undefined,
-          socks5Port: host.socks5Port as number | undefined,
-          socks5Username: host.socks5Username as string | undefined,
-          socks5Password: host.socks5Password as string | undefined,
-          socks5ProxyChain: host.socks5ProxyChain,
         });
       } catch (error) {
         guacLogger.error("Failed to resolve the host's network", error, {

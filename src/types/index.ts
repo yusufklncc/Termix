@@ -638,6 +638,12 @@ export interface TunnelConfig {
   isPinned: boolean;
 
   useSocks5?: boolean;
+  /**
+   * The host's owner, carried in with the rest of its network fields so the
+   * profile is resolved under the right person. `sourceUserId` records the
+   * same thing; this one arrives as a set with the fields it belongs to.
+   */
+  userId?: string | null;
   vpnProfileId?: number | null;
   socks5Host?: string;
   socks5Port?: number;

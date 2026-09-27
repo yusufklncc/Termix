@@ -31,12 +31,24 @@ export interface HostNetworkInput {
   // It is narrowed with Array.isArray below, which is the only check that
   // actually holds at runtime.
   socks5ProxyChain?: unknown;
+  /**
+   * Whose host this is. A network profile belongs to a user, so resolving one
+   * needs to know whose it should be; without it there is no way to tell, and
+   * guessing is how a host ends up on someone else's network.
+   *
+   * Required, and explicitly nullable, so that every caller has to say -- a
+   * field that may be left out is a field that gets left out.
+   */
+  userId: string | null | undefined;
 }
 
-type ProfileLoader = (id: number) => Promise<VpnProfileRecord | null>;
+type ProfileLoader = (
+  id: number,
+  userId: string,
+) => Promise<VpnProfileRecord | null>;
 
-const loadProfileFromDatabase: ProfileLoader = (id) =>
-  createCurrentVpnProfileRepository().findById(id);
+const loadProfileFromDatabase: ProfileLoader = (id, userId) =>
+  createCurrentVpnProfileRepository().findById(id, userId);
 
 /** A gateway speaking HTTP CONNECT is expressed as a one-node chain, which is
  * the path proxy-helper already has for mixed chains. */
@@ -70,7 +82,21 @@ export async function resolveHostGateway(
   loadProfile: ProfileLoader = loadProfileFromDatabase,
 ): Promise<SOCKS5Config | null> {
   if (host.vpnProfileId) {
-    const profile = await loadProfile(host.vpnProfileId);
+    /*
+     * Whose profile this should be has to be known, not assumed.
+     *
+     * Ids are small integers, and a profile reaches a gateway with stored
+     * credentials. Resolving one without an owner would let a host carry
+     * someone else's id and leave through their network. There is no safe
+     * default here, so this refuses rather than picking one.
+     */
+    if (!host.userId) {
+      throw new Error(
+        "This host is assigned to a network profile, but its owner is unknown",
+      );
+    }
+
+    const profile = await loadProfile(host.vpnProfileId, host.userId);
 
     /*
      * Assigned to a network that no longer exists.
@@ -125,6 +151,62 @@ export async function resolveHostGateway(
   throw new Error(
     "This host is configured to connect through a proxy, but no proxy address is set",
   );
+}
+
+/**
+ * How a host is reached, copied as a unit.
+ *
+ * Several places rebuild a host into some other shape -- a tunnel's config, a
+ * session's config -- by listing its fields one by one, and every such list
+ * written by hand has so far forgotten at least one of these. Tunnels carried
+ * none of them, so a host set to go through a proxy or a network had its
+ * tunnel leave by the server's own route instead.
+ *
+ * Spreading this keeps the set together: adding a field here reaches every
+ * caller at once.
+ */
+export interface HostNetworkFields {
+  id?: number | string;
+  userId: string | null;
+  vpnProfileId: number | null;
+  useSocks5: boolean;
+  socks5Host?: string;
+  socks5Port?: number;
+  socks5Username?: string;
+  socks5Password?: string;
+  socks5ProxyChain?: ProxyNode[];
+}
+
+/**
+ * Loosely typed on purpose: this is fed host rows, session configs and
+ * request bodies, whose own shapes declare these fields as optional.
+ */
+export interface HostNetworkSource {
+  id?: number | string;
+  userId?: string | null;
+  vpnProfileId?: number | null;
+  useSocks5?: boolean | null;
+  socks5Host?: string | null;
+  socks5Port?: number | null;
+  socks5Username?: string | null;
+  socks5Password?: string | null;
+  socks5ProxyChain?: unknown;
+}
+
+export function hostNetworkFields(host: HostNetworkSource): HostNetworkFields {
+  return {
+    id: host.id,
+    userId: host.userId ?? null,
+    vpnProfileId: host.vpnProfileId ?? null,
+    useSocks5: !!host.useSocks5,
+    socks5Host: host.socks5Host ?? undefined,
+    socks5Port: host.socks5Port ?? undefined,
+    socks5Username: host.socks5Username ?? undefined,
+    socks5Password: host.socks5Password ?? undefined,
+    socks5ProxyChain: Array.isArray(host.socks5ProxyChain)
+      ? (host.socks5ProxyChain as ProxyNode[])
+      : undefined,
+  };
 }
 
 /**

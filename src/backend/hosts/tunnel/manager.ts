@@ -47,7 +47,7 @@ import { resolveSshConnectConfigHost } from "../ssh-dns.js";
 import { PermissionManager } from "../../utils/permission-manager.js";
 import { handleSocks5Connect } from "./socks5-relay.js";
 import { notifyAutomationInternalEvent } from "../automation-events.js";
-import { resolveHostGateway } from "../host-network.js";
+import { hostNetworkFields, resolveHostGateway } from "../host-network.js";
 
 export const activeTunnels = new Map<string, Client>();
 export const retryCounters = new Map<string, number>();
@@ -1574,6 +1574,8 @@ export async function connectSSHTunnel(
   // One resolver decides this for every path: null means the host wants a
   // direct connection, and anything else it cannot honour throws.
   const gateway = await resolveHostGateway({
+    userId: tunnelConfig.sourceUserId,
+    vpnProfileId: tunnelConfig.vpnProfileId,
     useSocks5: tunnelConfig.useSocks5,
     socks5Host: tunnelConfig.socks5Host,
     socks5Port: tunnelConfig.socks5Port,
@@ -1782,6 +1784,8 @@ export async function killRemoteTunnelByMarker(
     // One resolver decides this for every path: null means the host wants a
     // direct connection, and anything else it cannot honour throws.
     const gateway = await resolveHostGateway({
+      userId: tunnelConfig.sourceUserId,
+      vpnProfileId: tunnelConfig.vpnProfileId,
       useSocks5: tunnelConfig.useSocks5,
       socks5Host: tunnelConfig.socks5Host,
       socks5Port: tunnelConfig.socks5Port,
@@ -1981,6 +1985,8 @@ export async function initializeAutoStartTunnels(): Promise<void> {
                 sourceHostId: host.id,
                 tunnelIndex: tunnelIndex,
                 hostName: host.name || `${host.username}@${host.ip}`,
+                // How this host is reached, carried as a unit.
+                ...hostNetworkFields(host),
                 sourceIP: host.ip,
                 sourceSSHPort: host.port,
                 sourceUsername: host.username,

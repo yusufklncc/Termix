@@ -15,7 +15,7 @@ import {
 import { sendC2SMessage, writeC2SRemoteChunk } from "./c2s-relay-utils.js";
 import { getTunnelMode } from "./utils.js";
 import { createCurrentHostResolutionRepository } from "../../database/repositories/factory.js";
-import { resolveHostGateway } from "../host-network.js";
+import { hostNetworkFields, resolveHostGateway } from "../host-network.js";
 
 export type C2SOpenMessage = {
   type: "open" | "test";
@@ -103,6 +103,8 @@ async function resolveC2STunnelSource(
     requestingUserId: userId,
     hostName:
       resolvedHost.name || `${resolvedHost.username}@${resolvedHost.ip}`,
+    // How this host is reached, carried as a unit.
+    ...hostNetworkFields(resolvedHost),
     sourceIP: resolvedHost.ip,
     sourceSSHPort: resolvedHost.port,
     sourceUsername: resolvedHost.username,
@@ -175,6 +177,8 @@ async function connectC2SSourceClient(
   // One resolver decides this for every path: null means the host wants a
   // direct connection, and anything else it cannot honour throws.
   const gateway = await resolveHostGateway({
+    userId: tunnelConfig.sourceUserId,
+    vpnProfileId: tunnelConfig.vpnProfileId,
     useSocks5: tunnelConfig.useSocks5,
     socks5Host: tunnelConfig.socks5Host,
     socks5Port: tunnelConfig.socks5Port,

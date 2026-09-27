@@ -103,7 +103,7 @@ import {
   statusPollLimiter,
 } from "./state.js";
 import { listenOnServicePort } from "../../utils/service-listen.js";
-import { resolveHostGateway } from "../host-network.js";
+import { hostNetworkFields, resolveHostGateway } from "../host-network.js";
 
 const authManager = AuthManager.getInstance();
 const permissionManager = PermissionManager.getInstance();
@@ -1518,7 +1518,9 @@ function createSshFactory(host: SSHHostWithCredentials): () => Promise<Client> {
       await setupVaultSshSignerAuth(config, client, host);
     }
 
-    const proxyConfig: SOCKS5Config | null = await resolveHostGateway(host);
+    const proxyConfig: SOCKS5Config | null = await resolveHostGateway(
+      hostNetworkFields(host),
+    );
 
     const hasJumpHosts =
       host.jumpHosts && host.jumpHosts.length > 0 && host.userId;
@@ -2698,7 +2700,7 @@ app.post("/metrics/start/:id", validateHostId, async (req, res) => {
         connectionLogs.push(
           createConnectionLog("info", "proxy", "Connecting via SOCKS5 proxy"),
         );
-        resolveHostGateway(host)
+        resolveHostGateway(hostNetworkFields(host))
           .then((gateway) => {
             // Entered only because the host asked for another network, so a
             // null here is a configuration that cannot be honoured -- not a

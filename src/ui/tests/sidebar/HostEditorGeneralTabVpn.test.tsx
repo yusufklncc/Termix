@@ -1,6 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 
 const getVpnProfiles = vi.hoisted(() => vi.fn());
 vi.mock("@/main-axios", async (importOriginal) => ({
@@ -15,17 +21,18 @@ vi.mock("react-i18next", () => ({
 import { HostEditorGeneralTab } from "@/sidebar/HostEditorGeneralTab";
 import { createHostEditorForm } from "@/sidebar/HostEditorData";
 
-function setup() {
+function setup(setField = vi.fn()) {
   render(
     <HostEditorGeneralTab
       form={createHostEditorForm(null)}
-      setField={vi.fn() as never}
+      setField={setField as never}
       protocols={{ ssh: true } as never}
       handleProtocolToggle={vi.fn()}
       hosts={[]}
       host={null}
     />,
   );
+  return setField;
 }
 
 afterEach(cleanup);
@@ -47,5 +54,16 @@ describe("host editor, network selector", () => {
     await waitFor(() =>
       expect(screen.getByText("hosts.vpn.manage")).toBeInTheDocument(),
     );
+  });
+});
+
+describe("choosing a network", () => {
+  it("writes the chosen profile into the form", async () => {
+    getVpnProfiles.mockResolvedValue([{ id: 1, name: "TIM" }]);
+    const setField = setup();
+    const option = await screen.findByRole("option", { name: "TIM" });
+    const select = option.closest("select") as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "1" } });
+    expect(setField).toHaveBeenCalledWith("vpnProfileId", "1");
   });
 });

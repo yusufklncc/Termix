@@ -5,9 +5,9 @@ import { SSH_ALGORITHMS } from "../utils/ssh-algorithms.js";
 import { preparePrivateKeyForSSH2 } from "../utils/ssh-key-utils.js";
 import { getErrorMessage } from "../utils/error-message.js";
 import { SSHHostKeyVerifier } from "./host-key-verifier.js";
-import { getJumpHostSocks5Config } from "./jump-host-proxy.js";
 import { applyAgentAuth } from "./terminal-auth-helpers.js";
 import { resolveHostById } from "./host-resolver.js";
+import { hostNetworkFields, resolveHostGateway } from "./host-network.js";
 
 type JumpHostConfig = {
   id: number;
@@ -26,6 +26,8 @@ type JumpHostConfig = {
   socks5Username?: string | null;
   socks5Password?: string | null;
   socks5ProxyChain?: string | import("../../types/index.js").ProxyNode[] | null;
+  userId?: string | null;
+  vpnProfileId?: number | null;
   [key: string]: unknown;
 };
 
@@ -97,10 +99,20 @@ export async function createJumpHostChain(
       }
     }
 
-    const firstHopSocks5Config = getJumpHostSocks5Config(jumpHostConfigs[0]);
+    /*
+     * The first hop is dialled from here, so it is reached the way it says to
+     * reach it -- including its network profile, which this used to skip. A
+     * jump host inside a customer's network was therefore dialled from the
+     * server's own route, quietly, which is the leak a profile exists to
+     * prevent. The hops after it are reached from the hop before, so only the
+     * first one is this server's business.
+     */
+    const firstHop = jumpHostConfigs[0]!;
+    const firstHopSocks5Config = await resolveHostGateway(
+      hostNetworkFields(firstHop),
+    );
     let proxySocket: import("net").Socket | null = null;
     if (firstHopSocks5Config?.useSocks5) {
-      const firstHop = jumpHostConfigs[0]!;
       proxySocket = await createSocks5Connection(
         firstHop.ip,
         firstHop.port || 22,

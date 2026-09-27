@@ -217,7 +217,8 @@ Arayüz bunu sağlayıcı bazında dürüstçe göstermeli; tek tip vaat verilme
 
 - [x] Toplu uygulama: çoklu seçim çubuğunda "Network" menüsü (2026-09-27)
 - [x] Tüneller artık host'un ağ alanlarını taşıyor (2026-09-27)
-- [ ] Hem jump host hem profil taşıyan host reddediliyor; yuvalama yapılmadı
+- [x] Jump host + profil (2026-09-27): reddedilmiyormuş, ilk sıçrama profili
+      sessizce atlıyordu — aşağıya bakın
 - [x] Referans sidecar (`docker/vpn-sidecar/`, Fortinet SSL-VPN) ve uçtan uca
       doğrulama — aşağıya bakın
 - [x] Gerçek FortiGate'e karşı doğrulama — 2026-09-27, aşağıya bakın
@@ -338,3 +339,25 @@ Sahip alanı **zorunlu** yapıldı, böylece on dört çağrı yerini derleyici 
 Derlenmiş imaja karşı doğrulandı: ikinci bir kullanıcı birincinin profilini ne
 listeleyebiliyor, ne okuyabiliyor, ne de host'una atayabiliyor; meşru bir host
 ise hedefine kapıdan ulaşmaya devam ediyor.
+
+---
+
+## Jump host + profil (2026-09-27)
+
+Bu madde "ikisi birlikte olan host reddediliyor" diye kayıtlıydı. **Yanlıştı.**
+Reddedilmiyordu; ilk sıçrama host'un ağ profilini sessizce atlıyordu.
+
+Doğru model şu: jump host'lu bir hedefe, hedef zincirin _içinden_ ulaşılıyor,
+dolayısıyla hedefin kendi profili o bacak için geçerli değil — mevcut davranış
+burada doğruydu. Ama **ilk sıçrama buradan aranıyor**, yani onun profili
+geçerli. `getJumpHostSocks5Config` yalnızca socks5 alanlarını okuyordu, profili
+değil: müşteri ağının içindeki bir jump host sunucunun kendi rotasından
+aranıyordu.
+
+İlk sıçrama artık `resolveHostGateway(hostNetworkFields(firstHop))` ile
+çözülüyor — profili de proxy'yi de okuyan tek karar noktası. Kullanılmayan
+`jump-host-proxy.ts` yerinde bırakıldı ama başına neden yolda olmadığı yazıldı;
+yeni bir yol eklerken oraya uzanan kişi profili yine atlardı.
+
+**Ölçülmedi:** bu yol gerçek bir jump host'la denenmedi; jump host doğrulaması
+zaten açık bir borç olarak duruyor.

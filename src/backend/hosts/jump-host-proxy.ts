@@ -1,3 +1,13 @@
+/*
+ * No longer on the connection path.
+ *
+ * The first jump hop is now reached through resolveHostGateway, which reads a
+ * host's network profile as well as its own proxy -- this helper read only
+ * the proxy, so a jump host inside a customer's network was dialled from the
+ * server's own route. Kept because it is exported and tested; do not reach for
+ * it when adding a path, since it will silently miss the profile.
+ */
+
 import type { ProxyNode } from "../../types/index.js";
 import type { SOCKS5Config } from "../utils/socks5-helper.js";
 

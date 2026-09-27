@@ -410,7 +410,8 @@ Tasarım ve gerekçeler: [`docs/phase8-vpn-design.md`](docs/phase8-vpn-design.md
       doğrulama: zincir çalışıyor, çakışan adres doğru makineye çıkıyor, hem
       uygulama hem sidecar tünel yokken kapalı düşüyor
 - [ ] Klasöre toplu uygulama
-- [ ] Tünellerin profil taşıması
+- [x] Tünellerin profil taşıması (2026-09-27; yolda bir sahiplik açığı da
+      bulunup kapatıldı)
 - [x] Gerçek FortiGate'e karşı doğrulama (2026-09-27): oturum tünelden gidiyor,
       tünel kapalıyken bağlanmıyor
 - [ ] Kapı erişilemezken hata "kapalı TCP bağlantısı" olarak ulaşıyor; sebep

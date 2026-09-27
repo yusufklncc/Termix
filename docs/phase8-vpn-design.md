@@ -216,8 +216,7 @@ Arayüz bunu sağlayıcı bazında dürüstçe göstermeli; tek tip vaat verilme
 ### A2'de kalanlar
 
 - [ ] "Bu klasördeki tüm host'lara uygula" toplu işlemi (tasarlandı, yapılmadı)
-- [ ] Tüneller çözümleyiciden geçiyor ama profil taşımıyor; bir tünel hâlâ
-      sunucunun kendi rotasından çıkıyor
+- [x] Tüneller artık host'un ağ alanlarını taşıyor (2026-09-27)
 - [ ] Hem jump host hem profil taşıyan host reddediliyor; yuvalama yapılmadı
 - [x] Referans sidecar (`docker/vpn-sidecar/`, Fortinet SSL-VPN) ve uçtan uca
       doğrulama — aşağıya bakın
@@ -309,3 +308,33 @@ de başkasını seçebilir.
   bağlanır. "tun0 dışına çıkanı düşür" kuralı tasarlandı, uygulanmadı.
 - Hata metni "Proxy connection failed" diyor; kullanıcının gördüğü kavram
   "Network". Terminoloji ayrışması duruyor.
+
+---
+
+## Tüneller ve profil sahipliği (2026-09-27)
+
+Tünellerin profil taşıması işine başlayınca iki şey çıktı.
+
+**Tüneller ağ alanlarının hiçbirini taşımıyordu.** Tünel config'ini kuran üç
+yer de host kaydını alan alan kopyalıyor ve hiçbiri profili — ya da proxy'yi —
+almıyordu. Yani `Use SOCKS5` açık bir host'un tüneli de baştan beri sunucunun
+kendi rotasından çıkıyormuş. Artık alanlar `hostNetworkFields` ile bütün
+olarak taşınıyor; aynı listenin elle yazılmış altı kopyası da bununla
+değiştirildi.
+
+**Profil id'si tek başına bir profile ulaştırıyordu.** `findById` sahibi
+kontrol etmiyor, host kaydederken de doğrulama yoktu. Id'ler küçük tamsayı ve
+bir profil, saklı kimlik bilgileriyle bir geçide ulaşıyor: bir kullanıcı
+host'una başkasının id'sini yazıp o kişinin ağından, o kişinin parolasıyla
+çıkabilirdi. Üç katmanda kapatıldı:
+
+1. Depo aramayı sahibe göre kısıtlıyor.
+2. Çözümleyici sahibi bilmiyorsa reddediyor — paylaşılan host'ta profil,
+   bağlanan kişinin değil **host sahibinin** profili olarak çözülüyor.
+3. Host kaydederken sahibinde olmayan profil 400 ile reddediliyor.
+
+Sahip alanı **zorunlu** yapıldı, böylece on dört çağrı yerini derleyici saydı.
+
+Derlenmiş imaja karşı doğrulandı: ikinci bir kullanıcı birincinin profilini ne
+listeleyebiliyor, ne okuyabiliyor, ne de host'una atayabiliyor; meşru bir host
+ise hedefine kapıdan ulaşmaya devam ediyor.

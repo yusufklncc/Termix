@@ -66,6 +66,7 @@ import {
   HOST_NOT_ON_THIS_SERVER_MESSAGE,
   resolveServerHostId,
   resolveServerJumpHosts,
+  resolveServerVpnProfileId,
 } from "../host-identity.js";
 import { extractWebSocketToken } from "../../utils/ws-auth.js";
 import {
@@ -95,6 +96,7 @@ interface ConnectToHostData {
     userId?: string;
     forceKeyboardInteractive?: boolean;
     jumpHosts?: Array<{ hostId: number }>;
+    vpnProfileId?: number | null;
     useSocks5?: boolean;
     socks5Host?: string;
     socks5Port?: number;
@@ -1631,6 +1633,7 @@ wss.on("connection", async (ws: WebSocket, req) => {
           keyType?: string;
           authType?: string;
           jumpHosts?: Array<{ hostId: number }>;
+          vpnProfileId?: number | null;
           useSocks5?: boolean;
           socks5Host?: string;
           socks5Port?: number;
@@ -1719,6 +1722,8 @@ wss.on("connection", async (ws: WebSocket, req) => {
               `Loaded ${resolvedJumpHosts?.length ?? 0} jump host(s) from server-side host data`,
             );
           }
+
+          hostConfig.vpnProfileId = resolveServerVpnProfileId(resolvedHostData);
 
           if (resolvedHostData.useSocks5) {
             hostConfig.useSocks5 = resolvedHostData.useSocks5;

@@ -6,6 +6,7 @@ import {
   HostAddressMismatchError,
   HostNotOnThisServerError,
   normalizeHostAddress,
+  resolveServerVpnProfileId,
   resolveServerHostId,
   resolveServerJumpHosts,
 } from "../../hosts/host-identity.js";
@@ -145,5 +146,17 @@ describe("normalizeHostAddress", () => {
     expect(normalizeHostAddress(undefined)).toBe("");
     expect(normalizeHostAddress(null)).toBe("");
     expect(normalizeHostAddress(42)).toBe("");
+  });
+});
+
+describe("resolveServerVpnProfileId", () => {
+  it("takes the network from the stored host", () => {
+    expect(resolveServerVpnProfileId({ vpnProfileId: 4 })).toBe(4);
+  });
+
+  it("is null for a host that has no network", () => {
+    expect(resolveServerVpnProfileId({})).toBeNull();
+    expect(resolveServerVpnProfileId({ vpnProfileId: null })).toBeNull();
+    expect(resolveServerVpnProfileId(null)).toBeNull();
   });
 });

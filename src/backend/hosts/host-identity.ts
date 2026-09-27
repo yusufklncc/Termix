@@ -64,6 +64,21 @@ export function resolveServerJumpHosts(
   return clientJumpHosts?.length ? clientJumpHosts : serverJumpHosts;
 }
 
+/**
+ * Which network a host is reached through is the server's to decide.
+ *
+ * The terminal's host config arrives over the socket, and the server fills in
+ * what it knows from the stored host. The profile has to come from there and
+ * only from there: a client that omitted it would have its session leave by
+ * the server's own route instead of the VPN, and one that invented it could
+ * pick a network of its own.
+ */
+export function resolveServerVpnProfileId(
+  resolvedHost: { vpnProfileId?: number | null } | null | undefined,
+): number | null {
+  return resolvedHost?.vpnProfileId ?? null;
+}
+
 export function resolveServerHostId(
   clientHostId: number | null,
   resolvedHost: { id?: unknown } | null,

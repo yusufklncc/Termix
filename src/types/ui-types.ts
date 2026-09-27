@@ -266,6 +266,15 @@ export type VpnProfile = {
   gatewayPort: number;
   gatewayUsername?: string;
   hasGatewayPassword: boolean;
+  /** Managed profiles only: what Termix dials, and how it last went. */
+  provider?: string | null;
+  serverHost?: string | null;
+  serverPort?: number | null;
+  authUsername?: string | null;
+  trustedFingerprint?: string | null;
+  hasAuthPassword?: boolean;
+  lastState?: string | null;
+  lastError?: string | null;
 };
 
 export type HostFolder = {

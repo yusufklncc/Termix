@@ -12,6 +12,14 @@ export interface VpnProfilePayload {
   gatewayUsername?: string | null;
   /** Omitted on update to keep the stored secret; empty string clears it. */
   gatewayPassword?: string | null;
+  /** Managed profiles only: what to dial and as whom. */
+  provider?: string | null;
+  serverHost?: string | null;
+  serverPort?: number | null;
+  authUsername?: string | null;
+  /** Omitted on update to keep the stored secret; empty string clears it. */
+  authPassword?: string | null;
+  trustedFingerprint?: string | null;
 }
 
 export async function getVpnProfiles(): Promise<Record<string, unknown>[]> {

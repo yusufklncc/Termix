@@ -17,15 +17,21 @@ import type { VpnProfile } from "@/types/ui-types";
 /**
  * Network profiles: the tunnels hosts are reached through.
  *
- * A profile records where an operator-run tunnel's doorway is -- Termix does
- * not run the tunnel itself, which is why there is an address here and no
- * VPN credentials.
+ * Two kinds. A declared profile records where a tunnel the operator runs has
+ * its doorway; Termix only knows the address. A managed one is raised by
+ * Termix through the network manager, so it carries what to dial and as whom,
+ * and the address is worked out rather than typed.
+ *
+ * The kind is fixed at creation: the two have different fields and a
+ * different thing holding the tunnel up, so changing it is making a new
+ * profile, not editing one.
  */
 
 type FormState = VpnProfilePayload & { id?: string };
 
 const emptyForm: FormState = {
   name: "",
+  kind: "declared",
   gatewayType: "socks5",
   gatewayHost: "",
   gatewayPort: 1080,
@@ -33,18 +39,65 @@ const emptyForm: FormState = {
   gatewayPassword: "",
 };
 
+const emptyManagedForm: FormState = {
+  name: "",
+  kind: "managed",
+  provider: "fortinet",
+  serverHost: "",
+  serverPort: 443,
+  authUsername: "",
+  authPassword: "",
+  trustedFingerprint: "",
+  // A managed profile has no address to give; the manager answers with one.
+  gatewayHost: "",
+  gatewayPort: 0,
+};
+
 function toForm(profile: VpnProfile): FormState {
   return {
     id: profile.id,
     name: profile.name,
     description: profile.description ?? "",
+    kind: profile.kind,
     gatewayType: profile.gatewayType,
     gatewayHost: profile.gatewayHost,
     gatewayPort: profile.gatewayPort,
     gatewayUsername: profile.gatewayUsername ?? "",
     // Left out on purpose: an unchanged field keeps the stored secret.
     gatewayPassword: undefined,
+    provider: profile.provider ?? undefined,
+    serverHost: profile.serverHost ?? "",
+    serverPort: profile.serverPort ?? 443,
+    authUsername: profile.authUsername ?? "",
+    authPassword: undefined,
+    trustedFingerprint: profile.trustedFingerprint ?? "",
   };
+}
+
+/** What the manager last said about a managed profile. A declared one has
+ * nobody to report, which is why it shows nothing rather than "unknown". */
+function StateBadge({ profile }: { profile: VpnProfile }) {
+  const { t } = useTranslation();
+  if (profile.kind !== "managed" || !profile.lastState) return null;
+
+  const labels: Record<string, string> = {
+    up: t("hosts.vpn.stateUp"),
+    connecting: t("hosts.vpn.stateConnecting"),
+    down: t("hosts.vpn.stateDown"),
+    error: t("hosts.vpn.stateError"),
+  };
+  const tone =
+    profile.lastState === "up"
+      ? "text-green-500"
+      : profile.lastState === "error"
+        ? "text-destructive"
+        : "text-muted-foreground";
+
+  return (
+    <span className={`text-[10px] ${tone}`} title={profile.lastError ?? ""}>
+      {labels[profile.lastState] ?? profile.lastState}
+    </span>
+  );
 }
 
 export function VpnProfileManager({
@@ -67,9 +120,15 @@ export function VpnProfileManager({
     if (!form) return;
     setSaving(true);
     try {
+      // Spread rather than listed, so a field added to the form reaches the
+      // API without being remembered here too. Only the numbers need saying:
+      // an <input> hands them back as text.
       const payload: VpnProfilePayload = {
         ...form,
         gatewayPort: Number(form.gatewayPort),
+        ...(form.kind === "managed"
+          ? { serverPort: Number(form.serverPort) || 443 }
+          : {}),
       };
       if (form.id) {
         await updateVpnProfile(Number(form.id), payload);
@@ -152,9 +211,11 @@ export function VpnProfileManager({
             <div className="flex flex-col min-w-0">
               <span className="text-xs truncate">{profile.name}</span>
               <span className="text-[10px] text-muted-foreground truncate">
-                {profile.gatewayType} · {profile.gatewayHost}:
-                {profile.gatewayPort}
+                {profile.kind === "managed"
+                  ? `${profile.provider ?? ""} · ${profile.serverHost ?? ""}`
+                  : `${profile.gatewayType} · ${profile.gatewayHost}:${profile.gatewayPort}`}
               </span>
+              <StateBadge profile={profile} />
             </div>
             <div className="flex items-center gap-1 shrink-0">
               <Button
@@ -180,15 +241,66 @@ export function VpnProfileManager({
 
       {form ? (
         <div className="flex flex-col gap-2 border-t border-border pt-2">
+          <div className="flex flex-col gap-1">
+            <label className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">
+              {t("hosts.vpn.kind")}
+            </label>
+            <span className="text-[10px] text-muted-foreground">
+              {form.kind === "managed"
+                ? t("hosts.vpn.kindManaged")
+                : t("hosts.vpn.kindDeclared")}
+              {" · "}
+              {t("hosts.vpn.kindLocked")}
+            </span>
+          </div>
+
           {field(t("hosts.vpn.name"), "name", "Company X")}
-          {field(t("hosts.vpn.gatewayHost"), "gatewayHost", "vpn-company-x")}
-          {field(t("hosts.vpn.gatewayPort"), "gatewayPort", "1080", "number")}
-          {field(t("hosts.vpn.gatewayUsername"), "gatewayUsername")}
-          {field(
-            t("hosts.vpn.gatewayPassword"),
-            "gatewayPassword",
-            form.id ? t("hosts.vpn.passwordUnchanged") : undefined,
-            "password",
+
+          {form.kind === "managed" ? (
+            <>
+              <p className="text-[10px] text-muted-foreground">
+                {t("hosts.vpn.managedHint")}
+              </p>
+              {field(
+                t("hosts.vpn.serverHost"),
+                "serverHost",
+                "vpn.company.com",
+              )}
+              {field(t("hosts.vpn.serverPort"), "serverPort", "443", "number")}
+              {field(t("hosts.vpn.authUsername"), "authUsername")}
+              {field(
+                t("hosts.vpn.authPassword"),
+                "authPassword",
+                form.id ? t("hosts.vpn.passwordUnchanged") : undefined,
+                "password",
+              )}
+              {field(
+                t("hosts.vpn.trustedFingerprint"),
+                "trustedFingerprint",
+                t("hosts.vpn.trustedFingerprintHint"),
+              )}
+            </>
+          ) : (
+            <>
+              {field(
+                t("hosts.vpn.gatewayHost"),
+                "gatewayHost",
+                "vpn-company-x",
+              )}
+              {field(
+                t("hosts.vpn.gatewayPort"),
+                "gatewayPort",
+                "1080",
+                "number",
+              )}
+              {field(t("hosts.vpn.gatewayUsername"), "gatewayUsername")}
+              {field(
+                t("hosts.vpn.gatewayPassword"),
+                "gatewayPassword",
+                form.id ? t("hosts.vpn.passwordUnchanged") : undefined,
+                "password",
+              )}
+            </>
           )}
           <div className="flex items-center gap-2">
             <Button
@@ -210,15 +322,26 @@ export function VpnProfileManager({
           </div>
         </div>
       ) : (
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 self-start"
-          onClick={() => setForm({ ...emptyForm })}
-        >
-          <Plus className="size-3 mr-1" />
-          {t("hosts.vpn.add")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7"
+            onClick={() => setForm({ ...emptyManagedForm })}
+          >
+            <Plus className="size-3 mr-1" />
+            {t("hosts.vpn.kindManaged")}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7"
+            onClick={() => setForm({ ...emptyForm })}
+          >
+            <Plus className="size-3 mr-1" />
+            {t("hosts.vpn.kindDeclared")}
+          </Button>
+        </div>
       )}
     </div>
   );

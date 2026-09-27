@@ -1909,7 +1909,24 @@
       "saveFailed": "Could not save the network profile",
       "deleted": "Network profile deleted",
       "deleteFailed": "Could not delete the network profile",
-      "overridesProxy": "This host has both a network and its own proxy. The network is used; the proxy settings below are ignored."
+      "overridesProxy": "This host has both a network and its own proxy. The network is used; the proxy settings below are ignored.",
+      "kind": "Who runs the tunnel",
+      "kindDeclared": "You do (a sidecar you run)",
+      "kindManaged": "Termix does",
+      "kindLocked": "This cannot be changed after a profile is made.",
+      "provider": "VPN type",
+      "serverHost": "VPN gateway address",
+      "serverPort": "VPN gateway port",
+      "authUsername": "VPN username",
+      "authPassword": "VPN password",
+      "trustedFingerprint": "Gateway key pin",
+      "trustedFingerprintHint": "The gateway's public key digest. Leave empty unless its certificate is not publicly trusted.",
+      "managedHint": "Termix raises this tunnel itself through the network manager. No compose changes; the credentials are stored encrypted.",
+      "noManager": "No network manager is configured, so Termix cannot raise a tunnel itself.",
+      "stateUp": "Connected",
+      "stateConnecting": "Connecting",
+      "stateDown": "Down",
+      "stateError": "Failed"
     }
   },
   "commandPalette": {

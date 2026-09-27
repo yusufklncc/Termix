@@ -17,6 +17,8 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY manager.js /app/manager.js
+COPY vpnc-script-no-dns /app/vpnc-script-no-dns
+RUN chmod +x /app/vpnc-script-no-dns
 
 # The control channel. Termix only; do not publish it.
 EXPOSE 3392

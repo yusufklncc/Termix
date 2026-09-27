@@ -26,6 +26,8 @@ services:
     cap_add: [NET_ADMIN, SYS_ADMIN]
     devices:
       - /dev/net/tun:/dev/net/tun
+    sysctls:
+      - net.ipv4.ip_forward=1
     environment:
       NET_MANAGER_TOKEN: a-long-random-secret
     networks: [termix]
@@ -45,9 +47,24 @@ manager at `NET_MANAGER_URL` (default `termix-netmgr:3392`).
 | `NET_MANAGER_DOOR_BASE` | no (20000)   | A profile's doorway is this plus its id                 |
 | `NET_MANAGER_SUBNET`    | no (10.88)   | The /16 the namespaces are addressed from               |
 
-If IPv4 forwarding is off, a namespace cannot reach its gateway; the manager
-says so and names the `sysctls` entry to add. It is on by default under
-Docker.
+Forwarding is what lets a namespace reach its gateway through this
+container's route. Whether it is on by default depends on the host -- it is
+under plain Docker, it is not under Docker in LXC -- so the entry is in the
+example rather than left to luck. Without it the manager says so and names it
+rather than raising a network that reaches nothing.
+
+## Names, and what resolves them
+
+A namespace gets no resolver. The gateway's address is looked up out here,
+where resolution works, and handed to the client with `--resolve`; the name is
+kept, because the certificate is issued to it.
+
+What the tunnel pushes as DNS is deliberately dropped. The namespace is
+entered without a mount namespace of its own, so /etc is shared: a resolver
+written there would reach the whole container, where the main namespace cannot
+use it and the next network's gateway would stop resolving. **Give hosts on a
+managed network an address rather than a name**, unless the name is one this
+container's own resolver can answer.
 
 ## The secret is also the key
 
@@ -64,7 +81,9 @@ the VPN client on stdin; after a restart Termix sends them again.
 
 Per network: a namespace `tx<id>`, a veth pair addressed from `10.88.0.0/16`,
 the VPN client and a SOCKS doorway inside it, and a forwarder out here that
-carries connections in. The namespace reaches its gateway through this
+carries connections in. Processes enter it with `nsenter` rather than
+`ip netns exec`, which remounts /sys -- a mount some hosts refuse, LXC among
+them, where it fails as "mount of /sys failed" and takes the network with it. The namespace reaches its gateway through this
 container's own route, NAT'd; once the tunnel is up, everything the tunnel
 does not carry is refused, the same rule the phase 8 sidecar applies.
 

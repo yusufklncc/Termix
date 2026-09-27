@@ -1,0 +1,10 @@
+#!/bin/sh
+# The tunnel's routes, but not its DNS.
+#
+# Entering a namespace without also making a mount namespace means /etc is
+# shared, so a DNS server the tunnel pushes would be written into the whole
+# container's resolv.conf -- where the main namespace cannot reach it, and the
+# next network's gateway would stop resolving. The interface and the routes
+# are what this manager needs from the script; the resolver is not.
+unset INTERNAL_IP4_DNS INTERNAL_IP6_DNS CISCO_DEF_DOMAIN
+exec /usr/share/vpnc-scripts/vpnc-script "$@"

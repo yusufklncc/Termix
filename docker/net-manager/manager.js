@@ -105,6 +105,20 @@ const tryRun = (command, args) => run(command, args).catch(() => {});
 const nsName = (id) => `tx${id}`;
 
 /**
+ * Entering a namespace without asking for /sys.
+ *
+ * `ip netns exec` remounts /sys so that /sys/class/net shows the namespace's
+ * interfaces. Nothing here reads that, and the remount is refused on hosts
+ * that do not allow nested sysfs mounts -- LXC among them -- where it fails
+ * with "mount of /sys failed" and takes the whole network with it. nsenter
+ * changes the network namespace and nothing else.
+ */
+const inNamespace = (id, command, args) => [
+  "nsenter",
+  [`--net=/var/run/netns/${nsName(id)}`, command, ...args],
+];
+
+/**
  * A /30 per profile out of one /16. The namespace side is .2 and this side
  * .1, so both are computable from the id and nothing has to be remembered
  * across a restart.
@@ -212,8 +226,8 @@ async function createNamespace(id) {
     "dev",
     vethPeer,
   ]);
-  await run("ip", ["netns", "exec", ns, "ip", "link", "set", vethPeer, "up"]);
-  await run("ip", ["netns", "exec", ns, "ip", "link", "set", "lo", "up"]);
+  await run(...inNamespace(id, "ip", ["link", "set", vethPeer, "up"]));
+  await run(...inNamespace(id, "ip", ["link", "set", "lo", "up"]));
   await run("ip", [
     "netns",
     "exec",
@@ -229,40 +243,10 @@ async function createNamespace(id) {
   return { ns, host, peer, vethHost };
 }
 
-/**
- * A namespace has no resolver.
- *
- * This container's /etc/resolv.conf points at Docker's own, on a loopback
- * address that means nothing inside another namespace -- so openconnect could
- * not even look up the gateway. The address is already known out here, where
- * resolution works, so it is written in rather than looked up again. The name
- * is kept, because the certificate is issued to it.
- *
- * resolv.conf is created empty for the tunnel's own DNS to be written into
- * once it is up: `ip netns exec` binds these over /etc, so what the VPN
- * pushes stays in the namespace it belongs to.
- */
-async function writeNamespaceResolution(id, hostname, addresses) {
-  const { promises: fs } = await import("node:fs");
-  const dir = `/etc/netns/${nsName(id)}`;
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    `${dir}/hosts`,
-    ["127.0.0.1 localhost", ...addresses.map((ip) => `${ip} ${hostname}`)].join(
-      "\n",
-    ) + "\n",
-  );
-  await fs.writeFile(`${dir}/resolv.conf`, "");
-}
-
 async function destroyNamespace(id) {
   const ns = nsName(id);
   await tryRun("ip", ["netns", "del", ns]);
   await tryRun("ip", ["link", "del", `${ns}a`]);
-  const { promises: fs } = await import("node:fs");
-  await fs
-    .rm(`/etc/netns/${ns}`, { recursive: true, force: true })
-    .catch(() => {});
 }
 
 /**
@@ -271,13 +255,12 @@ async function destroyNamespace(id) {
  * a split-routed VPN otherwise lets an address outside its routes leave by
  * this container's own way out, quietly.
  */
-async function applyStrictRoutes(ns, iface, gatewayIps) {
-  const ns_ = ["netns", "exec", ns, "iptables"];
-  await run("ip", [...ns_, "-N", "TERMIX_OUT"]);
-  await run("ip", [...ns_, "-A", "TERMIX_OUT", "-o", "lo", "-j", "ACCEPT"]);
-  await run("ip", [...ns_, "-A", "TERMIX_OUT", "-o", iface, "-j", "ACCEPT"]);
-  await run("ip", [
-    ...ns_,
+async function applyStrictRoutes(id, iface, gatewayIps) {
+  const rule = (args) => run(...inNamespace(id, "iptables", args));
+  await rule(["-N", "TERMIX_OUT"]);
+  await rule(["-A", "TERMIX_OUT", "-o", "lo", "-j", "ACCEPT"]);
+  await rule(["-A", "TERMIX_OUT", "-o", iface, "-j", "ACCEPT"]);
+  await rule([
     "-A",
     "TERMIX_OUT",
     "-m",
@@ -288,10 +271,9 @@ async function applyStrictRoutes(ns, iface, gatewayIps) {
     "ACCEPT",
   ]);
   for (const ip of gatewayIps) {
-    await run("ip", [...ns_, "-A", "TERMIX_OUT", "-d", ip, "-j", "ACCEPT"]);
+    await rule(["-A", "TERMIX_OUT", "-d", ip, "-j", "ACCEPT"]);
   }
-  await run("ip", [
-    ...ns_,
+  await rule([
     "-A",
     "TERMIX_OUT",
     "-j",
@@ -299,7 +281,7 @@ async function applyStrictRoutes(ns, iface, gatewayIps) {
     "--reject-with",
     "icmp-port-unreachable",
   ]);
-  await run("ip", [...ns_, "-A", "OUTPUT", "-j", "TERMIX_OUT"]);
+  await rule(["-A", "OUTPUT", "-j", "TERMIX_OUT"]);
 }
 
 // ------------------------------------------------------------- doorway
@@ -341,10 +323,11 @@ async function resolveGatewayIps(host) {
  * has to fit is visible from here -- a command, an interface name, and what
  * it needs on stdin.
  */
-function buildProviderCommand(profile, credentials) {
+function buildProviderCommand(profile, credentials, gatewayIps) {
   if (profile.provider !== "fortinet") {
     throw new Error(`unsupported provider: ${profile.provider}`);
   }
+  const host = profile.serverHost;
   const args = [
     "--protocol=fortinet",
     "--user",
@@ -353,6 +336,13 @@ function buildProviderCommand(profile, credentials) {
     "--interface",
     "tun0",
     "--non-inter",
+    // The namespace has no resolver of its own, and the name is kept because
+    // the certificate is issued to it -- so the address is handed over
+    // instead, having been looked up out here where resolution works.
+    ...gatewayIps.flatMap((ip) => ["--resolve", `${host}:${ip}`]),
+    // Routes from the tunnel, but not its DNS; see the script for why.
+    "--script",
+    "/app/vpnc-script-no-dns",
   ];
   if (profile.trustedFingerprint) {
     args.push(
@@ -360,7 +350,7 @@ function buildProviderCommand(profile, credentials) {
       `pin-sha256:${String(profile.trustedFingerprint).replace(/^pin-sha256:/, "")}`,
     );
   }
-  args.push(`https://${profile.serverHost}:${profile.serverPort ?? 443}`);
+  args.push(`https://${host}:${profile.serverPort ?? 443}`);
   return {
     command: "openconnect",
     args,
@@ -383,7 +373,7 @@ function lastWords(said) {
   return interesting.slice(-2).join("; ");
 }
 
-function waitForInterface(ns, iface, vpnProcess, timeoutMs = 60000, said) {
+function waitForInterface(id, iface, vpnProcess, timeoutMs = 60000, said) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
     const tick = async () => {
@@ -398,7 +388,7 @@ function waitForInterface(ns, iface, vpnProcess, timeoutMs = 60000, said) {
         );
       }
       try {
-        await run("ip", ["netns", "exec", ns, "ip", "link", "show", iface]);
+        await run(...inNamespace(id, "ip", ["link", "show", iface]));
         return resolve();
       } catch {
         if (Date.now() > deadline) {
@@ -431,10 +421,10 @@ async function bringUp(profile, credentials) {
     // Named gateways have to resolve before the namespace's rules exist; this
     // container's resolver is what answers, since the tunnel is not up yet.
     const gatewayIps = await resolveGatewayIps(profile.serverHost);
-    await writeNamespaceResolution(id, profile.serverHost, gatewayIps);
     const { command, args, iface, stdin } = buildProviderCommand(
       profile,
       credentials,
+      gatewayIps,
     );
 
     /*
@@ -454,7 +444,7 @@ async function bringUp(profile, credentials) {
       if (said.length > 40) said.splice(0, said.length - 40);
     };
 
-    const vpn = spawn("ip", ["netns", "exec", ns, command, ...args], {
+    const vpn = spawn(...inNamespace(id, command, args), {
       stdio: ["pipe", "pipe", "pipe"],
     });
     vpn.stdout.on("data", remember);
@@ -474,12 +464,11 @@ async function bringUp(profile, credentials) {
       log(`network ${id}: tunnel ended (${code})`);
     });
 
-    await waitForInterface(ns, iface, vpn, 60000, said);
-    await applyStrictRoutes(ns, iface, gatewayIps);
+    await waitForInterface(id, iface, vpn, 60000, said);
+    await applyStrictRoutes(id, iface, gatewayIps);
 
     const socks = spawn(
-      "ip",
-      ["netns", "exec", ns, "microsocks", "-i", peer, "-p", "1080"],
+      ...inNamespace(id, "microsocks", ["-i", peer, "-p", "1080"]),
       { stdio: ["ignore", "inherit", "inherit"] },
     );
     entry.procs.push(socks);

@@ -22,7 +22,7 @@ const MAX_JOB_BYTES = 256 * 1024 * 1024;
 
 export interface PrintedDocument {
   name: string;
-  bytes: Uint8Array;
+  bytes: Uint8Array<ArrayBuffer>;
 }
 
 export interface RdpPrintCollector {

@@ -427,6 +427,7 @@ jobs:
           npm ci
           npm install --force @rollup/rollup-darwin-arm64
           npm install dmg-license
+          node scripts/install-macos-sharp.cjs
 
       - name: Check for Code Signing Certificates
         id: check_certs
@@ -538,12 +539,27 @@ jobs:
           fi
           npx electron-builder --mac dmg --universal --x64 --arm64 --publish never
 
+      - name: Verify macOS sharp packaging
+        run: |
+          artifacts=(release/termix_macos_*_dmg.dmg)
+          MAS_PKG=$(find release -name "termix_macos_universal_mas.pkg" -type f | head -n 1)
+          if [ -n "$MAS_PKG" ]; then
+            artifacts+=("$MAS_PKG")
+          fi
+          node scripts/verify-macos-sharp.cjs "${artifacts[@]}"
+
+      - name: Locate macOS MAS PKG
+        id: locate_mas_pkg
+        run: |
+          MAS_PKG=$(find release -name "termix_macos_universal_mas.pkg" -type f | head -n 1)
+          echo "path=$MAS_PKG" >> "$GITHUB_OUTPUT"
+
       - name: Upload macOS MAS PKG
-        if: steps.check_certs.outputs.has_certs == 'true' && hashFiles('release/termix_macos_universal_mas.pkg') != '' && (inputs.artifact_destination == 'file' || inputs.artifact_destination == 'release' || inputs.artifact_destination == 'submit')
+        if: steps.check_certs.outputs.has_certs == 'true' && steps.locate_mas_pkg.outputs.path != '' && (inputs.artifact_destination == 'file' || inputs.artifact_destination == 'release' || inputs.artifact_destination == 'submit')
         uses: actions/upload-artifact@v7
         with:
           name: termix_macos_universal_mas
-          path: release/termix_macos_universal_mas.pkg
+          path: ${{ steps.locate_mas_pkg.outputs.path }}
           retention-days: 30
           if-no-files-found: warn
 
@@ -923,6 +939,9 @@ jobs:
           echo "dmg_name=$DMG_NAME" >> $GITHUB_OUTPUT
           echo "checksum=$CHECKSUM" >> $GITHUB_OUTPUT
 
+      - name: Verify macOS sharp packaging
+        run: node scripts/verify-macos-sharp.cjs release_asset/termix_macos_universal_dmg.dmg
+
       - name: Prepare Homebrew submission files
         run: |
           VERSION="${{ steps.package-version.outputs.version }}"
@@ -1013,6 +1032,7 @@ jobs:
           npm ci
           npm install --force @rollup/rollup-darwin-arm64
           npm install dmg-license
+          node scripts/install-macos-sharp.cjs
 
       - name: Check for Code Signing Certificates
         id: check_certs
@@ -1153,6 +1173,16 @@ jobs:
         run: |
           BUILD_VERSION="${{ steps.build_number.outputs.build_version || github.run_number }}"
           npm run build && npx electron-builder --mac mas --universal --config.buildVersion="$BUILD_VERSION"
+
+      - name: Verify macOS sharp packaging
+        if: steps.check_certs.outputs.has_certs == 'true'
+        run: |
+          MAS_PKG=$(find release -name "termix_macos_universal_mas.pkg" -type f | head -n 1)
+          if [ -z "$MAS_PKG" ]; then
+            echo "MAS pkg not found under release/; aborting."
+            exit 1
+          fi
+          node scripts/verify-macos-sharp.cjs "$MAS_PKG"
 
       - name: Generate App Store release notes
         id: asc_notes

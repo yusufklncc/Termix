@@ -1,5 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import {
   Box,
@@ -32,6 +33,7 @@ import {
   Trash2,
   Users,
   Zap,
+  Globe,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -59,10 +61,19 @@ import {
 } from "@/sidebar/host-permissions";
 import { HostAuthOverrideModal } from "@/sidebar/HostAuthOverrideModal";
 import {
+  AUTH_OVERRIDE_PROTOCOLS,
+  AUTH_PROTOCOL_METADATA,
+  type AuthOverrideProtocol,
+} from "@/types/auth-protocols";
+import {
   useStatusColorScheme,
   getStatusClasses,
 } from "@/hooks/use-status-color-scheme";
-import { useHostStatus, useServerStatusMeta } from "@/lib/ServerStatusContext";
+import {
+  useHostStatus,
+  useHostStatusReason,
+  useServerStatusMeta,
+} from "@/lib/ServerStatusContext";
 import {
   Tooltip,
   TooltipContent,
@@ -75,6 +86,8 @@ import {
   getPreferredHostAction,
   recordHostActionPreference,
 } from "@/lib/local-adaptive-preferences";
+import type { WebEndpoint } from "@/types/index";
+import { openWebEndpointExternally } from "@/api/web-endpoint-api";
 
 export function statusCheckEnabled(host: Host): boolean {
   return host.statsConfig?.statusCheckEnabled !== false;
@@ -83,14 +96,15 @@ export function statusCheckEnabled(host: Host): boolean {
 export function buildStatusTooltip(
   host: Host,
   status: "online" | "reachable" | "offline",
+  t: (key: string) => string = (k) => k,
 ): string {
   const statusLabel =
     status === "online"
-      ? "Available"
+      ? t("hosts.status.available")
       : status === "reachable"
-        ? "Reachable, not authenticated"
-        : "Offline";
-  if (!statusCheckEnabled(host)) return "Monitoring disabled";
+        ? t("hosts.status.reachable")
+        : t("hosts.status.offline");
+  if (!statusCheckEnabled(host)) return t("hosts.status.monitoringDisabled");
   const protocols: string[] = [];
   if (host.enableSsh) protocols.push("SSH");
   if (host.enableRdp) protocols.push("RDP");
@@ -101,12 +115,40 @@ export function buildStatusTooltip(
   return `${protocols.join(", ")}: ${statusLabel}`;
 }
 
-export function getSshActions(
-  host: Host,
-): { type: TabType; icon: typeof Terminal; label: string }[] {
+export function getSshActions(host: Host): {
+  type: TabType;
+  icon: typeof Terminal;
+  label: string;
+  endpointId?: string;
+}[] {
   const metricsEnabled =
     host.enableSsh && host.statsConfig?.metricsEnabled !== false;
-  return [
+
+  // Gated on enableWebUi ALONE -- unlike every entry below, which requires
+  // enableSsh. A "direct" endpoint needs no SSH at all; SSH matters only
+  // per-endpoint, for "tunnel" access, which the open route enforces.
+  //
+  // One entry, not one per endpoint: a host may declare up to 16, and a row of
+  // 16 identical globes is unusable. With a single endpoint the entry acts on
+  // it directly and wears its label; with several it carries no endpointId and
+  // the click surfaces a picker instead.
+  const webEndpoints = host.enableWebUi
+    ? (host.webUiConfig?.endpoints ?? [])
+    : [];
+  const webEndpointActions =
+    webEndpoints.length > 0
+      ? [
+          {
+            type: "web-endpoint" as TabType,
+            icon: Globe,
+            label: webEndpoints.length === 1 ? webEndpoints[0].label : "Web UI",
+            endpointId:
+              webEndpoints.length === 1 ? webEndpoints[0].id : undefined,
+          },
+        ]
+      : [];
+
+  const connectionActions = [
     host.enableSsh &&
       host.enableTerminal && {
         type: "terminal" as TabType,
@@ -154,6 +196,8 @@ export function getSshActions(
     icon: typeof Terminal;
     label: string;
   }[];
+
+  return [...connectionActions, ...webEndpointActions];
 }
 
 export async function writeClipboardText(value: string): Promise<void> {
@@ -241,7 +285,10 @@ export function HostItem({
   onDropChildHosts,
 }: {
   host: Host;
-  onOpenTab: (type: TabType) => void;
+  onOpenTab: (
+    type: TabType,
+    options?: { endpointId?: string; label?: string },
+  ) => void;
   onEditHost?: () => void;
   onShareHost?: () => void;
   onDelete: () => void;
@@ -310,6 +357,7 @@ export function HostItem({
   const statusLoading = !initialLoadComplete && statusCheckOn;
   // Per-host subscription — status polls only re-render rows that flipped.
   const liveStatus = useHostStatus(Number(host.id), statusCheckOn);
+  const statusReason = useHostStatusReason(Number(host.id), statusCheckOn);
   const availability =
     liveStatus === "online" ||
     liveStatus === "reachable" ||
@@ -321,6 +369,19 @@ export function HostItem({
           ? "online"
           : "offline";
   const isOnline = availability === "online";
+  const previousAvailability = useRef(availability);
+  const [statusLocking, setStatusLocking] = useState(false);
+
+  useEffect(() => {
+    const justCameOnline =
+      previousAvailability.current !== "online" && availability === "online";
+    previousAvailability.current = availability;
+    if (!justCameOnline) return;
+
+    setStatusLocking(true);
+    const timeout = window.setTimeout(() => setStatusLocking(false), 400);
+    return () => window.clearTimeout(timeout);
+  }, [availability]);
   const isTouchOnly =
     typeof window !== "undefined" && window.matchMedia("(hover: none)").matches;
   const alwaysShowTray = trayTrigger === "always";
@@ -329,10 +390,17 @@ export function HostItem({
     !alwaysShowTray && !actionsOnly && (trayTrigger === "click" || isTouchOnly);
   const showPasswordCopy = !host.isShared && canCopyHostPassword(host);
   const showSudoPasswordCopy = !host.isShared && canCopyHostSudoPassword(host);
-  const canOverrideAuth = canOverrideHostAuth(host, "ssh");
-  const [authOverrideOpen, setAuthOverrideOpen] = useState(false);
+  const authOverrideProtocols = AUTH_OVERRIDE_PROTOCOLS.filter((protocol) =>
+    canOverrideHostAuth(host, protocol),
+  );
+  const [authOverrideProtocol, setAuthOverrideProtocol] =
+    useState<AuthOverrideProtocol | null>(null);
   const [parentDragOver, setParentDragOver] = useState(false);
   const [nativeRdpAvailable, setNativeRdpAvailable] = useState(false);
+  const [contextMenuPosition, setContextMenuPosition] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
 
   useEffect(() => {
     if (!window.electronAPI?.isElectron) return;
@@ -400,6 +468,16 @@ export function HostItem({
     }
   }
 
+  async function handleWakeOnLan(e: MouseEvent) {
+    e.stopPropagation();
+    try {
+      await wakeOnLan(Number(host.id));
+      toast.success(t("hosts.wakeOnLanSuccess", { name: host.name }));
+    } catch {
+      toast.error(t("hosts.wakeOnLanError"));
+    }
+  }
+
   if (query && !hostMatchesQuery(host, query)) return null;
 
   const depthStyle =
@@ -427,29 +505,100 @@ export function HostItem({
           : host.enableStream
             ? "stream"
             : "terminal";
-  const openHostTab = (type: TabType) => {
+  const openHostTab = (
+    type: TabType,
+    options?: { endpointId?: string; label?: string },
+  ) => {
     markTabSurfaceUsed(type);
     recordHostActionPreference(host.id, type);
-    onOpenTab(type);
+    onOpenTab(type, options);
   };
+
+  // Mirrors getSshActions: the single Web UI entry carries an endpointId only
+  // when the host has exactly one endpoint. Without one, the click opens a
+  // picker instead of a tab.
+  const webEndpoints: WebEndpoint[] = host.enableWebUi
+    ? (host.webUiConfig?.endpoints ?? [])
+    : [];
+
+  const openWebEndpoint = (endpoint: WebEndpoint) => {
+    if (endpoint.render === "external") {
+      // No tab at all: hand it to the real browser. On the desktop main's
+      // setWindowOpenHandler routes it to shell.openExternal.
+      openWebEndpointExternally(host, endpoint).catch((error: unknown) => {
+        toast.error(
+          error instanceof Error ? error.message : t("hosts.webUiOpenFailed"),
+        );
+      });
+      return;
+    }
+    openHostTab("web-endpoint", {
+      endpointId: endpoint.id,
+      label: endpoint.label,
+    });
+  };
+
+  const handleWebEndpointAction = (endpointId?: string) => {
+    const endpoint = endpointId
+      ? webEndpoints.find((candidate) => candidate.id === endpointId)
+      : undefined;
+    if (endpoint) openWebEndpoint(endpoint);
+  };
+
+  const isWebEndpointPicker = (action: {
+    type: TabType;
+    endpointId?: string;
+  }) => action.type === "web-endpoint" && !action.endpointId;
 
   const connectionButtons = (
     <>
-      {sshActions.map(({ type, icon: Icon, label }) => (
-        <button
-          key={type}
-          title={label}
-          onPointerEnter={() => preloadTabSurface(type)}
-          onFocus={() => preloadTabSurface(type)}
-          onClick={(e) => {
-            e.stopPropagation();
-            openHostTab(type);
-          }}
-          className={trayButtonClass}
-        >
-          <Icon className="size-3.5" />
-        </button>
-      ))}
+      {sshActions.map(({ type, icon: Icon, label, endpointId }) =>
+        isWebEndpointPicker({ type, endpointId }) ? (
+          <DropdownMenu key={type}>
+            <DropdownMenuTrigger asChild>
+              <button
+                title={label}
+                onClick={(e) => e.stopPropagation()}
+                className={trayButtonClass}
+              >
+                <Icon className="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              {webEndpoints.map((endpoint) => (
+                <DropdownMenuItem
+                  key={endpoint.id}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openWebEndpoint(endpoint);
+                  }}
+                >
+                  <Globe className="size-3.5 mr-2" />
+                  {endpoint.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <button
+            key={type}
+            title={label}
+            onPointerEnter={() => preloadTabSurface(type)}
+            onFocus={() => preloadTabSurface(type)}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (type === "web-endpoint") {
+                handleWebEndpointAction(endpointId);
+                return;
+              }
+              openHostTab(type);
+            }}
+            className={trayButtonClass}
+          >
+            <Icon className="size-3.5" />
+          </button>
+        ),
+      )}
       {host.enableSsh &&
         (host.enableRdp ||
           host.enableVnc ||
@@ -526,15 +675,7 @@ export function HostItem({
       {host.macAddress && (
         <button
           title={t("hosts.wakeOnLanAction")}
-          onClick={async (e) => {
-            e.stopPropagation();
-            try {
-              await wakeOnLan(Number(host.id));
-              toast.success(t("hosts.wakeOnLanSuccess", { name: host.name }));
-            } catch {
-              toast.error(t("hosts.wakeOnLanError"));
-            }
-          }}
+          onClick={handleWakeOnLan}
           className={trayButtonClass}
         >
           <Zap className="size-3.5" />
@@ -604,20 +745,172 @@ export function HostItem({
           <Boxes className="size-3.5" />
         </button>
       )}
-      <DropdownMenu open={isMenuOpen} onOpenChange={onMenuOpenChange}>
-        <DropdownMenuTrigger asChild>
-          <button
-            title={t("hosts.moreOptions")}
-            onClick={(e) => e.stopPropagation()}
-            className={trayButtonClass}
-          >
-            <MoreHorizontal className="size-3.5" />
-          </button>
-        </DropdownMenuTrigger>
+      <DropdownMenu
+        open={isMenuOpen}
+        onOpenChange={(open) => {
+          if (!open) setContextMenuPosition(null);
+          onMenuOpenChange?.(open);
+        }}
+      >
+        {contextMenuPosition ? (
+          createPortal(
+            <DropdownMenuTrigger asChild>
+              <button
+                title={t("hosts.moreOptions")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setContextMenuPosition(null);
+                }}
+                className="fixed z-50 size-px opacity-0 pointer-events-none"
+                style={{
+                  left: contextMenuPosition.x,
+                  top: contextMenuPosition.y,
+                }}
+              >
+                <MoreHorizontal className="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>,
+            document.body,
+          )
+        ) : (
+          <DropdownMenuTrigger asChild>
+            <button
+              title={t("hosts.moreOptions")}
+              onClick={(e) => {
+                e.stopPropagation();
+                setContextMenuPosition(null);
+              }}
+              className={trayButtonClass}
+            >
+              <MoreHorizontal className="size-3.5" />
+            </button>
+          </DropdownMenuTrigger>
+        )}
         <DropdownMenuContent
           align="start"
           className="text-xs w-auto min-w-44 max-w-72 whitespace-nowrap"
         >
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <Terminal className="size-3.5 mr-2" />
+              {t("common.connect")}
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              {sshActions.map(({ type, icon: Icon, label, endpointId }) =>
+                isWebEndpointPicker({ type, endpointId }) ? (
+                  <DropdownMenuSub key={type}>
+                    <DropdownMenuSubTrigger>
+                      <Icon className="size-3.5 mr-2" />
+                      {label}
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      {webEndpoints.map((endpoint) => (
+                        <DropdownMenuItem
+                          key={endpoint.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openWebEndpoint(endpoint);
+                          }}
+                        >
+                          <Globe className="size-3.5 mr-2" />
+                          {endpoint.label}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                ) : (
+                  <DropdownMenuItem
+                    key={type}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (type === "web-endpoint") {
+                        handleWebEndpointAction(endpointId);
+                        return;
+                      }
+                      openHostTab(type);
+                    }}
+                  >
+                    <Icon className="size-3.5 mr-2" />
+                    {label}
+                  </DropdownMenuItem>
+                ),
+              )}
+              {host.enableRdp && (
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openHostTab("rdp");
+                  }}
+                >
+                  <Monitor className="size-3.5 mr-2" />
+                  {t("hosts.connectRdp")}
+                </DropdownMenuItem>
+              )}
+              {host.enableVnc && (
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openHostTab("vnc");
+                  }}
+                >
+                  <MousePointerClick className="size-3.5 mr-2" />
+                  {t("hosts.connectVnc")}
+                </DropdownMenuItem>
+              )}
+              {host.enableTelnet && (
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openHostTab("telnet");
+                  }}
+                >
+                  <MessagesSquare className="size-3.5 mr-2" />
+                  {t("hosts.connectTelnet")}
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuSeparator />
+          {onEditHost && (
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation();
+                onEditHost();
+              }}
+            >
+              <Pencil className="size-3.5 mr-2" />
+              {t("hosts.editHostAction")}
+            </DropdownMenuItem>
+          )}
+          {onShareHost && (
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation();
+                onShareHost();
+              }}
+            >
+              <Share2 className="size-3.5 mr-2" />
+              {t("hosts.shareHost")}
+            </DropdownMenuItem>
+          )}
+          {host.enableProxmox && onProxmoxDiscover && (
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation();
+                onProxmoxDiscover();
+              }}
+            >
+              <Boxes className="size-3.5 mr-2" />
+              {t("hosts.proxmoxDiscoverAction")}
+            </DropdownMenuItem>
+          )}
+          {host.macAddress && (
+            <DropdownMenuItem onClick={handleWakeOnLan}>
+              <Zap className="size-3.5 mr-2" />
+              {t("hosts.wakeOnLanAction")}
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuSeparator />
           <DropdownMenuItem
             onClick={(e) => {
               e.stopPropagation();
@@ -628,17 +921,20 @@ export function HostItem({
             <Copy className="size-3.5 mr-2" />
             {t("hosts.copyAddress")}
           </DropdownMenuItem>
-          {canOverrideAuth && (
+          {authOverrideProtocols.map((protocol) => (
             <DropdownMenuItem
+              key={protocol}
               onClick={(e) => {
                 e.stopPropagation();
-                setAuthOverrideOpen(true);
+                setAuthOverrideProtocol(protocol);
               }}
             >
               <KeyRound className="size-3.5 mr-2" />
-              {t("hosts.sharing.authOverrideAction")}
+              {t("hosts.sharing.authOverrideActionProtocol", {
+                protocol: AUTH_PROTOCOL_METADATA[protocol].label,
+              })}
             </DropdownMenuItem>
-          )}
+          ))}
           {showPasswordCopy && (
             <DropdownMenuItem
               onClick={(e) => handleCopyPassword(e, "password")}
@@ -835,7 +1131,7 @@ export function HostItem({
     </>
   );
 
-  const trayOpenState = isTrayOpen || isMenuOpen;
+  const trayOpenState = isTrayOpen || (isMenuOpen && !contextMenuPosition);
   // Hover mode keeps the tray open from React state rather than group-hover so
   // the virtualizer can reserve the expanded height for this row.
   const hoverTrayOpen =
@@ -843,7 +1139,7 @@ export function HostItem({
     !actionsOnly &&
     !shouldUseClickTray &&
     !selectionMode &&
-    (isHovered || isMenuOpen);
+    (isHovered || (isMenuOpen && !contextMenuPosition));
   // A collapsed tray must not earn the text column's gap-[3.5px]. Clipping to
   // max-h-0 leaves it a flex item, so every closed row measured ~3.5px taller
   // than its slot and the virtualizer spread the rows apart to match. The
@@ -852,9 +1148,9 @@ export function HostItem({
   const trayCollapsedClass = `max-h-0 opacity-0 ${isCompact ? "" : "-mt-[3.5px]"}`;
   const trayVisibilityClass =
     alwaysShowTray || actionsOnly
-      ? `overflow-hidden transition-all duration-150 ease-out ${trayOpenState || alwaysShowTray ? "max-h-[130px] opacity-100" : trayCollapsedClass}`
+      ? `overflow-hidden transition-[max-height,opacity,margin] duration-150 ease-out ${trayOpenState || alwaysShowTray ? "max-h-[130px] opacity-100" : trayCollapsedClass}`
       : shouldUseClickTray
-        ? `overflow-hidden transition-all duration-150 ease-out ${trayOpenState ? "max-h-[130px] opacity-100" : trayCollapsedClass}`
+        ? `overflow-hidden transition-[max-height,opacity,margin] duration-150 ease-out ${trayOpenState ? "max-h-[130px] opacity-100" : trayCollapsedClass}`
         : // No transition in hover mode: the row's height is set by the
           // virtualizer and snaps in a single frame, so animating the tray
           // against it leaves the open tray overflowing its shortened row for
@@ -951,7 +1247,14 @@ export function HostItem({
       }}
       onMouseEnter={() => onHoverChange?.(true)}
       onMouseLeave={() => onHoverChange?.(false)}
-      className={`group relative flex items-stretch select-none transition-colors hover:bg-muted/50 ${
+      onContextMenu={(event) => {
+        if (selectionMode || arrangeMode) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setContextMenuPosition({ x: event.clientX, y: event.clientY });
+        onMenuOpenChange?.(true);
+      }}
+      className={`group relative flex items-stretch select-none transition-colors motion-interactive hover:bg-muted/50 ${
         canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
       } ${
         selected
@@ -995,7 +1298,8 @@ export function HostItem({
       {/* Status stripe */}
       {showStatusStripes && (
         <div
-          className={`w-[3px] shrink-0 transition-colors ${getStatusClasses(availability, statusScheme, "stripe", statusLoading)}`}
+          data-locking={statusLocking}
+          className={`host-status-stripe w-[3px] shrink-0 transition-colors motion-interactive ${getStatusClasses(availability, statusScheme, "stripe", statusLoading)}`}
         />
       )}
 
@@ -1049,7 +1353,9 @@ export function HostItem({
                 </span>
               </TooltipTrigger>
               <TooltipContent side="right">
-                {buildStatusTooltip(host, availability)}
+                {statusReason === "host_key_changed"
+                  ? `${t("hostKey.keyChangedWarning")}: ${t("hostKey.keyChangedDescription")}`
+                  : buildStatusTooltip(host, availability, t)}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -1161,7 +1467,7 @@ export function HostItem({
                     <Cpu className="size-2.5 shrink-0 text-muted-foreground/40" />
                     <div className="w-9 h-1 bg-muted-foreground/15 rounded-full overflow-hidden">
                       <div
-                        className={`h-full rounded-full ${host.cpu > 80 ? "bg-red-400" : host.cpu > 50 ? "bg-yellow-400" : "bg-accent-brand"}`}
+                        className={`motion-meter h-full rounded-full ${host.cpu > 80 ? "bg-red-400" : host.cpu > 50 ? "bg-yellow-400" : "bg-accent-brand"}`}
                         style={{ width: `${host.cpu}%` }}
                       />
                     </div>
@@ -1175,7 +1481,7 @@ export function HostItem({
                     <MemoryStick className="size-2.5 shrink-0 text-muted-foreground/40" />
                     <div className="w-9 h-1 bg-muted-foreground/15 rounded-full overflow-hidden">
                       <div
-                        className={`h-full rounded-full ${host.ram > 80 ? "bg-red-400" : host.ram > 60 ? "bg-yellow-400" : "bg-accent-brand/60"}`}
+                        className={`motion-meter h-full rounded-full ${host.ram > 80 ? "bg-red-400" : host.ram > 60 ? "bg-yellow-400" : "bg-accent-brand/60"}`}
                         style={{ width: `${host.ram}%` }}
                       />
                     </div>
@@ -1205,12 +1511,14 @@ export function HostItem({
             </div>
           </div>
         </div>
-        {canOverrideAuth && (
+        {authOverrideProtocol && (
           <HostAuthOverrideModal
-            open={authOverrideOpen}
-            onOpenChange={setAuthOverrideOpen}
+            open
+            onOpenChange={(open) => {
+              if (!open) setAuthOverrideProtocol(null);
+            }}
             host={host}
-            protocol="ssh"
+            protocol={authOverrideProtocol}
           />
         )}
       </div>

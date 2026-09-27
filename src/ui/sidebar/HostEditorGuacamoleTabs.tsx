@@ -17,6 +17,7 @@ import {
   Cpu,
 } from "lucide-react";
 import type { HostEditorForm } from "./HostEditorData";
+import { Select2 } from "@/components/select2";
 
 type HostEditorSetField = <K extends keyof HostEditorForm>(
   key: K,
@@ -264,7 +265,7 @@ export function HostEditorRdpTab({
                   <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
                     {t("hosts.guac.storedCredential")}
                   </label>
-                  <select
+                  <Select2
                     value={form.rdpCredentialId}
                     onChange={(e) =>
                       setField("rdpCredentialId", e.target.value)
@@ -277,7 +278,7 @@ export function HostEditorRdpTab({
                         {c.username ? `${c.name} (${c.username})` : c.name}
                       </option>
                     ))}
-                  </select>
+                  </Select2>
                 </div>
               ) : (
                 <>
@@ -340,7 +341,7 @@ export function HostEditorRdpTab({
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               {t("hosts.guac.securityMode")}
             </label>
-            <select
+            <Select2
               className="flex h-9 w-full border border-border bg-background px-3 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
               value={form.security ?? "any"}
               onChange={(e) => setField("security", e.target.value)}
@@ -351,7 +352,7 @@ export function HostEditorRdpTab({
               <option value="tls">TLS</option>
               <option value="vmconnect">VMConnect</option>
               <option value="rdp">RDP</option>
-            </select>
+            </Select2>
           </div>
           <SettingRow
             label={t("hosts.guac.ignoreCertificate")}
@@ -391,7 +392,7 @@ export function HostEditorRdpTab({
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               {t("hosts.guac.colorDepth")}
             </label>
-            <select
+            <Select2
               className="flex h-9 w-full border border-border bg-background px-3 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
               value={form.guacamoleConfig["color-depth"] ?? "auto"}
               onChange={(e) => setGuacField("color-depth", e.target.value)}
@@ -401,7 +402,7 @@ export function HostEditorRdpTab({
               <option value="16">16-bit</option>
               <option value="24">24-bit</option>
               <option value="32">32-bit</option>
-            </select>
+            </Select2>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="flex flex-col gap-1.5">
@@ -445,7 +446,7 @@ export function HostEditorRdpTab({
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               {t("hosts.guac.resizeMethod")}
             </label>
-            <select
+            <Select2
               className="flex h-9 w-full border border-border bg-background px-3 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
               value={form.guacamoleConfig["resize-method"] ?? "auto"}
               onChange={(e) => setGuacField("resize-method", e.target.value)}
@@ -453,7 +454,7 @@ export function HostEditorRdpTab({
               <option value="auto">Auto</option>
               <option value="display-update">Display Update</option>
               <option value="reconnect">Reconnect</option>
-            </select>
+            </Select2>
           </div>
           <SettingRow
             label={t("hosts.guac.forceLossless")}
@@ -713,7 +714,7 @@ export function HostEditorRdpTab({
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               {t("hosts.guac.serverLayout")}
             </label>
-            <select
+            <Select2
               className="flex h-9 w-full border border-border bg-background px-3 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
               value={form.guacamoleConfig["server-layout"] ?? "auto"}
               onChange={(e) => setGuacField("server-layout", e.target.value)}
@@ -731,7 +732,7 @@ export function HostEditorRdpTab({
               <option>pt-br-qwerty</option>
               <option>es-es-qwerty</option>
               <option>failsafe</option>
-            </select>
+            </Select2>
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
@@ -861,7 +862,7 @@ export function HostEditorRdpTab({
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               {t("hosts.guac.normalizeLineEndings")}
             </label>
-            <select
+            <Select2
               className="flex h-9 w-full border border-border bg-background px-3 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
               value={form.guacamoleConfig["normalize-clipboard"] ?? "auto"}
               onChange={(e) =>
@@ -872,7 +873,7 @@ export function HostEditorRdpTab({
               <option value="preserve">Preserve</option>
               <option value="unix">Unix (LF)</option>
               <option value="windows">Windows (CRLF)</option>
-            </select>
+            </Select2>
           </div>
           <SettingRow
             label={t("hosts.guac.disableCopy")}
@@ -1187,7 +1188,7 @@ export function HostEditorVncTab({
               <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
                 {t("hosts.guac.storedCredential")}
               </label>
-              <select
+              <Select2
                 value={form.vncCredentialId}
                 onChange={(e) => setField("vncCredentialId", e.target.value)}
                 className="flex h-9 w-full border border-border bg-background px-3 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
@@ -1198,7 +1199,7 @@ export function HostEditorVncTab({
                     {c.name}
                   </option>
                 ))}
-              </select>
+              </Select2>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1249,7 +1250,7 @@ export function HostEditorVncTab({
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               {t("hosts.guac.colorDepth")}
             </label>
-            <select
+            <Select2
               className="flex h-9 w-full border border-border bg-background px-3 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
               value={form.guacamoleConfig["color-depth"] ?? "auto"}
               onChange={(e) => setGuacField("color-depth", e.target.value)}
@@ -1259,7 +1260,7 @@ export function HostEditorVncTab({
               <option value="16">16-bit</option>
               <option value="24">24-bit</option>
               <option value="32">32-bit</option>
-            </select>
+            </Select2>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="flex flex-col gap-1.5">
@@ -1289,7 +1290,7 @@ export function HostEditorVncTab({
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               {t("hosts.guac.resizeMethod")}
             </label>
-            <select
+            <Select2
               className="flex h-9 w-full border border-border bg-background px-3 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
               value={form.guacamoleConfig["resize-method"] ?? "auto"}
               onChange={(e) => setGuacField("resize-method", e.target.value)}
@@ -1297,7 +1298,7 @@ export function HostEditorVncTab({
               <option value="auto">Auto</option>
               <option value="display-update">Display Update</option>
               <option value="reconnect">Reconnect</option>
-            </select>
+            </Select2>
           </div>
           <SettingRow
             label={t("hosts.guac.forceLossless")}
@@ -1337,7 +1338,7 @@ export function HostEditorVncTab({
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               {t("hosts.guac.cursorMode")}
             </label>
-            <select
+            <Select2
               className="flex h-9 w-full border border-border bg-background px-3 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
               value={form.guacamoleConfig["cursor"] ?? "auto"}
               onChange={(e) => setGuacField("cursor", e.target.value)}
@@ -1345,13 +1346,13 @@ export function HostEditorVncTab({
               <option value="auto">Auto</option>
               <option value="local">Local</option>
               <option value="remote">Remote</option>
-            </select>
+            </Select2>
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               {t("hosts.guac.serverLayout")}
             </label>
-            <select
+            <Select2
               className="flex h-9 w-full border border-border bg-background px-3 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
               value={form.guacamoleConfig["server-layout"] ?? "auto"}
               onChange={(e) => setGuacField("server-layout", e.target.value)}
@@ -1369,7 +1370,7 @@ export function HostEditorVncTab({
               <option>pt-br-qwerty</option>
               <option>es-es-qwerty</option>
               <option>failsafe</option>
-            </select>
+            </Select2>
           </div>
           <SettingRow
             label={t("hosts.guac.swapRedBlue")}
@@ -1401,7 +1402,7 @@ export function HostEditorVncTab({
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               {t("hosts.guac.normalizeLineEndings")}
             </label>
-            <select
+            <Select2
               className="flex h-9 w-full border border-border bg-background px-3 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
               value={form.guacamoleConfig["normalize-clipboard"] ?? "auto"}
               onChange={(e) =>
@@ -1412,7 +1413,7 @@ export function HostEditorVncTab({
               <option value="preserve">Preserve</option>
               <option value="unix">Unix (LF)</option>
               <option value="windows">Windows (CRLF)</option>
-            </select>
+            </Select2>
           </div>
           <SettingRow
             label={t("hosts.guac.disableCopy")}
@@ -1725,7 +1726,7 @@ export function HostEditorTelnetTab({
               <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
                 {t("hosts.guac.storedCredential")}
               </label>
-              <select
+              <Select2
                 value={form.telnetCredentialId}
                 onChange={(e) => setField("telnetCredentialId", e.target.value)}
                 className="flex h-9 w-full border border-border bg-background px-3 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
@@ -1736,7 +1737,7 @@ export function HostEditorTelnetTab({
                     {c.username ? `${c.name} (${c.username})` : c.name}
                   </option>
                 ))}
-              </select>
+              </Select2>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1819,7 +1820,7 @@ export function HostEditorTelnetTab({
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               {t("hosts.guac.terminalType")}
             </label>
-            <select
+            <Select2
               className="flex h-9 w-full border border-border bg-background px-3 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
               value={form.guacamoleConfig["terminal-type"] ?? "auto"}
               onChange={(e) => setGuacField("terminal-type", e.target.value)}
@@ -1829,7 +1830,7 @@ export function HostEditorTelnetTab({
               <option value="xterm-256color">xterm-256color</option>
               <option value="vt100">VT100</option>
               <option value="vt220">VT220</option>
-            </select>
+            </Select2>
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
@@ -1857,7 +1858,7 @@ export function HostEditorTelnetTab({
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               {t("hosts.guac.colorScheme")}
             </label>
-            <select
+            <Select2
               className="flex h-9 w-full border border-border bg-background px-3 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
               value={form.guacamoleConfig["color-scheme"] ?? "auto"}
               onChange={(e) => setGuacField("color-scheme", e.target.value)}
@@ -1867,13 +1868,13 @@ export function HostEditorTelnetTab({
               <option value="white-black">White on Black</option>
               <option value="gray-black">Gray on Black</option>
               <option value="green-black">Green on Black</option>
-            </select>
+            </Select2>
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               {t("hosts.guac.backspaceKey")}
             </label>
-            <select
+            <Select2
               className="flex h-9 w-full border border-border bg-background px-3 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
               value={form.guacamoleConfig["backspace"] ?? "auto"}
               onChange={(e) => setGuacField("backspace", e.target.value)}
@@ -1881,7 +1882,7 @@ export function HostEditorTelnetTab({
               <option value="auto">Auto</option>
               <option value="127">DEL (127)</option>
               <option value="8">BS (8)</option>
-            </select>
+            </Select2>
           </div>
         </div>
       </SectionCard>

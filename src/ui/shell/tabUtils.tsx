@@ -13,6 +13,7 @@ import {
   MousePointerClick,
   MonitorPlay,
   Network,
+  ArrowLeftRight,
   Server,
   Settings,
   Terminal,
@@ -28,7 +29,9 @@ import {
   Plug,
   ScrollText,
   Sparkles,
+  Presentation,
   Workflow,
+  Globe,
 } from "lucide-react";
 import { lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
@@ -42,6 +45,10 @@ import type { StreamAppHandle } from "@/features/stream/StreamApp";
 import type { RdpDirectAppHandle } from "@/features/rdp-direct/RdpDirectApp";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { Tab, TabType, Host } from "@/types/ui-types";
+import {
+  isQuickConnectHost,
+  quickConnectGuacHost,
+} from "@/sidebar/quick-connect-host";
 import type { SSHHost } from "@/types";
 import { useTabsSafe } from "@/shell/TabContext";
 import {
@@ -60,6 +67,11 @@ const loadTerminalFeature = () =>
     default: m.Terminal,
   }));
 const TerminalFeature = lazy(loadTerminalFeature);
+const CollabRoomTab = lazy(() =>
+  import("@/features/collab/CollabRoomTab").then((m) => ({
+    default: m.CollabRoomTab,
+  })),
+);
 const LocalTerminal = lazy(() =>
   import("@/features/local-terminal/LocalTerminal").then((m) => ({
     default: m.LocalTerminal,
@@ -80,6 +92,11 @@ const loadDockerManager = () =>
     default: m.DockerManager,
   }));
 const DockerManager = lazy(loadDockerManager);
+const loadWebEndpointTab = () =>
+  import("@/features/web-endpoint/WebEndpointTab").then((m) => ({
+    default: m.WebEndpointTab,
+  }));
+const WebEndpointTab = lazy(loadWebEndpointTab);
 const loadHostMetricsTab = () =>
   import("@/features/host-metrics/HostMetricsTab").then((m) => ({
     default: m.HostMetricsTab,
@@ -120,6 +137,11 @@ const loadTunnelTab = () =>
     default: m.TunnelTab,
   }));
 const TunnelTab = lazy(loadTunnelTab);
+const SftpTransferTab = lazy(() =>
+  import("@/features/sftp/SftpTransferTab").then((m) => ({
+    default: m.SftpTransferTab,
+  })),
+);
 const NetworkGraphCard = lazy(() =>
   import("@/dashboard/cards/NetworkGraphCard").then((m) => ({
     default: m.NetworkGraphCard,
@@ -186,6 +208,42 @@ const tabSurfaceLoaders: Partial<Record<TabType, () => Promise<unknown>>> = {
   stream: loadStreamApp,
 };
 
+/**
+ * A plugin-contributed tab surface. `component` is the loader's resolved
+ * default export, rendered with the same Tab it would have received from the
+ * switch in renderTabContent -- plugins get the raw tab record and decide
+ * for themselves what they need out of it.
+ */
+export type PluginTabComponent = React.ComponentType<{ tab: Tab }>;
+export type PluginTabLoader = () => Promise<{ default: PluginTabComponent }>;
+
+interface PluginTabEntry {
+  loader: PluginTabLoader;
+  icon?: React.ReactNode;
+  // Built lazily on first render and cached here, so every render of the same
+  // plugin tab reuses one lazy component instead of remounting it each time.
+  LazyComponent?: PluginTabComponent;
+}
+
+/**
+ * Runtime registry for plugin tab ids that don't exist in the built-in
+ * TabType union. Registered once a plugin loads, looked up by tabIcon and
+ * renderTabContent instead of a switch case.
+ */
+const registeredTabComponents = new Map<string, PluginTabEntry>();
+
+export function registerTabComponent(
+  id: string,
+  loader: PluginTabLoader,
+  icon?: React.ReactNode,
+): void {
+  registeredTabComponents.set(id, { loader, icon });
+}
+
+export function unregisterTabComponent(id: string): void {
+  registeredTabComponents.delete(id);
+}
+
 /** Download a likely next tab without starting a connection or mounting UI. */
 export function preloadTabSurface(type: TabType): void {
   const loader = tabSurfaceLoaders[type];
@@ -226,7 +284,11 @@ function hostToSSHHost(h: Host): SSHHost {
     enableTunnel: h.enableTunnel ?? false,
     enableFileManager: h.enableFileManager ?? false,
     enableDocker: h.enableDocker ?? false,
+    enableTerminalToolbar: h.enableTerminalToolbar ?? true,
+    enableAiAssistant: h.enableAiAssistant ?? false,
     dockerConfig: h.dockerConfig ?? null,
+    enableWebUi: h.enableWebUi ?? false,
+    webUiConfig: h.webUiConfig ?? { endpoints: [] },
     showTerminalInSidebar: true,
     showFileManagerInSidebar: true,
     showTunnelInSidebar: true,
@@ -236,6 +298,7 @@ function hostToSSHHost(h: Host): SSHHost {
     tunnelConnections: [],
     connectionType: "ssh",
     connectionOrigin: h.connectionOrigin ?? null,
+    isShared: h.isShared ?? false,
     // Carries the host's identity to a delegated backend. Without it the
     // remote side resolves our local row id against its own table.
     syncId: h.syncId ?? null,
@@ -319,8 +382,12 @@ export function tabIcon(type: TabType) {
       return <Settings className="size-3.5" />;
     case "docker":
       return <Box className="size-3.5" />;
+    case "web-endpoint":
+      return <Globe className="size-3.5" />;
     case "tunnel":
       return <Network className="size-3.5" />;
+    case "sftp":
+      return <ArrowLeftRight className="size-3.5" />;
     case "network_graph":
       return <Network className="size-3.5" />;
     // --- tmux-monitor ---
@@ -334,6 +401,8 @@ export function tabIcon(type: TabType) {
       return <LayoutGrid className="size-3.5" />;
     case "fleet-inventory":
       return <Boxes className="size-3.5" />;
+    case "collab":
+      return <Presentation className="size-3.5" />;
     case "termix-id":
       return <Fingerprint className="size-3.5" />;
     case "alerts":
@@ -354,6 +423,8 @@ export function tabIcon(type: TabType) {
       return <Sparkles className="size-3.5" />;
     case "split-screen":
       return <LayoutPanelLeft className="size-3.5" />;
+    default:
+      return registeredTabComponents.get(type)?.icon;
   }
 }
 
@@ -529,6 +600,18 @@ export function renderTabContent(
         />,
       );
 
+    case "web-endpoint":
+      if (!host)
+        return (
+          <EmptyState icon={Globe} messageKey="webEndpoint.noHostSelected" />
+        );
+      // Passed the endpoint ID, not the endpoint object: the tab resolves it
+      // against the host on every render, so an endpoint deleted while its tab
+      // is open shows a plain message instead of throwing.
+      return withTabSuspense(
+        <WebEndpointTab host={host} endpointId={tab.endpointId} />,
+      );
+
     case "docker":
       if (!host)
         return <EmptyState icon={Box} messageKey="docker.noHostSelected" />;
@@ -580,6 +663,9 @@ export function renderTabContent(
         <TunnelTab label={label} host={host} isVisible={isVisible} />,
       );
 
+    case "sftp":
+      return withTabSuspense(<SftpTransferTab />);
+
     case "rdp":
     case "vnc":
     case "telnet":
@@ -606,6 +692,9 @@ export function renderTabContent(
           tabId={tab.id}
           protocol={tab.type as "rdp" | "vnc" | "telnet"}
           isVisible={isVisible}
+          quickConnectHost={
+            isQuickConnectHost(host) ? quickConnectGuacHost(host) : undefined
+          }
         />,
       );
 
@@ -655,6 +744,11 @@ export function renderTabContent(
     case "fleet-inventory":
       return withTabSuspense(
         <FleetInventoryTab fleetId={tab.fleetId} isVisible={isVisible} />,
+      );
+
+    case "collab":
+      return withTabSuspense(
+        <CollabRoomTab roomId={tab.collabRoomId} isVisible={isVisible} />,
       );
 
     case "termix-id":
@@ -741,5 +835,17 @@ export function renderTabContent(
     case "user-profile":
     case "admin-settings":
       return null;
+
+    default: {
+      const entry = registeredTabComponents.get(tab.type);
+      if (!entry) return null;
+      if (!entry.LazyComponent) {
+        entry.LazyComponent = lazy(() =>
+          entry.loader().then((m) => ({ default: m.default })),
+        ) as unknown as PluginTabComponent;
+      }
+      const PluginTab = entry.LazyComponent;
+      return withTabSuspense(<PluginTab tab={tab} />);
+    }
   }
 }

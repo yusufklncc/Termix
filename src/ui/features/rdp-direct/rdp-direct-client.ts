@@ -3,7 +3,6 @@ import {
   attachKeyboardLock,
   type KeyboardLockState,
 } from "@/lib/keyboard-lock.ts";
-import { isFirefoxBrowser } from "@/features/guacamole/guacamole-clipboard.ts";
 import {
   encodeRdpFrame,
   readFrameId,
@@ -95,6 +94,20 @@ export function buildRdpDirectUrl({
   if (isDev) return "ws://localhost:30014";
   const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
   return `${wsProtocol}://${location.host}${basePath}/rdp/direct/`;
+}
+
+/*
+ * Firefox exposes navigator.clipboard.readText but will not let a page call it
+ * without an extension, so reading the local clipboard has to be skipped there
+ * rather than attempted and caught.
+ *
+ * Defined here rather than imported from the Guacamole feature: this path
+ * borrowed that helper once, and upstream removing it in 2.8.0 broke the build.
+ * A renderer that does not depend on the other renderer's internals cannot
+ * break that way again.
+ */
+function isFirefoxBrowser(userAgent = navigator.userAgent): boolean {
+  return /(?:Firefox|FxiOS)\//.test(userAgent);
 }
 
 export function connectRdpDirect({

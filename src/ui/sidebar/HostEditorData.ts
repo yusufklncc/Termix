@@ -15,7 +15,9 @@ export type HostProtocols = {
   enableRdp: boolean;
   enableVnc: boolean;
   enableTelnet: boolean;
-  enableStream: boolean;
+  // Optional for the same reason as on Host: code written upstream builds this
+  // without knowing this fork's protocol exists.
+  enableStream?: boolean;
 };
 
 export type HostAuthType = Host["authType"];
@@ -84,6 +86,23 @@ type SnippetListItem = {
   title?: string;
 };
 type SnippetResponse = SnippetListItem[] | { snippets?: SnippetListItem[] };
+
+/**
+ * Whether the Connection Origin control is meaningful for a host.
+ *
+ * Every protocol Termix can dial from either backend belongs here. RDP, VNC
+ * and Telnet were added once they could originate from the desktop
+ * (Termix-SSH/Support#1240); before that the control was gated on SSH alone,
+ * so a host enabling only those protocols could never reach the setting.
+ */
+export function connectionOriginAppliesTo(protocols: HostProtocols): boolean {
+  return (
+    protocols.enableSsh ||
+    protocols.enableRdp ||
+    protocols.enableVnc ||
+    protocols.enableTelnet
+  );
+}
 
 export function mapSnippetResponse(
   res: unknown,
@@ -176,9 +195,12 @@ export function createHostEditorForm(
     enableFileManager: host?.enableFileManager ?? false,
     scpLegacy: host?.scpLegacy ?? false,
     enableDocker: host?.enableDocker ?? false,
+    enableWebUi: host?.enableWebUi ?? false,
+    webUiConfig: host?.webUiConfig ?? { endpoints: [] },
     dockerConfig: host?.dockerConfig ?? { runtime: "docker" as const },
     enableTmuxMonitor: host?.enableTmuxMonitor ?? false,
     enableTerminalToolbar: host?.enableTerminalToolbar ?? true,
+    enableAiAssistant: host?.enableAiAssistant ?? false,
     allowSessionSharing: host?.allowSessionSharing ?? true,
     enableProxmox: host?.enableProxmox ?? false,
     proxmoxConfig: host?.proxmoxConfig ?? {
@@ -223,7 +245,7 @@ export function createHostEditorForm(
     bellStyle: (terminalConfig.bellStyle ?? "none") as
       "none" | "sound" | "visual" | "both",
     rightClickSelectsWord: host?.terminalConfig?.rightClickSelectsWord ?? false,
-    macOptionIsMeta: host?.terminalConfig?.macOptionIsMeta ?? true,
+    macOptionIsMeta: host?.terminalConfig?.macOptionIsMeta ?? false,
     fastScrollModifier: (host?.terminalConfig?.fastScrollModifier ?? "alt") as
       "alt" | "ctrl" | "shift",
     fastScrollSensitivity: host?.terminalConfig?.fastScrollSensitivity ?? 5,
@@ -234,7 +256,7 @@ export function createHostEditorForm(
     moshCommand: host?.terminalConfig?.moshCommand ?? "",
     agentForwarding: host?.terminalConfig?.agentForwarding ?? false,
     autoMosh: host?.terminalConfig?.autoMosh ?? false,
-    autoTmux: host?.terminalConfig?.autoTmux ?? false,
+    autoTmux: host?.terminalConfig?.autoTmux ?? d?.autoTmux ?? false,
     sudoPasswordAutoFill: host?.terminalConfig?.sudoPasswordAutoFill ?? false,
     sudoPassword: host?.hasSudoPassword
       ? "existing_sudo_password"
@@ -509,8 +531,11 @@ export function buildHostEditorPayload(
     scpLegacy: form.scpLegacy,
     enableDocker: form.enableDocker,
     dockerConfig: form.enableDocker ? form.dockerConfig : null,
+    enableWebUi: form.enableWebUi,
+    webUiConfig: form.enableWebUi ? form.webUiConfig : null,
     enableTmuxMonitor: form.enableTmuxMonitor,
     enableTerminalToolbar: form.enableTerminalToolbar,
+    enableAiAssistant: form.enableAiAssistant,
     allowSessionSharing: form.allowSessionSharing,
     enableProxmox: form.enableProxmox,
     proxmoxConfig:
@@ -627,7 +652,6 @@ export function buildHostEditorPayload(
       form.streamPassword !== "existing_stream_password"
         ? form.streamPassword || null
         : null,
-    jumpHosts: form.jumpHosts,
     // The editor keeps ids as strings; the API and every backend lookup take
     // a number, and a string id does not compare equal on Postgres/MySQL.
     jumpHosts: form.jumpHosts.map((j) => ({ hostId: Number(j.hostId) })),

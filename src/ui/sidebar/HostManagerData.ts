@@ -14,6 +14,9 @@ type RawSSHHost = SSHHostWithStatus & {
 type HostQuickAction = Host["quickActions"][number];
 type HostJumpHost = NonNullable<Host["jumpHosts"]>[number];
 type RawCredential = {
+  isShared?: boolean;
+  ownerUsername?: string | null;
+  permissionLevel?: "use" | "manage";
   id: number | string;
   name: string;
   username: string;
@@ -81,6 +84,7 @@ export function sshHostToHost(h: SSHHostWithStatus): Host {
     sortOrder: h.sortOrder ?? null,
     macAddress: h.macAddress,
     wolBroadcastAddress: h.wolBroadcastAddress,
+    connectionOrigin: h.connectionOrigin ?? null,
     enableSsh: h.enableSsh != null ? h.enableSsh : isSshHost,
     enableTerminal:
       h.enableTerminal ?? (h.enableSsh != null ? h.enableSsh : isSshHost),
@@ -90,10 +94,13 @@ export function sshHostToHost(h: SSHHostWithStatus): Host {
     enableFileManager: h.enableFileManager ?? true,
     enableDocker: h.enableDocker ?? false,
     dockerConfig: h.dockerConfig ?? null,
+    enableWebUi: h.enableWebUi ?? false,
+    webUiConfig: h.webUiConfig ?? { endpoints: [] },
     enableProxmox: h.enableProxmox ?? false,
     enableProxmoxStats: h.enableProxmoxStats ?? false,
     enableTmuxMonitor: h.enableTmuxMonitor ?? false,
     enableTerminalToolbar: h.enableTerminalToolbar ?? true,
+    enableAiAssistant: h.enableAiAssistant ?? false,
     proxmoxConfig: h.proxmoxConfig ?? null,
     proxmoxStatsConfig: h.proxmoxStatsConfig ?? null,
     enableRdp: h.enableRdp != null ? h.enableRdp : h.connectionType === "rdp",
@@ -210,5 +217,8 @@ export function mapCredentials(res: unknown): Credential[] {
     pin: c.pin ?? false,
     sortOrder: c.sortOrder ?? null,
     certPublicKey: c.certPublicKey ?? undefined,
+    isShared: c.isShared ?? false,
+    ownerUsername: c.ownerUsername ?? null,
+    permissionLevel: c.permissionLevel,
   }));
 }

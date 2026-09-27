@@ -7,8 +7,8 @@
 services:
   # One of these per network. Name it after the network, not after "vpn".
   vpn-acme:
-    build: ./vpn-sidecar
-    # or: image: your-registry/termix-vpn-sidecar:latest
+    image: yusufklncc/termix-vpn-sidecar:latest
+    # or, from a source checkout: build: ./vpn-sidecar
     cap_add:
       - NET_ADMIN
     devices:

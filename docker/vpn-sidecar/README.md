@@ -43,7 +43,9 @@ behaviour, not a bug to paper over.
 ## Setup
 
 1. Copy `compose.example.yml` into your own compose file and fill in the
-   environment. One service per network.
+   environment. One service per network. The image is published as
+   `yusufklncc/termix-vpn-sidecar:latest`, so a deployed server needs no
+   source checkout; `build: ./vpn-sidecar` works from one.
 2. `cap_add: NET_ADMIN` and `devices: /dev/ppp` are required — ppp needs both.
    If `/dev/ppp` is missing on the host, load the module: `modprobe ppp_generic`.
 3. Do **not** publish port 1080. The doorway should be reachable only from

@@ -219,8 +219,10 @@ Arayüz bunu sağlayıcı bazında dürüstçe göstermeli; tek tip vaat verilme
 - [ ] Tüneller çözümleyiciden geçiyor ama profil taşımıyor; bir tünel hâlâ
       sunucunun kendi rotasından çıkıyor
 - [ ] Hem jump host hem profil taşıyan host reddediliyor; yuvalama yapılmadı
-- [ ] Gerçek WireGuard sidecar'ıyla uçtan uca doğrulama ve çakışan alt ağ
-      senaryosu — sunucu tarafında yapılacak
+- [x] Referans sidecar (`docker/vpn-sidecar/`, Fortinet SSL-VPN) ve uçtan uca
+      doğrulama — aşağıya bakın
+- [ ] Gerçek FortiGate'e karşı doğrulama — yalnızca kullanıcının makinesinde
+      yapılabilir
 
 ---
 
@@ -232,3 +234,38 @@ Arayüz bunu sağlayıcı bazında dürüstçe göstermeli; tek tip vaat verilme
 3. Fortinet tarafında SAML SSO / EMS zorlaması var mı? A1'in o sağlayıcıyı
    destekleyip destekleyemeyeceği buna bağlı.
 4. Profil kullanıcıya mı ait olacak, paylaşılabilir mi?
+
+---
+
+## Sidecar ve doğrulama (2026-09-27)
+
+`docker/vpn-sidecar/` referans bir sidecar taşıyor: gerçek tünel için
+`openfortivpn`, Termix'in trafiği içine verdiği kapı için `microsocks`. Ağ
+başına bir konteyner — iki VPN bir namespace'i paylaşamaz, ikisi de default
+route iter.
+
+Yerelde ölçülenler, gerçek FortiGate olmadan:
+
+1. **Zincir çalışıyor.** `resolveHostGateway` → `openGatewayTunnel` →
+   yalnızca ağın _içinden_ çözülebilen bir isim → hedefin içeriği geri geldi.
+   Host'un kendi DNS'i o ismi çözemiyor; demek ki trafik kapıdan geçti.
+2. **Çakışan adres doğru makineye çıkıyor.** İki ayrı ağ, ikisinde de aynı
+   hedef adresi. Profil 1 `ACME-MAKINESI`, profil 2 `GLOBEX-MAKINESI` döndü.
+   Termix adresi kendi rota tablosuyla çözmüyor; hedefi ilgili namespace'in
+   içinde çözdürüyor. Çakışan alt ağların çalışmasını sağlayan şey bu.
+3. **Kapı kapalıyken sızmıyor.** Bağlantı düşüyor, doğrudan çıkmıyor. Ancak
+   tüketiciye "kapalı TCP bağlantısı" olarak ulaşıyor, "profilin kapısına
+   erişilemedi" diye değil — sebep yalnızca sunucu log'unda.
+4. **Sidecar tünel kurulamazsa kapıyı hiç açmıyor.** Exit 1, `microsocks` hiç
+   çalışmıyor. Tünel sonradan ölürse konteyner kapanıyor (`wait -n`).
+
+Not: Docker aynı makinede birebir çakışan subnet'e sahip iki ağ kurmayı
+reddediyor, o yüzden 2. test aynı _adı_ iki ağda kullanıyor. Kanıtlanan özellik
+aynı: adres, seçilen namespace'in içinde çözülüyor.
+
+Ayrıca doğrulandı: canlı bağlantı yolu özel hedef adreslerini engellemiyor
+(`validateHost` yalnızca `testProxyConnectivity` içinde çağrılıyor), yani
+VPN ardındaki RFC1918 adresleri sorunsuz. Buna karşılık mevcut
+`/db/proxy/test` ucu özel adresleri reddediyor — ağ profillerinin test
+düğmesi yok, o yüzden bugün bir şeyi bozmuyor, ama eklenecekse bu uç
+kullanılamaz.

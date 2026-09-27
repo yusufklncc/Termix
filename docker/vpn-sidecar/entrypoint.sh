@@ -15,6 +15,17 @@ set -euo pipefail
 : "${VPN_PASSWORD:?VPN_PASSWORD is required}"
 : "${SOCKS_PORT:=1080}"
 : "${VPN_TRUSTED_CERT:=}"
+: "${SOCKS_USER:=}"
+: "${SOCKS_PASSWORD:=}"
+
+# A doorway that is only reachable from Termix's own Docker network needs no
+# password. One reachable from anywhere else is a way into the VPN for whoever
+# finds the port, so it does need one -- and half a credential is not one.
+if [[ -n "$SOCKS_USER" && -z "$SOCKS_PASSWORD" ]] \
+   || [[ -z "$SOCKS_USER" && -n "$SOCKS_PASSWORD" ]]; then
+  echo "[vpn-sidecar] SOCKS_USER and SOCKS_PASSWORD must be set together" >&2
+  exit 1
+fi
 
 cleanup() {
   [[ -n "${SOCKS_PID:-}" ]] && kill "$SOCKS_PID" 2>/dev/null || true
@@ -48,8 +59,14 @@ if ! ip link show ppp0 >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "[vpn-sidecar] doorway listening on :$SOCKS_PORT"
-microsocks -i 0.0.0.0 -p "$SOCKS_PORT" &
+socks_args=(-i 0.0.0.0 -p "$SOCKS_PORT")
+if [[ -n "$SOCKS_USER" ]]; then
+  socks_args+=(-u "$SOCKS_USER" -P "$SOCKS_PASSWORD")
+  echo "[vpn-sidecar] doorway listening on :$SOCKS_PORT (password required)"
+else
+  echo "[vpn-sidecar] doorway listening on :$SOCKS_PORT (no password -- keep this off any network but Termix's)"
+fi
+microsocks "${socks_args[@]}" &
 SOCKS_PID=$!
 
 # Whichever ends first ends the container; the restart policy decides what

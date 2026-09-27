@@ -65,10 +65,40 @@ behaviour, not a bug to paper over.
 | `VPN_TRUSTED_CERT` | no        | Gateway certificate digest, when it is not publicly trusted |
 | `VPN_OTP`          | no        | One-time code, where the gateway asks for one               |
 | `SOCKS_PORT`       | no (1080) | Port the doorway listens on                                 |
+| `SOCKS_USER`       | see below | Password-protects the doorway                               |
+| `SOCKS_PASSWORD`   | see below | Set together with `SOCKS_USER`                              |
+
+A doorway reachable only from Termix's own Docker network needs no password.
+One reachable from anywhere else -- see below -- is a way into the VPN for
+whoever finds the port, and must have one. Set it on the profile too, as
+**Gateway username** and **Gateway password**.
 
 A gateway that enforces SAML or FortiClient EMS will not accept
 `openfortivpn`. That is a policy on the gateway, not something a client can
 work around.
+
+## When ppp is not available
+
+`openfortivpn` needs pppd, and pppd needs `/dev/ppp` from the host kernel. A
+container host that does not have it (`modinfo ppp_generic` fails) cannot run
+this sidecar as-is. Unprivileged LXC is the common case: the kernel belongs to
+the hypervisor, not to the container.
+
+Two ways out:
+
+- **Pass the device in.** On the hypervisor, `modprobe ppp_generic`, then give
+  the container the device. On Proxmox, in `/etc/pve/lxc/<id>.conf`:
+
+  ```
+  lxc.cgroup2.devices.allow: c 108:0 rwm
+  lxc.mount.entry: /dev/ppp dev/ppp none bind,create=file
+  ```
+
+- **Put the doorway somewhere else.** A profile's gateway is an address, not
+  necessarily a sidecar next door. Run this container on a machine that does
+  have ppp and point the profile at `that-machine:1080`. The doorway is then on
+  the network rather than inside Docker, so give it `SOCKS_USER` and
+  `SOCKS_PASSWORD` and do not expose the port any wider than it needs.
 
 ## Checking it
 

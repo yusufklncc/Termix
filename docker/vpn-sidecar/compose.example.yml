@@ -22,6 +22,9 @@ services:
       # trust it. Paste it here once you have checked it is the right one.
       # VPN_TRUSTED_CERT: ""
       # VPN_OTP: ""
+      # Only needed if the doorway is reachable beyond this Docker network.
+      # SOCKS_USER: termix
+      # SOCKS_PASSWORD: ""
     networks:
       - termix
     # A dropped tunnel is retried. Until it is back, Termix has nowhere to hand

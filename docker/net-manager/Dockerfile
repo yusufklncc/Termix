@@ -9,7 +9,13 @@
 # It is the only part that needs privileges, and it is never published: Termix
 # reaches it on the internal network, the way it already reaches the RDP
 # bridge.
-FROM node:22-slim
+# Trixie, not bookworm, for openconnect 9.12.
+#
+# Bookworm carries 9.01, which this fork's own Fortinet gateway rejects at the
+# second form with "user input required in non-interactive mode" -- the same
+# account and password that 9.12 signs in with. Phase 8's sidecar is on trixie
+# and works; this had no business being older than it.
+FROM node:22-trixie-slim
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \

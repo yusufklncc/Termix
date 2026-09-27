@@ -93,7 +93,12 @@ container's route.
 
 ## Providers
 
-`fortinet`, via openconnect. One on purpose — it is the gateway this can be
+`fortinet`, via openconnect **9.12 or newer**. Debian bookworm's 9.01 fails at
+the second form against at least one real FortiGate, with "user input required
+in non-interactive mode", for an account 9.12 signs in with -- which is why
+this image is built on trixie rather than the Node image's default base.
+
+One provider on purpose — it is the gateway this can be
 measured against. A second fits the same shape: a command, an interface name,
 and what it wants on stdin.
 

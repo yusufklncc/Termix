@@ -245,7 +245,8 @@ guacd olmadan gerçek RDP, 60fps hedefi. Riskli.
 - [ ] WebTransport (HTTP/3 datagram) — WebSocket HOL blocking için
 - [x] Pano (metin) — `CLIP`, çift yönlü. `SharedArrayBuffer` gerektirmediği için
       COOP/COEP kararına girmedi
-- [ ] Ses, RDPDR — COOP/COEP kararı ile birlikte
+- [x] Ses ve yazdırma — Faz 6'da yapıldı (bkz. aşağısı); COOP/COEP kararına
+      girmedi, ikisi de `SharedArrayBuffer` gerektirmedi
 
 ### Ölçüm
 
@@ -414,8 +415,8 @@ Tasarım ve gerekçeler: [`docs/phase8-vpn-design.md`](docs/phase8-vpn-design.md
       bulunup kapatıldı)
 - [x] Gerçek FortiGate'e karşı doğrulama (2026-09-27): oturum tünelden gidiyor,
       tünel kapalıyken bağlanmıyor
-- [ ] Kapı erişilemezken hata "kapalı TCP bağlantısı" olarak ulaşıyor; sebep
-      yalnızca sunucu log'unda
+- [x] Kapı erişilemezken sebep kullanıcıya ulaşıyor (2026-09-27): tünel
+      açılırken geçit yoklanıyor, iki çağıran da sebebi geçiriyor
 
 ---
 

@@ -97,10 +97,29 @@ uzunluk, JSON gövde. Yönetici `RDP_BRIDGE_URL` ile aynı şekilde adreslenir
 | `NSTA` | Termix → yönetici | durum sor                                  |
 | `NEVT` | yönetici → Termix | durum değişti (bağlandı/koptu/hata)        |
 
-**Kimlik doğrulama:** köprüden farklı olarak bu kanaldan **parolalar geçiyor**.
-Paylaşılan bir sır (`NET_MANAGER_TOKEN`) zorunlu olmalı ve token yoksa
-yönetici başlamamalı — Faz 8'deki `SOCKS_USER`/`SOCKS_PASSWORD` kuralının aynısı:
-yarım yapılandırma, açık dinlemekten iyidir diye sessizce geçilmemeli.
+**Kimlik doğrulama ve gizlilik:** köprüden farklı olarak bu kanaldan
+**parolalar geçiyor**. Paylaşılan bir sır (`NET_MANAGER_TOKEN`) zorunlu olmalı
+ve token yoksa yönetici başlamamalı — Faz 8'deki `SOCKS_USER`/`SOCKS_PASSWORD`
+kuralının aynısı: yarım yapılandırma, açık dinlemekten iyidir diye sessizce
+geçilmemeli.
+
+Token yalnızca kimlik doğrulama için değil, **gizlilik için de** kullanılır:
+`NUP ` mesajındaki kimlik bilgisi alanları, token'dan HKDF ile türetilen bir
+anahtarla AES-GCM ile mühürlenir. Böylece parola Docker ağında açık dolaşmaz.
+Docker köprü ağı konteynerleri birbirinden ayırır ama aynı ağdaki `NET_RAW`
+yetkili bir konteyner dinleyebilir; bu onu kapatır ve TLS sertifikası
+yönetmekten ucuzdur.
+
+**Diskte durmaz.** Yönetici kimlik bilgilerini yalnızca bellekte tutar, VPN
+istemcisine standart girdiden verir, dosyaya yazmaz. Yeniden başlarsa Termix
+`NUP ` ile tekrar gönderir — zaten yeniden eşitleme akışı bunu gerektiriyor.
+
+**Neden hash değil:** bu parola Termix'in _doğrulayacağı_ bir şey değil,
+geçide _sunacağı_ bir şey. Kullanıcı giriş parolaları bcrypt ile hashleniyor
+çünkü orada soru "yazdığın doğru mu"; burada soru "FortiGate'e ne söyleyeyim".
+Hash geri döndürülemez, dolayısıyla bu iş için kullanılamaz. Yapılabilecek olan
+— ve yapılan — şifrelemek: kullanıcının anahtarı altında, mevcut alan şifreleme
+katmanıyla.
 
 ## Yaşam döngüsü
 
@@ -128,9 +147,10 @@ yarım yapılandırma, açık dinlemekten iyidir diye sessizce geçilmemeli.
 1. **Ayrıcalıklı konteyner.** Yönetici `NET_ADMIN`, `SYS_ADMIN`, `/dev/net/tun`
    ister. Dışarı açılmaz ama host çekirdeğine dokunur. LXC altında çalışacaksa
    Faz 8'de yaşadığımız cihaz geçirme meselesi burada da geçerli.
-2. **Kimlik bilgileri tel üzerinde.** Termix'te şifreli duruyorlar ama
-   yöneticiye açık gönderiliyorlar. Docker ağı içinde kalıyor; yine de token
-   zorunluluğu ve portun yayınlanmaması şart.
+2. **Kimlik bilgileri tel üzerinde.** Termix'te şifreli duruyorlar ve
+   yöneticiye token'dan türetilen anahtarla mühürlenerek gidiyorlar. Kalan
+   risk: yönetici konteynerinin belleği. Orada açık olmak zorundalar, çünkü
+   VPN istemcisine verilecekler.
 3. **Kaynak.** Her profil bir süreç çifti ve bir isim alanı. On müşteri = on
    tünel, sürekli açık. Bugünkü sidecar modelinde de böyleydi, ama arayüzden
    eklemek kolaylaştığı için sayı artar.
@@ -158,3 +178,8 @@ Her adımın sonunda durulur ve onay beklenir.
    çünkü doğrulayabildiğimiz tek gerçek geçit o.
 3. Mevcut `declared` profilin yönetilene dönüştürülmesi gerekiyor mu, yoksa
    yan yana yaşasınlar mı? Önerim yan yana.
+
+### Cevaplar (2026-09-27)
+
+Üçüne de evet: ayrıcalıklı yönetici kabul, ilk sağlayıcı Fortinet, mevcut
+`declared` profil yerinde kalır.

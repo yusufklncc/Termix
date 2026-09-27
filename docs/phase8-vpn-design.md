@@ -221,8 +221,7 @@ Arayüz bunu sağlayıcı bazında dürüstçe göstermeli; tek tip vaat verilme
 - [ ] Hem jump host hem profil taşıyan host reddediliyor; yuvalama yapılmadı
 - [x] Referans sidecar (`docker/vpn-sidecar/`, Fortinet SSL-VPN) ve uçtan uca
       doğrulama — aşağıya bakın
-- [ ] Gerçek FortiGate'e karşı doğrulama — yalnızca kullanıcının makinesinde
-      yapılabilir
+- [x] Gerçek FortiGate'e karşı doğrulama — 2026-09-27, aşağıya bakın
 
 ---
 
@@ -269,3 +268,44 @@ VPN ardındaki RFC1918 adresleri sorunsuz. Buna karşılık mevcut
 `/db/proxy/test` ucu özel adresleri reddediyor — ağ profillerinin test
 düğmesi yok, o yüzden bugün bir şeyi bozmuyor, ama eklenecekse bu uç
 kullanılamaz.
+
+---
+
+## Gerçek FortiGate'e karşı doğrulama (2026-09-27)
+
+Proxmox üzerinde bir LXC'de, `openconnect --protocol=fortinet` ile kurulan
+gerçek bir TİM SSL-VPN tüneli üzerinden:
+
+1. **Oturum tünelden gidiyor.** Profili atanmış bir SSH host'una (`10.10.100.211`)
+   bağlanıldı; hedef Ubuntu 24.04 karşıladı. Sunucunun o ağa kendi rotası yok.
+2. **Tünel kapalıyken bağlanmıyor.** `docker compose stop vpn-acme` sonrası aynı
+   host: `Proxy connection failed: getaddrinfo ENOTFOUND vpn-acme`. Sessiz geri
+   düşme yok.
+
+Yolda üç hata çıktı ve üçü de aynı şekildeydi — bir host alanının, onu tek tek
+sayan bir listede unutulması:
+
+1. **nginx `/vpn`'i backend'e taşımıyordu.** İstek SPA'ya düşüp 200 ile HTML
+   dönüyordu; editör açılışta komple kararıyordu. (`/secret-sources` de aynı
+   durumdaydı, upstream'den geliyor.)
+2. **`sshHostToHost` `vpnProfileId`'yi kopyalamıyordu.** Kayıt oluyordu ama
+   editör `Direct Connection` gösteriyor, sonraki Update o boşluğu geri yazıp
+   atamayı sessizce siliyordu.
+3. **Terminal oturumu profili hiç görmüyordu.** Sunucu, soketten gelen host
+   config'ine yalnızca saydığı alanları yazıyor (jump host, proxy, port knock);
+   profil o listede yoktu. Oturum doğrudan sunucudan çıkıyor, host durum
+   yoklamaları ise saklı kayıttan gittiği için tünelden geçip başarılı
+   oluyordu — yani her şey çalışıyormuş gibi görünüyordu.
+
+Profil artık yalnızca sunucudaki kayıttan okunuyor: istemci ne atlayabilir ne
+de başkasını seçebilir.
+
+### Bu yolda bilinenler
+
+- Geçit `reconnect-after-drop`'a izin vermiyor, idle timeout 60 dakika. Tünel
+  düştüğünde konteyner çıkıp yeniden kalkıyor; o anda açık oturumlar kopar.
+- Split route listesinde olmayan bir adrese profil üzerinden gidilirse trafik
+  sidecar'ın kendi internet rotasından çıkar — bağlanmamak yerine yanlış yerden
+  bağlanır. "tun0 dışına çıkanı düşür" kuralı tasarlandı, uygulanmadı.
+- Hata metni "Proxy connection failed" diyor; kullanıcının gördüğü kavram
+  "Network". Terminoloji ayrışması duruyor.

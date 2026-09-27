@@ -36,7 +36,7 @@ import {
   getRuntimeLabel,
 } from "./container-runtime.js";
 import { resolveSshConnectConfigHost } from "../ssh-dns.js";
-import { resolveHostGateway } from "../host-network.js";
+import { gatewayFailureMessage, resolveHostGateway } from "../host-network.js";
 import {
   type SSHSession,
   sshSessions,
@@ -1021,13 +1021,13 @@ export function registerDockerSshRoutes(app: express.Express): void {
             createConnectionLog(
               "error",
               "proxy",
-              `Proxy connection failed: ${getErrorMessage(proxyError)}`,
+              gatewayFailureMessage(host, proxyError),
             ),
           );
           if (!responseSent) {
             responseSent = true;
             return res.status(500).json({
-              error: "Proxy connection failed: " + getErrorMessage(proxyError),
+              error: gatewayFailureMessage(host, proxyError),
               connectionLogs,
             });
           }

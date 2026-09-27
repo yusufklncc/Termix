@@ -3,6 +3,7 @@ import type { SOCKS5Config } from "../utils/proxy-helper.js";
 import { createCurrentVpnProfileRepository } from "../database/repositories/factory.js";
 import type { VpnProfileRecord } from "../database/repositories/vpn-profile-repository.js";
 import { sshLogger } from "../utils/logger.js";
+import { getErrorMessage } from "../utils/error-message.js";
 
 /**
  * Which network a host is reached through, decided in one place.
@@ -124,4 +125,21 @@ export async function resolveHostGateway(
   throw new Error(
     "This host is configured to connect through a proxy, but no proxy address is set",
   );
+}
+
+/**
+ * What to call the thing that failed.
+ *
+ * "Proxy" is not in the vocabulary of someone who set a host's **Network** in
+ * the editor; naming the wrong thing sends them looking in the wrong place.
+ * The host itself says which of the two it was reached through.
+ */
+export function gatewayFailureMessage(
+  host: Pick<HostNetworkInput, "vpnProfileId">,
+  error: unknown,
+): string {
+  const what = host.vpnProfileId
+    ? "Network connection failed"
+    : "Proxy connection failed";
+  return `${what}: ${getErrorMessage(error)}`;
 }

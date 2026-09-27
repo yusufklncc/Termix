@@ -1,4 +1,3 @@
-import { getErrorMessage } from "../utils/error-message.js";
 import { Client, type ConnectConfig } from "ssh2";
 import type { SSHHost } from "../../types/index.js";
 import { SSH_ALGORITHMS } from "../utils/ssh-algorithms.js";
@@ -10,7 +9,7 @@ import {
 import { SSHHostKeyVerifier } from "./host-key-verifier.js";
 import { createJumpHostChain } from "./jump-host-chain.js";
 import { resolveSshConnectConfigHost } from "./ssh-dns.js";
-import { resolveHostGateway } from "./host-network.js";
+import { gatewayFailureMessage, resolveHostGateway } from "./host-network.js";
 
 /**
  * Non-interactive SSH connection helpers shared by fleet execution.
@@ -145,10 +144,9 @@ export function createFleetSshFactory(host: SSHHost): () => Promise<Client> {
           config.sock = proxySocket;
         }
       } catch (proxyError) {
-        throw new Error(
-          "Proxy connection failed: " + getErrorMessage(proxyError),
-          { cause: proxyError },
-        );
+        throw new Error(gatewayFailureMessage(host, proxyError), {
+          cause: proxyError,
+        });
       }
     }
 

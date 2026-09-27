@@ -74,7 +74,7 @@ import {
   waitForWebSocketOpen,
 } from "../cloudflare-websocket.js";
 import { hostSessionStatus } from "../host-session-status.js";
-import { resolveHostGateway } from "../host-network.js";
+import { gatewayFailureMessage, resolveHostGateway } from "../host-network.js";
 
 interface ConnectToHostData {
   cols: number;
@@ -3423,7 +3423,7 @@ wss.on("connection", async (ws: WebSocket, req) => {
         ws.send(
           JSON.stringify({
             type: "error",
-            message: "Proxy connection failed: " + getErrorMessage(proxyError),
+            message: gatewayFailureMessage(hostConfig, proxyError),
           }),
         );
         if (currentSessionId) {

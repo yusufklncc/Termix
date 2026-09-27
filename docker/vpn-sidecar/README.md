@@ -56,19 +56,20 @@ behaviour, not a bug to paper over.
 
 ### Environment
 
-| Variable           | Required          | Meaning                                                                   |
-| ------------------ | ----------------- | ------------------------------------------------------------------------- |
-| `VPN_CLIENT`       | no (openfortivpn) | `openfortivpn` (needs `/dev/ppp`) or `openconnect` (needs `/dev/net/tun`) |
-| `VPN_HOST`         | yes               | FortiGate address                                                         |
-| `VPN_PORT`         | no (443)          | FortiGate port                                                            |
-| `VPN_USER`         | yes               | VPN account                                                               |
-| `VPN_PASSWORD`     | yes               | VPN password                                                              |
-| `VPN_TRUSTED_CERT` | no                | Gateway certificate digest, when it is not publicly trusted               |
-| `VPN_TRUSTED_PIN`  | no                | The same idea for `openconnect`, which pins the public key instead        |
-| `VPN_OTP`          | no                | One-time code, where the gateway asks for one                             |
-| `SOCKS_PORT`       | no (1080)         | Port the doorway listens on                                               |
-| `SOCKS_USER`       | see below         | Password-protects the doorway                                             |
-| `SOCKS_PASSWORD`   | see below         | Set together with `SOCKS_USER`                                            |
+| Variable            | Required          | Meaning                                                                   |
+| ------------------- | ----------------- | ------------------------------------------------------------------------- |
+| `VPN_CLIENT`        | no (openfortivpn) | `openfortivpn` (needs `/dev/ppp`) or `openconnect` (needs `/dev/net/tun`) |
+| `VPN_HOST`          | yes               | FortiGate address                                                         |
+| `VPN_PORT`          | no (443)          | FortiGate port                                                            |
+| `VPN_USER`          | yes               | VPN account                                                               |
+| `VPN_PASSWORD`      | yes               | VPN password                                                              |
+| `VPN_TRUSTED_CERT`  | no                | Gateway certificate digest, when it is not publicly trusted               |
+| `VPN_TRUSTED_PIN`   | no                | The same idea for `openconnect`, which pins the public key instead        |
+| `VPN_OTP`           | no                | One-time code, where the gateway asks for one                             |
+| `SOCKS_PORT`        | no (1080)         | Port the doorway listens on                                               |
+| `SOCKS_USER`        | see below         | Password-protects the doorway                                             |
+| `SOCKS_PASSWORD`    | see below         | Set together with `SOCKS_USER`                                            |
+| `VPN_STRICT_ROUTES` | no (true)         | Refuse anything the tunnel does not carry                                 |
 
 A doorway reachable only from Termix's own Docker network needs no password.
 One reachable from anywhere else -- see below -- is a way into the VPN for
@@ -116,6 +117,30 @@ Three ways out, cheapest first:
   have ppp and point the profile at `that-machine:1080`. The doorway is then on
   the network rather than inside Docker, so give it `SOCKS_USER` and
   `SOCKS_PASSWORD` and do not expose the port any wider than it needs.
+
+## Anything outside the tunnel is refused
+
+A corporate VPN usually pushes **split routes**: some subnets go through it and
+the rest do not. Without a rule to stop it, a host whose address falls outside
+those routes still connects -- out of this container's own internet route,
+quietly, for a host that was assigned to a network precisely so that would not
+happen.
+
+So by default the sidecar accepts outbound traffic only on the tunnel
+interface, plus replies to whoever reached the doorway and the tunnel's own
+carrier to the gateway. Everything else is rejected, which Termix reports as a
+failed connection rather than succeeding by the wrong route.
+
+Two consequences worth knowing:
+
+- **Name resolution is subject to the same rule.** A target's name is resolved
+  by the resolver in `/etc/resolv.conf`; if that is a public resolver reached
+  outside the tunnel, the lookup is refused. Give targets as IP addresses, or
+  as names the VPN's own DNS can answer.
+- **It needs `NET_ADMIN` and iptables.** If the rules cannot be applied the
+  container stops and says so, rather than starting without them. To run
+  anyway -- accepting that traffic outside the tunnel's routes leaves by this
+  container's route -- set `VPN_STRICT_ROUTES: "false"`.
 
 ## Checking it
 

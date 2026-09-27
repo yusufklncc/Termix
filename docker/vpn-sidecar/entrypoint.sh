@@ -17,6 +17,7 @@ set -euo pipefail
 : "${VPN_TRUSTED_CERT:=}"
 : "${VPN_TRUSTED_PIN:=}"
 : "${VPN_CLIENT:=openfortivpn}"
+: "${VPN_STRICT_ROUTES:=true}"
 : "${SOCKS_USER:=}"
 : "${SOCKS_PASSWORD:=}"
 
@@ -91,6 +92,52 @@ done
 if ! ip link show "$VPN_IFACE" >/dev/null 2>&1; then
   echo "[vpn-sidecar] the tunnel did not come up within 60s" >&2
   exit 1
+fi
+
+# Anything the tunnel does not carry must not leave by another way.
+#
+# A corporate VPN usually pushes split routes: some subnets go through it, the
+# rest do not. Without this, a host whose address is outside those routes still
+# connects -- out of this container's own internet route, quietly, for a host
+# that was assigned to a network precisely so that would not happen. Dropping
+# it turns a wrong answer into a refusal Termix can report.
+apply_strict_routes() {
+  local gateway_ips ip
+  gateway_ips=$(getent ahostsv4 "$VPN_HOST" 2>/dev/null | awk '{print $1}' | sort -u)
+  if [[ -z "$gateway_ips" ]]; then
+    echo "[vpn-sidecar] cannot resolve $VPN_HOST to pin the tunnel's own route" >&2
+    return 1
+  fi
+
+  iptables -F TERMIX_OUT 2>/dev/null || iptables -N TERMIX_OUT || return 1
+  iptables -A TERMIX_OUT -o lo -j ACCEPT || return 1
+  iptables -A TERMIX_OUT -o "$VPN_IFACE" -j ACCEPT || return 1
+  # Replies to whoever reached the doorway, and the tunnel's own carrier.
+  iptables -A TERMIX_OUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT \
+    || return 1
+  for ip in $gateway_ips; do
+    iptables -A TERMIX_OUT -d "$ip" -j ACCEPT || return 1
+  done
+  iptables -A TERMIX_OUT -j REJECT --reject-with icmp-port-unreachable || return 1
+
+  # Only now, once every accept is in place, is the chain worth entering.
+  iptables -C OUTPUT -j TERMIX_OUT 2>/dev/null \
+    || iptables -A OUTPUT -j TERMIX_OUT || return 1
+}
+
+if [[ "$VPN_STRICT_ROUTES" == "true" ]]; then
+  if apply_strict_routes; then
+    echo "[vpn-sidecar] anything outside the tunnel is refused"
+  else
+    echo "[vpn-sidecar] could not apply the strict route rules." >&2
+    echo "[vpn-sidecar] NET_ADMIN and iptables are needed. To run without" >&2
+    echo "[vpn-sidecar] them -- and accept that traffic outside the tunnel's" >&2
+    echo "[vpn-sidecar] routes leaves by this container's own route -- set" >&2
+    echo "[vpn-sidecar] VPN_STRICT_ROUTES=false." >&2
+    exit 1
+  fi
+else
+  echo "[vpn-sidecar] strict routes off: traffic outside the tunnel leaves by this container's route" >&2
 fi
 
 socks_args=(-i 0.0.0.0 -p "$SOCKS_PORT")

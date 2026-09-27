@@ -15,6 +15,7 @@ FROM debian:trixie-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       openfortivpn openconnect vpnc-scripts microsocks ppp iproute2 \
+      iptables \
       ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 

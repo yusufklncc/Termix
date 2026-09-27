@@ -69,7 +69,7 @@ import { registerFileActionRoutes } from "./action-routes.js";
 import { applyAgentAuth } from "../terminal-auth-helpers.js";
 import { applyCACertIfPresent } from "./ca-cert-auth.js";
 import { listenOnServicePort } from "../../utils/service-listen.js";
-import { resolveHostGateway } from "../host-network.js";
+import { gatewayFailureMessage, resolveHostGateway } from "../host-network.js";
 
 /**
  * The host id came from whichever database the client is displaying. If this
@@ -1934,11 +1934,17 @@ app.post("/ssh/file_manager/ssh/connect", async (req, res) => {
         createConnectionLog(
           "error",
           "proxy",
-          `Proxy connection failed: ${getErrorMessage(proxyError)}`,
+          gatewayFailureMessage(
+            { vpnProfileId: resolvedVpnProfileId },
+            proxyError,
+          ),
         ),
       );
       return res.status(500).json({
-        error: "Proxy connection failed: " + getErrorMessage(proxyError),
+        error: gatewayFailureMessage(
+          { vpnProfileId: resolvedVpnProfileId },
+          proxyError,
+        ),
         connectionLogs,
       });
     }

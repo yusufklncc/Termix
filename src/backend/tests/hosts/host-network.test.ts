@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveHostGateway } from "../../hosts/host-network.js";
+import {
+  gatewayFailureMessage,
+  resolveHostGateway,
+} from "../../hosts/host-network.js";
 import type { VpnProfileRecord } from "../../database/repositories/vpn-profile-repository.js";
 
 const profile = (over: Partial<VpnProfileRecord> = {}) =>
@@ -91,5 +94,19 @@ describe("resolveHostGateway", () => {
       async () => profile({ gatewayHost: "vpn-x" }),
     );
     expect(config?.socks5Host).toBe("vpn-x");
+  });
+});
+
+describe("gatewayFailureMessage", () => {
+  it("names the network for a host reached through one", () => {
+    expect(
+      gatewayFailureMessage({ vpnProfileId: 2 }, new Error("ENOTFOUND")),
+    ).toBe("Network connection failed: ENOTFOUND");
+  });
+
+  it("still says proxy for a host that uses one", () => {
+    expect(gatewayFailureMessage({}, new Error("ECONNREFUSED"))).toBe(
+      "Proxy connection failed: ECONNREFUSED",
+    );
   });
 });

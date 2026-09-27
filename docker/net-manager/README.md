@@ -77,3 +77,10 @@ container's route.
 `fortinet`, via openconnect. One on purpose — it is the gateway this can be
 measured against. A second fits the same shape: a command, an interface name,
 and what it wants on stdin.
+
+## Alongside the sidecar
+
+Phase 8's sidecar and this are not alternatives to choose between. A declared
+profile still points at a sidecar the operator runs, a managed one is raised
+here, and a Termix can have both — which is how an existing network keeps
+working while a new one is made from the editor.

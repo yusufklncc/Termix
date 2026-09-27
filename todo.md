@@ -395,6 +395,23 @@ decode edilip piksel olarak gidiyor — 580 MB/dk'dan 41 MB/dk'ya indi.
 
 ---
 
+## Faz 8 — Host bazlı VPN (A2 kuruldu)
+
+Tasarım ve gerekçeler: [`docs/phase8-vpn-design.md`](docs/phase8-vpn-design.md)
+
+- [x] Profil tablosu, şifreli geçit parolası, `/vpn/profiles` API
+- [x] Kullanılan profilin silinmesi reddediliyor
+- [x] `resolveHostGateway` — tek karar noktası, kapalı düşme; on çağrı yeri
+- [x] RDP/VNC/Telnet için yerel dinleyici tüneli
+- [x] Host editöründe seçici ve profil yöneticisi
+- [x] Yolda iki sızma bulundu ve kapatıldı (çağrı yerlerinin kendi proxy
+      üretimi, ve guacd'nin proxy ayarını hiç okumaması)
+- [ ] Klasöre toplu uygulama
+- [ ] Tünellerin profil taşıması
+- [ ] Gerçek sidecar ile uçtan uca doğrulama
+
+---
+
 ## Hedef makine tarafı (kodla ilgisi yok)
 
 Faz 2 veya 3'e geçmeden önce durumu sorulacak:

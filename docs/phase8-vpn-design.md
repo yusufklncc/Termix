@@ -1,6 +1,10 @@
 # Faz 8 — Host bazlı VPN (tasarım önerisi)
 
-**Durum: onay bekliyor. Kod yazılmadı.**
+**Durum: A2 kuruldu ve çalışıyor. A1 henüz yapılmadı.**
+
+Kullanıcı kararları: A2 ile başlandı, profiller kullanıcıya ait, çakışan alt ağ
+ihtimali olduğu için şeffaf yönlendirmeye güvenilmedi, Fortinet tarafında
+SAML/EMS zorlaması yok (A1'de openfortivpn kullanılabilir).
 
 Amaç: Termix sunucusunun tamamını bir VPN'e sokmadan, host (ve pratikte host
 grubu) bazında VPN üzerinden bağlanabilmek. Farklı kurumlar, farklı VPN'ler,
@@ -185,7 +189,42 @@ Arayüz bunu sağlayıcı bazında dürüstçe göstermeli; tek tip vaat verilme
 
 ---
 
-## Cevap bekleyen sorular
+## A2'de ne kuruldu
+
+- `vpn_profiles` tablosu (kullanıcıya ait), host'ta `vpnProfileId`, üç lehçe
+  için migration. Geçit parolası `field-crypto` ile şifreli; diske şifreli
+  yazıldığı testle doğrulandı
+- `/vpn/profiles` altında CRUD. Geçidi olmayan profil kaydedilemiyor
+- **Kullanılan bir profil silinemiyor.** `ON DELETE SET NULL` sessizce host'ları
+  koparıp doğrudan bağlanır hâle getirirdi
+- `resolveHostGateway`: tek karar noktası. `null` yalnızca "doğrudan bağlan"
+  demek; karşılanamayan her şey hata fırlatıyor. On çağrı yerinin hepsi buradan
+  geçiyor
+- RDP/VNC/Telnet: guacd ve köprü yalnızca host+port aldığı için profilin ağına
+  çıkan yerel dinleyici veriliyor (`openGatewayTunnel`)
+- Host editöründe ağ seçici ve profil yöneticisi
+
+### Yolda bulunan iki sızma
+
+1. **Yedi çağrı yeri proxy yapılandırmasını kendisi kuruyordu** ve "proxy istendi
+   ama adres yok" durumunu `null`'a çeviriyordu; altındaki kod bunu "proxy
+   gerekmiyor" diye okuyup doğrudan bağlanıyordu. `createSocks5Connection`'ı
+   hata fırlatır yapmak yetmemişti, çünkü oraya hiç gelinmiyordu
+2. **guacd yolu host'un proxy ayarını hiç okumuyordu.** `useSocks5` açık bir
+   host'un RDP/VNC/Telnet bağlantıları doğrudan sunucudan çıkıyordu
+
+### A2'de kalanlar
+
+- [ ] "Bu klasördeki tüm host'lara uygula" toplu işlemi (tasarlandı, yapılmadı)
+- [ ] Tüneller çözümleyiciden geçiyor ama profil taşımıyor; bir tünel hâlâ
+      sunucunun kendi rotasından çıkıyor
+- [ ] Hem jump host hem profil taşıyan host reddediliyor; yuvalama yapılmadı
+- [ ] Gerçek WireGuard sidecar'ıyla uçtan uca doğrulama ve çakışan alt ağ
+      senaryosu — sunucu tarafında yapılacak
+
+---
+
+## Cevaplanmış sorular
 
 1. **A2 ile mi başlayalım, doğrudan A1 mi?** Önerim A2.
 2. Müşterilerinin iç ağları birbiriyle çakışıyor mu? Şeffaf yönlendirmenin

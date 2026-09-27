@@ -229,10 +229,40 @@ async function createNamespace(id) {
   return { ns, host, peer, vethHost };
 }
 
+/**
+ * A namespace has no resolver.
+ *
+ * This container's /etc/resolv.conf points at Docker's own, on a loopback
+ * address that means nothing inside another namespace -- so openconnect could
+ * not even look up the gateway. The address is already known out here, where
+ * resolution works, so it is written in rather than looked up again. The name
+ * is kept, because the certificate is issued to it.
+ *
+ * resolv.conf is created empty for the tunnel's own DNS to be written into
+ * once it is up: `ip netns exec` binds these over /etc, so what the VPN
+ * pushes stays in the namespace it belongs to.
+ */
+async function writeNamespaceResolution(id, hostname, addresses) {
+  const { promises: fs } = await import("node:fs");
+  const dir = `/etc/netns/${nsName(id)}`;
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    `${dir}/hosts`,
+    ["127.0.0.1 localhost", ...addresses.map((ip) => `${ip} ${hostname}`)].join(
+      "\n",
+    ) + "\n",
+  );
+  await fs.writeFile(`${dir}/resolv.conf`, "");
+}
+
 async function destroyNamespace(id) {
   const ns = nsName(id);
   await tryRun("ip", ["netns", "del", ns]);
   await tryRun("ip", ["link", "del", `${ns}a`]);
+  const { promises: fs } = await import("node:fs");
+  await fs
+    .rm(`/etc/netns/${ns}`, { recursive: true, force: true })
+    .catch(() => {});
 }
 
 /**
@@ -344,13 +374,27 @@ function buildProviderCommand(profile, credentials) {
 /** id -> { state, error, port, procs, doorway } */
 const networks = new Map();
 
-function waitForInterface(ns, iface, vpnProcess, timeoutMs = 60000) {
+/** The last thing the client said, which is usually the reason. */
+function lastWords(said) {
+  const interesting = (said ?? []).filter(
+    (line) =>
+      line.trim() && !line.startsWith("POST ") && !line.startsWith("GET "),
+  );
+  return interesting.slice(-2).join("; ");
+}
+
+function waitForInterface(ns, iface, vpnProcess, timeoutMs = 60000, said) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
     const tick = async () => {
       if (vpnProcess.exitCode !== null) {
+        const reason = lastWords(said);
         return reject(
-          new Error("the VPN client exited before the tunnel came up"),
+          new Error(
+            reason
+              ? `the VPN client stopped: ${reason}`
+              : "the VPN client exited before the tunnel came up",
+          ),
         );
       }
       try {
@@ -387,15 +431,36 @@ async function bringUp(profile, credentials) {
     // Named gateways have to resolve before the namespace's rules exist; this
     // container's resolver is what answers, since the tunnel is not up yet.
     const gatewayIps = await resolveGatewayIps(profile.serverHost);
+    await writeNamespaceResolution(id, profile.serverHost, gatewayIps);
     const { command, args, iface, stdin } = buildProviderCommand(
       profile,
       credentials,
     );
 
+    /*
+     * The client's own words are kept, because they are the answer.
+     *
+     * "The VPN client exited" tells an operator nothing; "authentication
+     * failed" or "certificate does not match" tells them what to change. The
+     * output still goes to the log, and the tail of it goes back to Termix.
+     */
+    const said = [];
+    const remember = (chunk) => {
+      process.stderr.write(chunk);
+      for (const line of chunk.toString().split("\n")) {
+        const text = line.trim();
+        if (text) said.push(text);
+      }
+      if (said.length > 40) said.splice(0, said.length - 40);
+    };
+
     const vpn = spawn("ip", ["netns", "exec", ns, command, ...args], {
-      stdio: ["pipe", "inherit", "inherit"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
+    vpn.stdout.on("data", remember);
+    vpn.stderr.on("data", remember);
     entry.procs.push(vpn);
+    entry.said = said;
     vpn.stdin.end(stdin);
     vpn.on("exit", (code) => {
       const current = networks.get(id);
@@ -409,7 +474,7 @@ async function bringUp(profile, credentials) {
       log(`network ${id}: tunnel ended (${code})`);
     });
 
-    await waitForInterface(ns, iface, vpn);
+    await waitForInterface(ns, iface, vpn, 60000, said);
     await applyStrictRoutes(ns, iface, gatewayIps);
 
     const socks = spawn(

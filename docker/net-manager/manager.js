@@ -215,30 +215,12 @@ async function createNamespace(id) {
   await run("ip", ["link", "set", vethPeer, "netns", ns]);
   await run("ip", ["addr", "add", `${host}/30`, "dev", vethHost]);
   await run("ip", ["link", "set", vethHost, "up"]);
-  await run("ip", [
-    "netns",
-    "exec",
-    ns,
-    "ip",
-    "addr",
-    "add",
-    `${peer}/30`,
-    "dev",
-    vethPeer,
-  ]);
+  await run(
+    ...inNamespace(id, "ip", ["addr", "add", `${peer}/30`, "dev", vethPeer]),
+  );
   await run(...inNamespace(id, "ip", ["link", "set", vethPeer, "up"]));
   await run(...inNamespace(id, "ip", ["link", "set", "lo", "up"]));
-  await run("ip", [
-    "netns",
-    "exec",
-    ns,
-    "ip",
-    "route",
-    "add",
-    "default",
-    "via",
-    host,
-  ]);
+  await run(...inNamespace(id, "ip", ["route", "add", "default", "via", host]));
 
   return { ns, host, peer, vethHost };
 }

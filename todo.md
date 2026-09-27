@@ -370,6 +370,31 @@ decode edilip piksel olarak gidiyor — 580 MB/dk'dan 41 MB/dk'ya indi.
 
 ---
 
+## Faz 7 — Upstream 2.8.0
+
+- [x] Upstream 2.8.0 birleştirildi (14 çakışma). Geri dönüş dalı:
+      `backup/pre-upstream-2.8.0`. Migration'lar yine upstream'in geçmişi alınıp
+      kolonlarımız tek migration olarak yeniden üretilerek çözüldü (sqlite `0021`,
+      postgres `0025`, mysql `0024`)
+- [x] Yayın: `yusufklncc/termix:2.8.0-rdp.1`, köprü içerik olarak değişmediği için
+      aynı imaja `2.8.0-rdp.1` etiketi eklendi. Node tabanı 24 → 26 yükseldiği için
+      bu sürümde bütün katmanlar yeniden üretildi; indirme/yükleme 875 MB
+- [x] 3559 test geçiyor; lint, `schema:check` ve derleme temiz
+
+### Bu birleştirmenin öğrettikleri
+
+- **Upstream'in iç modülüne bağlanmak kırılıyor.** `rdp-direct-client`,
+  Guacamole'ün pano modülünden `isFirefoxBrowser` alıyordu; upstream pano
+  düzeltmesinde onu kaldırınca derleme kırıldı. Fonksiyon kendi modülümüze
+  taşındı. Bir render yolu diğerinin içine uzanmamalı
+- **`tsc --noEmit -p tsconfig.json` hiçbir şeyi kontrol etmiyor.** `tsconfig.json`
+  bir çözüm dosyası (`"files": []`). Doğrusu `npm run type-check`. Yanlış komut
+  yüzünden gizli kalmış 6 hata çıktı: `HostEditorData`'da 2.7.1 birleştirmesinden
+  kalma **yinelenen `jumpHosts` anahtarı**, upstream'in `enableStream` bilmeden
+  yazdığı `Host` nesneleri (alan artık isteğe bağlı), ve bir `Blob` tip uyuşmazlığı
+
+---
+
 ## Hedef makine tarafı (kodla ilgisi yok)
 
 Faz 2 veya 3'e geçmeden önce durumu sorulacak:

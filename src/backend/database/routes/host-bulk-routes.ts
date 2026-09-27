@@ -13,6 +13,7 @@ import {
 } from "../repositories/factory.js";
 import { validateParentHostId } from "./host-parent-validation.js";
 import { serializeWebUiConfig } from "./host-web-endpoints.js";
+import { vpnProfileAssignmentError } from "./vpn-validation.js";
 import {
   isNonEmptyString,
   isValidPort,
@@ -276,6 +277,21 @@ export function registerHostBulkRoutes(
             simpleUpdates.parentHostId = numericParentHostId;
             simpleUpdates.folder = null;
           }
+        }
+        // The network a batch of hosts is reached through -- the reason this
+        // is bulk-editable at all, since a folder usually is one customer's
+        // estate. Validated against the same owner as the hosts: assigning in
+        // bulk must not be a way around assigning one at a time.
+        if (updates.vpnProfileId !== undefined) {
+          const vpnAssignmentError = await vpnProfileAssignmentError(
+            updates.vpnProfileId,
+            userId!,
+          );
+          if (vpnAssignmentError) {
+            return res.status(400).json({ error: vpnAssignmentError });
+          }
+          simpleUpdates.vpnProfileId =
+            updates.vpnProfileId === null ? null : Number(updates.vpnProfileId);
         }
         if (typeof updates.enableTerminal === "boolean")
           simpleUpdates.enableTerminal = updates.enableTerminal;

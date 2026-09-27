@@ -409,7 +409,7 @@ Tasarım ve gerekçeler: [`docs/phase8-vpn-design.md`](docs/phase8-vpn-design.md
 - [x] Referans sidecar (`docker/vpn-sidecar/`, Fortinet SSL-VPN) ve yerel
       doğrulama: zincir çalışıyor, çakışan adres doğru makineye çıkıyor, hem
       uygulama hem sidecar tünel yokken kapalı düşüyor
-- [ ] Klasöre toplu uygulama
+- [x] Klasöre toplu uygulama (2026-09-27)
 - [x] Tünellerin profil taşıması (2026-09-27; yolda bir sahiplik açığı da
       bulunup kapatıldı)
 - [x] Gerçek FortiGate'e karşı doğrulama (2026-09-27): oturum tünelden gidiyor,

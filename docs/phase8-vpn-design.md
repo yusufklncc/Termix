@@ -215,7 +215,7 @@ Arayüz bunu sağlayıcı bazında dürüstçe göstermeli; tek tip vaat verilme
 
 ### A2'de kalanlar
 
-- [ ] "Bu klasördeki tüm host'lara uygula" toplu işlemi (tasarlandı, yapılmadı)
+- [x] Toplu uygulama: çoklu seçim çubuğunda "Network" menüsü (2026-09-27)
 - [x] Tüneller artık host'un ağ alanlarını taşıyor (2026-09-27)
 - [ ] Hem jump host hem profil taşıyan host reddediliyor; yuvalama yapılmadı
 - [x] Referans sidecar (`docker/vpn-sidecar/`, Fortinet SSL-VPN) ve uçtan uca

@@ -40,6 +40,7 @@ import {
   deleteAllHostsInFolder,
   reorderSSHHosts,
   reorderFolders,
+  getVpnProfiles,
 } from "@/main-axios";
 import { planReorder, renumberSiblings } from "@/sidebar/reorder-utils";
 import type { Host, HostFolder, TabType } from "@/types/ui-types";
@@ -188,6 +189,23 @@ export function SidebarTree({
   // state could get stuck showing a stale bar when the pointer jumped
   // directly from one virtualized row to another without a clean
   // dragleave firing on the row being left.
+  // The networks a selection can be put on. A folder is usually one
+  // customer's estate, which is the whole reason this is worth doing in bulk.
+  const [vpnProfiles, setVpnProfiles] = useState<
+    Array<{ id: number; name: string }>
+  >([]);
+  useEffect(() => {
+    getVpnProfiles()
+      .then((rows) =>
+        setVpnProfiles(
+          Array.isArray(rows)
+            ? (rows as unknown as Array<{ id: number; name: string }>)
+            : [],
+        ),
+      )
+      .catch(() => setVpnProfiles([]));
+  }, []);
+
   const [reorderHoverKey, setReorderHoverKey] = useState<string | null>(null);
   const [reorderHoverEdge, setReorderHoverEdge] = useState<
     "before" | "after" | null
@@ -1217,6 +1235,45 @@ export function SidebarTree({
                   >
                     <Icon className="size-3.5 mr-2" />
                     {t(labelKey)}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className="text-[10px] text-muted-foreground hover:text-foreground px-1.5 py-1 hover:bg-muted rounded transition-colors flex items-center gap-1 disabled:opacity-40"
+                  disabled={selectedHostIds.size === 0}
+                >
+                  {t("hosts.vpn.profile")} <ChevronDown className="size-2.5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="text-xs">
+                {[
+                  { id: null as number | null, name: t("hosts.vpn.direct") },
+                  ...vpnProfiles,
+                ].map((profile) => (
+                  <DropdownMenuItem
+                    key={profile.id ?? "direct"}
+                    onClick={async () => {
+                      const ids = Array.from(selectedHostIds).map(Number);
+                      try {
+                        await bulkUpdateSSHHosts(ids, {
+                          vpnProfileId: profile.id,
+                        });
+                        window.dispatchEvent(
+                          new CustomEvent("termix:hosts-changed"),
+                        );
+                        toast.success(
+                          t("hosts.updatedCount", { count: ids.length }),
+                        );
+                      } catch {
+                        toast.error(t("hosts.bulkUpdateFailed"));
+                      }
+                    }}
+                  >
+                    <Network className="size-3.5 mr-2" />
+                    {profile.name}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>

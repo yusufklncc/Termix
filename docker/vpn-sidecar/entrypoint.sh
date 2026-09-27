@@ -15,6 +15,8 @@ set -euo pipefail
 : "${VPN_PASSWORD:?VPN_PASSWORD is required}"
 : "${SOCKS_PORT:=1080}"
 : "${VPN_TRUSTED_CERT:=}"
+: "${VPN_TRUSTED_PIN:=}"
+: "${VPN_CLIENT:=openfortivpn}"
 : "${SOCKS_USER:=}"
 : "${SOCKS_PASSWORD:=}"
 
@@ -33,28 +35,60 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-args=("$VPN_HOST:$VPN_PORT" -u "$VPN_USER" --pppd-use-peerdns=1)
-[[ -n "$VPN_TRUSTED_CERT" ]] && args+=(--trusted-cert "$VPN_TRUSTED_CERT")
-[[ -n "${VPN_OTP:-}" ]] && args+=(--otp "$VPN_OTP")
+# Both clients speak FortiGate SSL-VPN. They differ in what the kernel has to
+# offer them: openfortivpn drives pppd and needs /dev/ppp, openconnect makes a
+# tun device and needs /dev/net/tun. An unprivileged container host often has
+# the second and not the first.
+case "$VPN_CLIENT" in
+  openfortivpn)
+    VPN_IFACE=ppp0
+    args=("$VPN_HOST:$VPN_PORT" -u "$VPN_USER" --pppd-use-peerdns=1)
+    [[ -n "$VPN_TRUSTED_CERT" ]] && args+=(--trusted-cert "$VPN_TRUSTED_CERT")
+    [[ -n "${VPN_OTP:-}" ]] && args+=(--otp "$VPN_OTP")
+    ;;
+  openconnect)
+    VPN_IFACE=tun0
+    args=(--protocol=fortinet --user "$VPN_USER" --passwd-on-stdin
+          --interface "$VPN_IFACE" --non-inter)
+    # Not the same number. openfortivpn pins the certificate; openconnect pins
+    # the public key inside it, base64 rather than hex. Passing one where the
+    # other is meant fails to match, which looks exactly like a wrong gateway.
+    if [[ -n "$VPN_TRUSTED_PIN" ]]; then
+      args+=(--servercert "pin-sha256:${VPN_TRUSTED_PIN#pin-sha256:}")
+    elif [[ -n "$VPN_TRUSTED_CERT" ]]; then
+      echo "[vpn-sidecar] openconnect needs VPN_TRUSTED_PIN, not VPN_TRUSTED_CERT." >&2
+      echo "[vpn-sidecar] Get it with:" >&2
+      echo "[vpn-sidecar]   openssl s_client -connect $VPN_HOST:$VPN_PORT -servername $VPN_HOST </dev/null 2>/dev/null \\" >&2
+      echo "[vpn-sidecar]     | openssl x509 -pubkey -noout | openssl pkey -pubin -outform DER \\" >&2
+      echo "[vpn-sidecar]     | openssl dgst -sha256 -binary | base64" >&2
+      exit 1
+    fi
+    args+=("https://$VPN_HOST:$VPN_PORT")
+    ;;
+  *)
+    echo "[vpn-sidecar] VPN_CLIENT must be openfortivpn or openconnect" >&2
+    exit 1
+    ;;
+esac
 
-echo "[vpn-sidecar] connecting to $VPN_HOST:$VPN_PORT as $VPN_USER"
-printf '%s\n' "$VPN_PASSWORD" | openfortivpn "${args[@]}" &
+echo "[vpn-sidecar] connecting to $VPN_HOST:$VPN_PORT as $VPN_USER via $VPN_CLIENT"
+printf '%s\n' "$VPN_PASSWORD" | "$VPN_CLIENT" "${args[@]}" &
 VPN_PID=$!
 
 # Wait for the tunnel to actually come up rather than assuming it did.
 for _ in $(seq 1 60); do
-  if ip link show ppp0 >/dev/null 2>&1; then
-    echo "[vpn-sidecar] ppp0 is up"
+  if ip link show "$VPN_IFACE" >/dev/null 2>&1; then
+    echo "[vpn-sidecar] $VPN_IFACE is up"
     break
   fi
   if ! kill -0 "$VPN_PID" 2>/dev/null; then
-    echo "[vpn-sidecar] openfortivpn exited before the tunnel came up" >&2
+    echo "[vpn-sidecar] $VPN_CLIENT exited before the tunnel came up" >&2
     exit 1
   fi
   sleep 1
 done
 
-if ! ip link show ppp0 >/dev/null 2>&1; then
+if ! ip link show "$VPN_IFACE" >/dev/null 2>&1; then
   echo "[vpn-sidecar] the tunnel did not come up within 60s" >&2
   exit 1
 fi

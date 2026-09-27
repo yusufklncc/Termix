@@ -56,17 +56,19 @@ behaviour, not a bug to paper over.
 
 ### Environment
 
-| Variable           | Required  | Meaning                                                     |
-| ------------------ | --------- | ----------------------------------------------------------- |
-| `VPN_HOST`         | yes       | FortiGate address                                           |
-| `VPN_PORT`         | no (443)  | FortiGate port                                              |
-| `VPN_USER`         | yes       | VPN account                                                 |
-| `VPN_PASSWORD`     | yes       | VPN password                                                |
-| `VPN_TRUSTED_CERT` | no        | Gateway certificate digest, when it is not publicly trusted |
-| `VPN_OTP`          | no        | One-time code, where the gateway asks for one               |
-| `SOCKS_PORT`       | no (1080) | Port the doorway listens on                                 |
-| `SOCKS_USER`       | see below | Password-protects the doorway                               |
-| `SOCKS_PASSWORD`   | see below | Set together with `SOCKS_USER`                              |
+| Variable           | Required          | Meaning                                                                   |
+| ------------------ | ----------------- | ------------------------------------------------------------------------- |
+| `VPN_CLIENT`       | no (openfortivpn) | `openfortivpn` (needs `/dev/ppp`) or `openconnect` (needs `/dev/net/tun`) |
+| `VPN_HOST`         | yes               | FortiGate address                                                         |
+| `VPN_PORT`         | no (443)          | FortiGate port                                                            |
+| `VPN_USER`         | yes               | VPN account                                                               |
+| `VPN_PASSWORD`     | yes               | VPN password                                                              |
+| `VPN_TRUSTED_CERT` | no                | Gateway certificate digest, when it is not publicly trusted               |
+| `VPN_TRUSTED_PIN`  | no                | The same idea for `openconnect`, which pins the public key instead        |
+| `VPN_OTP`          | no                | One-time code, where the gateway asks for one                             |
+| `SOCKS_PORT`       | no (1080)         | Port the doorway listens on                                               |
+| `SOCKS_USER`       | see below         | Password-protects the doorway                                             |
+| `SOCKS_PASSWORD`   | see below         | Set together with `SOCKS_USER`                                            |
 
 A doorway reachable only from Termix's own Docker network needs no password.
 One reachable from anywhere else -- see below -- is a way into the VPN for
@@ -84,7 +86,22 @@ container host that does not have it (`modinfo ppp_generic` fails) cannot run
 this sidecar as-is. Unprivileged LXC is the common case: the kernel belongs to
 the hypervisor, not to the container.
 
-Two ways out:
+Three ways out, cheapest first:
+
+- **Use `openconnect` instead.** It speaks the same FortiGate SSL-VPN over a
+  tun device, so it never touches ppp. Set `VPN_CLIENT: openconnect` and give
+  the container `/dev/net/tun` and `NET_ADMIN` instead of `/dev/ppp`.
+
+  It pins differently: `VPN_TRUSTED_CERT` is the certificate's digest,
+  `VPN_TRUSTED_PIN` is the public key's, base64 rather than hex. They are not
+  interchangeable, and passing one where the other belongs looks exactly like
+  reaching the wrong gateway. Get the pin with:
+
+  ```bash
+  openssl s_client -connect GATEWAY:443 -servername GATEWAY </dev/null 2>/dev/null \
+    | openssl x509 -pubkey -noout | openssl pkey -pubin -outform DER \
+    | openssl dgst -sha256 -binary | base64
+  ```
 
 - **Pass the device in.** On the hypervisor, `modprobe ppp_generic`, then give
   the container the device. On Proxmox, in `/etc/pve/lxc/<id>.conf`:

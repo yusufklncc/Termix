@@ -70,6 +70,7 @@ behaviour, not a bug to paper over.
 | `SOCKS_USER`        | see below         | Password-protects the doorway                                             |
 | `SOCKS_PASSWORD`    | see below         | Set together with `SOCKS_USER`                                            |
 | `VPN_STRICT_ROUTES` | no (true)         | Refuse anything the tunnel does not carry                                 |
+| `VPN_AUTH_BACKOFF`  | no (900)          | Seconds to wait after the gateway refuses the credentials                 |
 
 A doorway reachable only from Termix's own Docker network needs no password.
 One reachable from anywhere else -- see below -- is a way into the VPN for
@@ -141,6 +142,18 @@ Two consequences worth knowing:
   container stops and says so, rather than starting without them. To run
   anyway -- accepting that traffic outside the tunnel's routes leaves by this
   container's route -- set `VPN_STRICT_ROUTES: "false"`.
+
+## A refused password is not retried
+
+A dropped tunnel is worth reconnecting. A refused password is not: trying it
+again cannot succeed, and a FortiGate counts the attempts. With a restart
+policy and no wait, that is nine login attempts a minute -- measured -- which
+locks the account and then keeps it locked, so waiting for the lockout to
+lapse never helps.
+
+So a refusal waits `VPN_AUTH_BACKOFF` seconds before the container exits and
+the restart policy tries again. Fix the credentials and restart the container
+to try at once.
 
 ## Checking it
 

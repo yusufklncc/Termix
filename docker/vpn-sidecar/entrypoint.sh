@@ -18,6 +18,10 @@ set -euo pipefail
 : "${VPN_TRUSTED_PIN:=}"
 : "${VPN_CLIENT:=openfortivpn}"
 : "${VPN_STRICT_ROUTES:=true}"
+# How long to wait before letting the restart policy try again after the
+# gateway refused the credentials. Retrying those achieves nothing and, on a
+# FortiGate, locks the account -- so the wait is long on purpose.
+: "${VPN_AUTH_BACKOFF:=900}"
 : "${SOCKS_USER:=}"
 : "${SOCKS_PASSWORD:=}"
 
@@ -72,8 +76,30 @@ case "$VPN_CLIENT" in
     ;;
 esac
 
+# Was it the credentials, or the network?
+#
+# A dropped tunnel is worth reconnecting; a refused password is not. Trying it
+# again cannot succeed, and a FortiGate counts the attempts: the restart policy
+# turns one wrong password into a locked account within minutes. So a refusal
+# waits instead, long enough for a lockout to lapse rather than renew it.
+CLIENT_LOG=$(mktemp)
+refused_credentials() {
+  grep -qiE "authentication (failed|error)|login failed|permission denied|user input required" \
+    "$CLIENT_LOG"
+}
+wait_out_a_refusal() {
+  echo "[vpn-sidecar] the gateway refused these credentials." >&2
+  echo "[vpn-sidecar] Retrying cannot help and locks the account, so this" >&2
+  echo "[vpn-sidecar] waits ${VPN_AUTH_BACKOFF}s. Fix the credentials and" >&2
+  echo "[vpn-sidecar] restart this container to try at once." >&2
+  sleep "$VPN_AUTH_BACKOFF"
+}
+
 echo "[vpn-sidecar] connecting to $VPN_HOST:$VPN_PORT as $VPN_USER via $VPN_CLIENT"
-printf '%s\n' "$VPN_PASSWORD" | "$VPN_CLIENT" "${args[@]}" &
+# Process substitution rather than a pipe, so $! is the client and not tee --
+# the supervision below asks whether *it* is still alive.
+"$VPN_CLIENT" "${args[@]}" < <(printf '%s\n' "$VPN_PASSWORD") \
+  > >(tee "$CLIENT_LOG") 2>&1 &
 VPN_PID=$!
 
 # Wait for the tunnel to actually come up rather than assuming it did.
@@ -84,6 +110,7 @@ for _ in $(seq 1 60); do
   fi
   if ! kill -0 "$VPN_PID" 2>/dev/null; then
     echo "[vpn-sidecar] $VPN_CLIENT exited before the tunnel came up" >&2
+    refused_credentials && wait_out_a_refusal
     exit 1
   fi
   sleep 1

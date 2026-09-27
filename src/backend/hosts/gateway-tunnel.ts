@@ -3,6 +3,7 @@ import { createSocks5Connection } from "../utils/socks5-helper.js";
 import type { SOCKS5Config } from "../utils/proxy-helper.js";
 import { resolveJumpTunnelEndpoint } from "./guacamole/jump-tunnel-endpoint.js";
 import { sshLogger } from "../utils/logger.js";
+import { getErrorMessage } from "../utils/error-message.js";
 
 /**
  * A local address that comes out inside another network.
@@ -26,6 +27,48 @@ export interface GatewayTunnel {
   close(): void;
 }
 
+/**
+ * Is the doorway even there?
+ *
+ * Without this the listener opens regardless, and a doorway that is gone is
+ * only discovered when the consumer dials -- as a connection that opens and
+ * closes with nothing said. guacd and the bridge report that as a generic
+ * failure, so the operator is told the host is unreachable and not that the
+ * network its traffic should have taken is down.
+ *
+ * One connect to the gateway, at session start, buys the reason.
+ */
+async function assertGatewayReachable(
+  gateway: SOCKS5Config,
+  timeoutMs = 5000,
+): Promise<void> {
+  const chain = gateway.socks5ProxyChain;
+  const first =
+    Array.isArray(chain) && chain.length > 0
+      ? { host: chain[0].host, port: chain[0].port }
+      : gateway.socks5Host
+        ? { host: gateway.socks5Host, port: gateway.socks5Port ?? 1080 }
+        : null;
+
+  // The resolver never hands back a gateway without an address, so there is
+  // nothing here to check rather than something to complain about.
+  if (!first) return;
+
+  await new Promise<void>((resolve, reject) => {
+    const socket = net.connect(first.port, first.host);
+    const settle = (error?: Error) => {
+      socket.destroy();
+      if (error) reject(error);
+      else resolve();
+    };
+    socket.setTimeout(timeoutMs, () =>
+      settle(new Error(`timed out reaching ${first.host}:${first.port}`)),
+    );
+    socket.once("connect", () => settle());
+    socket.once("error", (error) => settle(error));
+  });
+}
+
 export async function openGatewayTunnel({
   gateway,
   target,
@@ -45,6 +88,15 @@ export async function openGatewayTunnel({
   const endpoint =
     providedEndpoint ??
     resolveJumpTunnelEndpoint(consumerHost ?? "", tunnelHost);
+
+  try {
+    await assertGatewayReachable(gateway);
+  } catch (error) {
+    throw new Error(
+      `the network's gateway could not be reached: ${getErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
 
   const server = net.createServer((socket) => {
     createSocks5Connection(target.host, target.port, gateway)

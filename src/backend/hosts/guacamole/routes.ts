@@ -674,8 +674,11 @@ router.post(
             tunnelError,
             { operation: "guac_gateway_tunnel_error", hostId },
           );
+          // The reason belongs in the answer: "unreachable host" and "the
+          // network it goes through is down" send the operator to different
+          // places.
           return res.status(500).json({
-            error: "Failed to reach the host through its network profile",
+            error: `Failed to reach the host through its network profile: ${getErrorMessage(tunnelError)}`,
           });
         }
       }

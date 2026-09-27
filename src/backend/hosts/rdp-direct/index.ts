@@ -23,6 +23,7 @@ import {
   createCurrentSettingsRepository,
 } from "../../database/repositories/factory.js";
 import { logAudit, getAuditUsername } from "../../utils/audit-logger.js";
+import { getErrorMessage } from "../../utils/error-message.js";
 
 /**
  * Direct RDP path: FreeRDP's H.264 bitstream straight to the browser.
@@ -306,7 +307,10 @@ wss.on("connection", async (ws: WebSocket, req) => {
           hostId,
           userId,
         });
-        fail(1011, "Failed to reach the host through its network profile");
+        fail(
+          1011,
+          `Failed to reach the host through its network profile: ${getErrorMessage(error)}`,
+        );
         return;
       }
     }

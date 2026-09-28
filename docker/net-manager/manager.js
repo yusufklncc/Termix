@@ -474,6 +474,12 @@ async function raiseTunnel(id) {
       );
       procs.push(socks);
 
+      // Spawned is not listening. The connection that triggered this raise is
+      // waiting to be handed to it, and handing it over a moment too early
+      // gets a refusal the caller sees as the socket closing -- which is what
+      // "try again and it works" looked like from the outside.
+      await waitForDoorwayUpstream(peer);
+
       entry.tunnel = { procs, ns: nsName(id) };
       entry.error = null;
       log(`VPN ${id} is up`);
@@ -498,6 +504,33 @@ async function raiseTunnel(id) {
   });
 
   return entry.raising;
+}
+
+/** Poll until the namespace's SOCKS server accepts, so the waiting
+ * connection is handed to something that answers. */
+function waitForDoorwayUpstream(peer, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const attempt = () => {
+      const probe = net.connect(1080, peer);
+      const retry = () => {
+        probe.destroy();
+        if (Date.now() > deadline) {
+          return reject(
+            new Error("the doorway inside the tunnel never opened"),
+          );
+        }
+        setTimeout(attempt, 100);
+      };
+      probe.once("connect", () => {
+        probe.destroy();
+        resolve();
+      });
+      probe.once("error", retry);
+      probe.setTimeout(1000, retry);
+    };
+    attempt();
+  });
 }
 
 async function dropTunnel(id) {

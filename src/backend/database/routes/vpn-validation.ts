@@ -20,8 +20,21 @@
  * closed, and only because nothing would be gained by it.
  */
 const KINDS = new Set(["managed"]);
-/** One on purpose: the gateway this can be measured against. */
-const PROVIDERS = new Set(["fortinet"]);
+/**
+ * What each provider needs, because they do not need the same things.
+ *
+ * A Fortinet gateway is dialled at an address as a named account. A tailnet
+ * has no address to dial -- the node signs in to a control server with a key
+ * and the tailnet finds itself -- so asking for a host and a username there
+ * would refuse a profile that is perfectly complete.
+ */
+const PROVIDERS: Record<
+  string,
+  (data: Record<string, unknown>) => string | null
+> = {
+  fortinet: findFortinetError,
+  tailscale: findTailscaleError,
+};
 
 export function findVpnProfileError(input: unknown): string | null {
   const data = (input ?? {}) as Record<string, unknown>;
@@ -41,36 +54,64 @@ export function findVpnProfileError(input: unknown): string | null {
    * A managed profile has no address to give: Termix raises the tunnel, so it
    * works the address out. What it needs instead is what to dial and as whom.
    */
-  return findManagedProfileError(data);
+  const provider = PROVIDERS[String(data.provider ?? "")];
+  if (!provider) return "Unsupported VPN provider";
+  return provider(data);
 }
 
-function findManagedProfileError(data: Record<string, unknown>): string | null {
-  if (!PROVIDERS.has(String(data.provider ?? ""))) {
-    return "Unsupported VPN provider";
-  }
-
+function findFortinetError(data: Record<string, unknown>): string | null {
   const server = data.serverHost;
   if (typeof server !== "string" || server.trim().length === 0) {
     return "A managed network needs the VPN gateway's address";
   }
 
-  const port = data.serverPort;
-  if (
-    port !== undefined &&
-    port !== null &&
-    (typeof port !== "number" ||
-      !Number.isInteger(port) ||
-      port < 1 ||
-      port > 65535)
-  ) {
-    return "A managed network needs a valid VPN gateway port";
-  }
+  const portError = findPortError(data.serverPort);
+  if (portError) return portError;
 
   const username = data.authUsername;
   if (typeof username !== "string" || username.trim().length === 0) {
     return "A managed network needs the VPN account's username";
   }
 
+  return null;
+}
+
+/**
+ * A tailnet needs a key and nothing else.
+ *
+ * The control server is optional because leaving it empty means Tailscale's
+ * own; it is only set when the tailnet is self-hosted (Headscale). The key is
+ * not optional: without one the node would ask a person to open a login page,
+ * and there is no person here to open it.
+ */
+function findTailscaleError(data: Record<string, unknown>): string | null {
+  const key = data.authPassword;
+  if (typeof key !== "string" || key.trim().length === 0) {
+    return "A tailnet needs an auth key to sign in with";
+  }
+
+  const loginServer = data.serverHost;
+  if (
+    typeof loginServer === "string" &&
+    loginServer.trim().length > 0 &&
+    !/^https?:\/\/\S+$/i.test(loginServer.trim())
+  ) {
+    return "A self-hosted control server is a URL, such as https://headscale.example.com";
+  }
+
+  return null;
+}
+
+function findPortError(port: unknown): string | null {
+  if (port === undefined || port === null) return null;
+  if (
+    typeof port !== "number" ||
+    !Number.isInteger(port) ||
+    port < 1 ||
+    port > 65535
+  ) {
+    return "A managed network needs a valid VPN gateway port";
+  }
   return null;
 }
 

@@ -7,6 +7,13 @@ import { getErrorMessage } from "../lib/error-message.js";
 import { Button } from "@/components/button";
 import { Input } from "@/components/input";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/select";
+import {
   createVpnProfile,
   updateVpnProfile,
   deleteVpnProfile,
@@ -141,7 +148,7 @@ export function VpnProfileManager({
       const payload: VpnProfilePayload = {
         ...form,
         gatewayPort: Number(form.gatewayPort),
-        ...(form.kind === "managed"
+        ...(form.kind === "managed" && form.provider !== "tailscale"
           ? { serverPort: Number(form.serverPort) || 443 }
           : {}),
       };
@@ -323,23 +330,76 @@ export function VpnProfileManager({
               <p className="text-[10px] text-muted-foreground">
                 {t("hosts.vpn.managedHint")}
               </p>
-              {field(
-                t("hosts.vpn.serverHost"),
-                "serverHost",
-                "vpn.company.com",
-              )}
-              {field(t("hosts.vpn.serverPort"), "serverPort", "443", "number")}
-              {field(t("hosts.vpn.authUsername"), "authUsername")}
-              {field(
-                t("hosts.vpn.authPassword"),
-                "authPassword",
-                form.id ? t("hosts.vpn.passwordUnchanged") : undefined,
-                "password",
-              )}
-              {field(
-                t("hosts.vpn.trustedFingerprint"),
-                "trustedFingerprint",
-                t("hosts.vpn.trustedFingerprintHint"),
+              <div className="flex flex-col gap-1">
+                <label className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">
+                  {t("hosts.vpn.provider")}
+                </label>
+                <Select
+                  value={form.provider ?? "fortinet"}
+                  onValueChange={(value) => setField("provider", value)}
+                >
+                  <SelectTrigger
+                    aria-label={t("hosts.vpn.provider")}
+                    size="sm"
+                    className="h-8 w-full text-xs"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="fortinet" className="text-xs">
+                      {t("hosts.vpn.providerFortinet")}
+                    </SelectItem>
+                    <SelectItem value="tailscale" className="text-xs">
+                      {t("hosts.vpn.providerTailscale")}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* A tailnet is signed in to, not dialled: it has a key and,
+                  if self-hosted, a control server. Showing it a gateway
+                  address and a username would be asking for what it has no
+                  use for. */}
+              {form.provider === "tailscale" ? (
+                <>
+                  {field(
+                    t("hosts.vpn.authKey"),
+                    "authPassword",
+                    form.id ? t("hosts.vpn.passwordUnchanged") : "tskey-auth-",
+                    "password",
+                  )}
+                  {field(
+                    t("hosts.vpn.loginServer"),
+                    "serverHost",
+                    t("hosts.vpn.loginServerHint"),
+                  )}
+                </>
+              ) : (
+                <>
+                  {field(
+                    t("hosts.vpn.serverHost"),
+                    "serverHost",
+                    "vpn.company.com",
+                  )}
+                  {field(
+                    t("hosts.vpn.serverPort"),
+                    "serverPort",
+                    "443",
+                    "number",
+                  )}
+                  {field(t("hosts.vpn.authUsername"), "authUsername")}
+                  {field(
+                    t("hosts.vpn.authPassword"),
+                    "authPassword",
+                    form.id ? t("hosts.vpn.passwordUnchanged") : undefined,
+                    "password",
+                  )}
+                  {field(
+                    t("hosts.vpn.trustedFingerprint"),
+                    "trustedFingerprint",
+                    t("hosts.vpn.trustedFingerprintHint"),
+                  )}
+                </>
               )}
             </>
           ) : (

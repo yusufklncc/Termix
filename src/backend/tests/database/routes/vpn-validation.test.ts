@@ -69,6 +69,52 @@ describe("findVpnProfileError", () => {
   });
 });
 
+/**
+ * A tailnet is not dialled, so it is not asked for what a dialled gateway
+ * needs. Checking a Fortinet profile's fields against a Tailscale one would
+ * refuse a profile with nothing wrong with it.
+ */
+describe("findVpnProfileError, for a tailnet", () => {
+  const tailnet = {
+    name: "Tailnet",
+    kind: "managed",
+    provider: "tailscale",
+    authPassword: "tskey-auth-example",
+  };
+
+  it("accepts a profile with only a key", () => {
+    expect(findVpnProfileError(tailnet)).toBeNull();
+  });
+
+  it("does not ask for an address or a username", () => {
+    // The two things a Fortinet profile cannot do without, and a tailnet has
+    // no use for either.
+    expect(
+      findVpnProfileError({ ...tailnet, serverHost: "", authUsername: "" }),
+    ).toBeNull();
+  });
+
+  it("requires a key", () => {
+    // Without one the node asks a person to open a login page, and no one is
+    // watching.
+    expect(findVpnProfileError({ ...tailnet, authPassword: "  " })).toMatch(
+      /auth key/i,
+    );
+  });
+
+  it("takes a self-hosted control server, as a URL", () => {
+    expect(
+      findVpnProfileError({
+        ...tailnet,
+        serverHost: "https://headscale.example.com",
+      }),
+    ).toBeNull();
+    expect(
+      findVpnProfileError({ ...tailnet, serverHost: "headscale.example.com" }),
+    ).toMatch(/URL/i);
+  });
+});
+
 describe("vpnProfileAssignmentError", () => {
   const found = async () => ({ id: 1 });
   const missing = async () => null;

@@ -1893,10 +1893,10 @@
     },
     "vpn": {
       "profile": "Network",
-      "profileDesc": "Reach this host through a network Termix is not otherwise on. The tunnel runs beside Termix, one per network; a profile records where its doorway is.",
+      "profileDesc": "Reach this host through a network Termix is not otherwise on. The tunnel runs beside Termix, one per network, whether Termix raises it or you do.",
       "direct": "Direct connection",
       "manage": "Manage networks",
-      "managerHint": "Termix does not dial the VPN itself. Each network runs as its own sidecar next to Termix, and a profile records the address it accepts traffic on.",
+      "managerHint": "A network is either a tunnel Termix raises for you, or one you run yourself beside it. Either way a profile records how a host's traffic gets in.",
       "none": "No networks yet.",
       "add": "Add a network",
       "name": "Name",

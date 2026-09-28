@@ -1,6 +1,7 @@
 # Faz 9 — Yönetilen ağlar (arayüzden VPN)
 
-**Durum: tasarım. Kod yazılmadı, onay bekliyor.**
+**Durum: 1-3. adımlar yapıldı ve gerçek FortiGate'e karşı doğrulandı
+(2026-09-28). Arayüzde `Connected` görülüyor.**
 
 Kullanıcı kararı: "Yol 3" — ayrı bir ağ yöneticisi yardımcı konteyner.
 
@@ -183,3 +184,41 @@ Her adımın sonunda durulur ve onay beklenir.
 
 Üçüne de evet: ayrıcalıklı yönetici kabul, ilk sağlayıcı Fortinet, mevcut
 `declared` profil yerinde kalır.
+
+---
+
+## Gerçek geçide karşı doğrulama (2026-09-28)
+
+Yönetilen bir profil arayüzden kuruldu, yönetici tüneli kendi ağ isim alanında
+kaldırdı ve profil `Connected` gösterdi. Yolda beş hata çıktı; hepsi yalnızca
+çalıştırınca görülebilecek cinstendi:
+
+1. **`ip netns exec` `/sys`'i yeniden bağlıyor.** LXC altındaki Docker buna
+   izin vermiyor ve her ağ "mount of /sys failed" ile düşüyordu. `nsenter`'a
+   geçildi — ilk denemede iki satır atlandı, çünkü biçimlendirici onları çok
+   satıra yaymıştı ve hem değiştirme hem kontrol kaçırdı.
+2. **IPv4 forwarding kapalı gelebiliyor.** Docker'da açık, LXC altındaki
+   Docker'da değil. Artık kontrol edilip `sysctls` girdisi adıyla söyleniyor.
+3. **openconnect 9.01 yetmiyor.** Bookworm'ün sürümü bu geçitte ikinci formda
+   takılıyor; trixie'nin 9.12'si aynı hesapla giriyor. Yönetici imajı trixie'ye
+   taşındı.
+4. **Reddedilen parola döngüye giriyordu.** Sidecar bunu kopmuş tünel gibi ele
+   alıp yeniden deniyordu: ölçülen, dakikada 9 giriş denemesi. Gerçek hesabı
+   kilitleyen buydu ve kilidin açılmasını beklemek bu yüzden işe yaramıyordu.
+   Artık reddedilen kimlik bilgisinden sonra bekleniyor.
+5. **Parola şifreli gidiyordu.** `create` ve `updateById` kaydı saklandığı
+   hâliyle döndürüyordu, `findById` ise çözerek. Kaydetme sonrası dönen kayıttan
+   okunan parola, geçide şifreli metin olarak sunuluyordu — geçide ulaşılıyor,
+   TLS kuruluyor, pin kabul ediliyor ve yalnızca giriş reddediliyordu.
+
+Beşincisi bir kimlik bilgisi sorunu gibi göründüğü için en pahalıya mal oldu.
+Ayırt eden şey, aynı bilgilerin elle `openconnect --authenticate` ile denenip
+başarılı olmasıydı.
+
+### Kalan
+
+- **Yeniden eşitleme.** Yönetici yeniden başladığında Termix ağları geri
+  kurmuyor; profili elle kaydetmek gerekiyor. Tasarımın 3. adımı.
+- **Reddedilen kimlik bilgisi yöneticide de tekrarlanmamalı** — bugün yalnızca
+  sidecar'da düzeltildi; yönetici zaten kendiliğinden tekrarlamıyor ama
+  yeniden eşitleme eklenince bu kural oraya da gerekecek.

@@ -116,7 +116,7 @@ router.post("/profiles", authenticateJWT, async (req, res: Response) => {
     if (managed && !manager) {
       return res.status(400).json({
         error:
-          "No network manager is configured, so Termix cannot raise a tunnel itself",
+          "No VPN manager is configured, so Termix cannot raise a tunnel itself",
       });
     }
 
@@ -173,7 +173,7 @@ router.put("/profiles/:id", authenticateJWT, async (req, res: Response) => {
     // forbidden: whether it exists is not this user's business either. The
     // lookup is scoped to the owner, so it is already absent here.
     if (!existing) {
-      return res.status(404).json({ error: "Network profile not found" });
+      return res.status(404).json({ error: "VPN not found" });
     }
 
     const merged = { ...existing, ...req.body };
@@ -257,7 +257,7 @@ router.put(
       const repository = createCurrentVpnProfileRepository();
       const existing = await repository.findById(id, userId);
       if (!existing) {
-        return res.status(404).json({ error: "Network profile not found" });
+        return res.status(404).json({ error: "VPN not found" });
       }
       if (String(existing.kind) !== "managed") {
         // A declared tunnel is the operator's to run; Termix switching it would
@@ -273,8 +273,7 @@ router.put(
         ...(enabled ? {} : { lastState: "off", lastError: null }),
       } as never);
 
-      if (!updated)
-        return res.status(404).json({ error: "Network profile not found" });
+      if (!updated) return res.status(404).json({ error: "VPN not found" });
 
       if (enabled) {
         updated = await raiseAndRecord(updated as never);
@@ -305,7 +304,7 @@ router.delete("/profiles/:id", authenticateJWT, async (req, res: Response) => {
     const repository = createCurrentVpnProfileRepository();
     const existing = await repository.findById(id, userId);
     if (!existing) {
-      return res.status(404).json({ error: "Network profile not found" });
+      return res.status(404).json({ error: "VPN not found" });
     }
 
     /*

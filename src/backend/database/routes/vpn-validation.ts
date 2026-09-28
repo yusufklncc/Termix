@@ -98,8 +98,8 @@ export async function vpnProfileAssignmentError(
 
   const id = Number(vpnProfileId);
   if (!Number.isInteger(id) || id <= 0) {
-    return "Invalid network profile";
+    return "Invalid VPN";
   }
 
-  return (await findProfile(id, ownerId)) ? null : "Network profile not found";
+  return (await findProfile(id, ownerId)) ? null : "VPN not found";
 }

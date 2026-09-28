@@ -74,13 +74,13 @@ function profileToConfig(profile: VpnProfileRecord): SOCKS5Config {
      * is a different thing to be told.
      */
     if (profile.enabled === false) {
-      throw new Error("This host's network is switched off");
+      throw new Error("This host's VPN is switched off");
     }
 
     const manager = resolveNetManagerOptions();
     if (!manager) {
       throw new Error(
-        "This host's network is managed by Termix, but no network manager is configured",
+        "This host's VPN is managed by Termix, but no VPN manager is configured",
       );
     }
     return {
@@ -129,7 +129,7 @@ export async function resolveHostGateway(
      */
     if (!host.userId) {
       throw new Error(
-        "This host is assigned to a network profile, but its owner is unknown",
+        "This host is assigned to a VPN, but its owner is unknown",
       );
     }
 
@@ -144,9 +144,7 @@ export async function resolveHostGateway(
      * existed to prevent.
      */
     if (!profile) {
-      throw new Error(
-        "This host is assigned to a network profile that no longer exists",
-      );
+      throw new Error("This host is assigned to a VPN that no longer exists");
     }
 
     if (host.useSocks5) {
@@ -258,7 +256,7 @@ export function gatewayFailureMessage(
   error: unknown,
 ): string {
   const what = host.vpnProfileId
-    ? "Network connection failed"
+    ? "VPN connection failed"
     : "Proxy connection failed";
   return `${what}: ${getErrorMessage(error)}`;
 }

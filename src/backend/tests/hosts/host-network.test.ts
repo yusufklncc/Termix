@@ -114,13 +114,13 @@ describe("resolveHostGateway", () => {
 });
 
 describe("gatewayFailureMessage", () => {
-  it("names the network for a host reached through one", () => {
+  it("names the VPN for a host reached through one", () => {
     expect(
       gatewayFailureMessage(
         { vpnProfileId: 2, userId: "user-1" },
         new Error("ENOTFOUND"),
       ),
-    ).toBe("Network connection failed: ENOTFOUND");
+    ).toBe("VPN connection failed: ENOTFOUND");
   });
 
   it("still says proxy for a host that uses one", () => {
@@ -245,7 +245,7 @@ describe("a managed network's address", () => {
       resolveHostGateway({ vpnProfileId: 12, userId: "user-1" }, async () =>
         profile({ id: 12, kind: "managed" }),
       ),
-    ).rejects.toThrow(/no network manager is configured/i);
+    ).rejects.toThrow(/no VPN manager is configured/i);
   });
 });
 

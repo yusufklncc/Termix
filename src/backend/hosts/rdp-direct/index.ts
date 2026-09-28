@@ -272,7 +272,7 @@ wss.on("connection", async (ws: WebSocket, req) => {
     });
 
     if (gateway === undefined) {
-      fail(1011, "This host's network could not be resolved");
+      fail(1011, "This host's VPN could not be resolved");
       return;
     }
 
@@ -282,7 +282,7 @@ wss.on("connection", async (ws: WebSocket, req) => {
       // chose.
       fail(
         1011,
-        "This host uses both jump hosts and a network profile, which is not supported yet",
+        "This host uses both jump hosts and a VPN, which is not supported yet",
       );
       return;
     }
@@ -309,7 +309,7 @@ wss.on("connection", async (ws: WebSocket, req) => {
         });
         fail(
           1011,
-          `Failed to reach the host through its network profile: ${getErrorMessage(error)}`,
+          `Failed to reach the host through its VPN: ${getErrorMessage(error)}`,
         );
         return;
       }

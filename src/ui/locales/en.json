@@ -758,7 +758,7 @@
     "roleAdministrator": "Administrator",
     "roleUser": "User",
     "ai": "AI",
-    "networks": "Networks & VPNs"
+    "networks": "VPNs"
   },
   "hosts": {
     "hosts": "Hosts",
@@ -1893,13 +1893,13 @@
       "notAProtocol": "Unlike the others this is not a protocol Termix speaks, so there is no port to set and no render engine to choose. What it gets you is the rest of Termix around someone else's stream: folders, tags, favourites, permissions and split screen."
     },
     "vpn": {
-      "profile": "Network",
-      "profileDesc": "Reach this host through a network Termix is not otherwise on. The tunnel runs beside Termix, one per network, whether Termix raises it or you do.",
+      "profile": "VPN",
+      "profileDesc": "Reach this host through a VPN the Termix server is not otherwise on. Termix raises the tunnel; the host goes in through it.",
       "direct": "Direct connection",
-      "manage": "Manage networks",
-      "managerHint": "A network is either a tunnel Termix raises for you, or one you run yourself beside it. Either way a profile records how a host's traffic gets in.",
-      "none": "No networks yet.",
-      "add": "Add a network",
+      "manage": "Manage VPNs",
+      "managerHint": "Termix raises each VPN itself and keeps it in a network of its own, so two with overlapping addresses do not collide. The credentials are stored encrypted.",
+      "none": "No VPNs yet.",
+      "add": "Add VPN",
       "name": "Name",
       "gatewayHost": "Gateway address",
       "gatewayPort": "Gateway port",
@@ -1922,8 +1922,8 @@
       "authPassword": "VPN password",
       "trustedFingerprint": "Gateway key pin",
       "trustedFingerprintHint": "The gateway's public key digest. Leave empty unless its certificate is not publicly trusted.",
-      "managedHint": "Termix raises this tunnel itself through the network manager. The credentials are stored encrypted.",
-      "noManager": "No network manager is configured, so Termix cannot raise a tunnel itself.",
+      "managedHint": "Termix raises this tunnel itself through the VPN manager. The credentials are stored encrypted.",
+      "noManager": "No VPN manager is configured, so Termix cannot raise a tunnel itself.",
       "stateUp": "Connected",
       "stateConnecting": "Connecting",
       "stateDown": "Down",
@@ -1931,8 +1931,8 @@
       "switchOn": "Bring up",
       "switchOff": "Take down",
       "stateOff": "Switched off",
-      "switchFailed": "Could not switch the network",
-      "kindDeclaredLegacy": "This network's tunnel is run outside Termix. New networks are raised by Termix; this one is kept as it is."
+      "switchFailed": "Could not switch the VPN",
+      "kindDeclaredLegacy": "This VPN's tunnel is run outside Termix. New ones are raised by Termix; this one is kept as it is."
     }
   },
   "commandPalette": {

@@ -554,7 +554,7 @@ router.post(
           hostId,
         });
         return res.status(500).json({
-          error: "This host's network could not be resolved",
+          error: "This host's VPN could not be resolved",
         });
       }
 
@@ -564,7 +564,7 @@ router.post(
         // chose.
         return res.status(400).json({
           error:
-            "This host uses both jump hosts and a network profile, which is not supported yet",
+            "This host uses both jump hosts and a VPN, which is not supported yet",
         });
       }
 
@@ -678,7 +678,7 @@ router.post(
           // network it goes through is down" send the operator to different
           // places.
           return res.status(500).json({
-            error: `Failed to reach the host through its network profile: ${getErrorMessage(tunnelError)}`,
+            error: `Failed to reach the host through its VPN: ${getErrorMessage(tunnelError)}`,
           });
         }
       }

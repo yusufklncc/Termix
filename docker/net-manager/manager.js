@@ -274,56 +274,14 @@ async function resolveGatewayIps(host) {
   return records.map((record) => record.address);
 }
 
-/**
- * One provider for now, deliberately: Fortinet over openconnect, because it
- * is the only gateway this can be measured against. The shape a second one
- * has to fit is visible from here -- a command, an interface name, and what
- * it needs on stdin.
- */
-function buildProviderCommand(profile, credentials, gatewayIps) {
-  if (profile.provider !== "fortinet") {
-    throw new Error(`unsupported provider: ${profile.provider}`);
-  }
-  const host = profile.serverHost;
-  const args = [
-    "--protocol=fortinet",
-    "--user",
-    credentials.username,
-    "--passwd-on-stdin",
-    "--interface",
-    "tun0",
-    "--non-inter",
-    // The namespace has no resolver of its own, and the name is kept because
-    // the certificate is issued to it -- so the address is handed over
-    // instead, having been looked up out here where resolution works.
-    ...gatewayIps.flatMap((ip) => ["--resolve", `${host}:${ip}`]),
-    // Routes from the tunnel, but not its DNS; see the script for why.
-    "--script",
-    "/app/vpnc-script-no-dns",
-  ];
-  if (profile.trustedFingerprint) {
-    args.push(
-      "--servercert",
-      `pin-sha256:${String(profile.trustedFingerprint).replace(/^pin-sha256:/, "")}`,
-    );
-  }
-  args.push(`https://${host}:${profile.serverPort ?? 443}`);
-  return {
-    command: "openconnect",
-    args,
-    iface: "tun0",
-    stdin: `${credentials.password}\n`,
-  };
-}
-
 /*
  * A refusal is not a failure to retry.
  *
- * A dropped tunnel is worth raising again; a password the gateway refused is
- * not. Trying it again cannot succeed, and a FortiGate counts the attempts --
- * which is how an account gets locked, and then stays locked, because the
- * next attempt arrives before the lockout lapses. With a doorway that raises
- * on demand this matters twice over: without it, every connection would be
+ * A dropped tunnel is worth raising again; a credential the gateway refused is
+ * not. Trying it again cannot succeed, and a gateway counts the attempts --
+ * which is how an account gets locked, and then stays locked, because the next
+ * attempt arrives before the lockout lapses. With a doorway that raises on
+ * demand this matters twice over: without it, every connection would be
  * another attempt.
  */
 function looksRefused(reason) {
@@ -341,6 +299,8 @@ function lastWords(said) {
   return interesting.slice(-2).join("; ");
 }
 
+/** Waits for an interface to appear inside the namespace, and gives up with
+ * the client's own words when the client dies first. */
 function waitForInterface(id, iface, vpnProcess, timeoutMs = 60000, said) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
@@ -368,6 +328,94 @@ function waitForInterface(id, iface, vpnProcess, timeoutMs = 60000, said) {
     tick();
   });
 }
+
+/**
+ * A provider raises a tunnel and says where its doorway is.
+ *
+ * The two that exist differ at every step, which is why this is a function
+ * each rather than a table of flags: openconnect needs a network namespace,
+ * makes a tun device and has microsocks put in front of it; tailscaled needs
+ * none of that, because it carries its own network stack and its own SOCKS
+ * server.
+ *
+ * What they agree on is the answer: the processes that make up the tunnel,
+ * and an address the doorway can hand connections to.
+ */
+
+/** Keeps the client's own words, which are usually the reason it failed. */
+function watcher() {
+  const said = [];
+  return {
+    said,
+    attach(proc) {
+      const remember = (chunk) => {
+        process.stderr.write(chunk);
+        for (const line of chunk.toString().split("\n")) {
+          const text = line.trim();
+          if (text) said.push(text);
+        }
+        if (said.length > 40) said.splice(0, said.length - 40);
+      };
+      proc.stdout?.on("data", remember);
+      proc.stderr?.on("data", remember);
+    },
+  };
+}
+
+async function raiseFortinet({ id, profile, credentials, watch, procs }) {
+  const { peer } = addresses(id);
+  const host = profile.serverHost;
+
+  // Named gateways have to resolve before the namespace's rules exist; this
+  // container's resolver is what answers, since the tunnel is not up yet.
+  const gatewayIps = await resolveGatewayIps(host);
+
+  const args = [
+    "--protocol=fortinet",
+    "--user",
+    credentials.username,
+    "--passwd-on-stdin",
+    "--interface",
+    "tun0",
+    "--non-inter",
+    // The namespace has no resolver of its own, and the name is kept because
+    // the certificate is issued to it -- so the address is handed over
+    // instead, having been looked up out here where resolution works.
+    ...gatewayIps.flatMap((ip) => ["--resolve", `${host}:${ip}`]),
+    // Routes from the tunnel, but not its DNS; see the script for why.
+    "--script",
+    "/app/vpnc-script-no-dns",
+  ];
+  if (profile.trustedFingerprint) {
+    args.push(
+      "--servercert",
+      `pin-sha256:${String(profile.trustedFingerprint).replace(/^pin-sha256:/, "")}`,
+    );
+  }
+  args.push(`https://${host}:${profile.serverPort ?? 443}`);
+
+  const vpn = spawn(...inNamespace(id, "openconnect", args), {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  watch.attach(vpn);
+  procs.push(vpn);
+  vpn.stdin.end(`${credentials.password}\n`);
+
+  await waitForInterface(id, "tun0", vpn, 60000, watch.said);
+  await applyStrictRoutes(id, "tun0", gatewayIps);
+
+  const socks = spawn(
+    ...inNamespace(id, "microsocks", ["-i", peer, "-p", "1080"]),
+    { stdio: ["ignore", "inherit", "inherit"] },
+  );
+  procs.push(socks);
+
+  return { upstream: { host: peer, port: 1080 } };
+}
+
+const PROVIDERS = {
+  fortinet: { needsNamespace: true, raise: raiseFortinet },
+};
 
 // ------------------------------------------------------------- lifecycle
 
@@ -422,65 +470,45 @@ async function raiseTunnel(id) {
 
   entry.raising = (async () => {
     const { profile, credentials } = entry;
-    await ensureForwarding();
-    const { peer } = await createNamespace(id);
+    const provider = PROVIDERS[profile.provider];
+    if (!provider) {
+      const reason = `unsupported provider: ${profile.provider}`;
+      entry.error = reason;
+      throw new Error(reason);
+    }
 
-    const gatewayIps = await resolveGatewayIps(profile.serverHost);
-    const { command, args, iface, stdin } = buildProviderCommand(
-      profile,
-      credentials,
-      gatewayIps,
-    );
+    if (provider.needsNamespace) {
+      await ensureForwarding();
+      await createNamespace(id);
+    }
 
-    /*
-     * The client's own words are kept, because they are the answer. "The VPN
-     * client exited" tells an operator nothing; "authentication failed" tells
-     * them what to change.
-     */
-    const said = [];
-    const remember = (chunk) => {
-      process.stderr.write(chunk);
-      for (const line of chunk.toString().split("\n")) {
-        const text = line.trim();
-        if (text) said.push(text);
-      }
-      if (said.length > 40) said.splice(0, said.length - 40);
-    };
-
+    const watch = watcher();
     const procs = [];
     try {
-      const vpn = spawn(...inNamespace(id, command, args), {
-        stdio: ["pipe", "pipe", "pipe"],
+      const { upstream } = await provider.raise({
+        id,
+        profile,
+        credentials,
+        watch,
+        procs,
       });
-      vpn.stdout.on("data", remember);
-      vpn.stderr.on("data", remember);
-      procs.push(vpn);
-      vpn.stdin.end(stdin);
-      vpn.on("exit", (code) => {
+
+      // The first process is the tunnel itself; when it goes, so does the
+      // tunnel -- whatever is going through it must not leave by this
+      // container's own route instead.
+      procs[0]?.on("exit", (code) => {
         const current = networks.get(id);
-        if (!current || current.tunnel?.procs[0] !== vpn) return;
+        if (!current || current.tunnel?.procs[0] !== procs[0]) return;
         log(`VPN ${id}: tunnel ended (${code})`);
-        // Whatever is going through it now has nowhere to go, which is the
-        // point: it must not leave by this container's own route instead.
         void dropTunnel(id);
       });
 
-      await waitForInterface(id, iface, vpn, 60000, said);
-      await applyStrictRoutes(id, iface, gatewayIps);
-
-      const socks = spawn(
-        ...inNamespace(id, "microsocks", ["-i", peer, "-p", "1080"]),
-        { stdio: ["ignore", "inherit", "inherit"] },
-      );
-      procs.push(socks);
-
       // Spawned is not listening. The connection that triggered this raise is
-      // waiting to be handed to it, and handing it over a moment too early
-      // gets a refusal the caller sees as the socket closing -- which is what
-      // "try again and it works" looked like from the outside.
-      await waitForDoorwayUpstream(peer);
+      // waiting to be handed over, and handing it over a moment too early
+      // gets a refusal the caller sees as the socket closing.
+      await waitForDoorwayUpstream(upstream);
 
-      entry.tunnel = { procs, ns: nsName(id) };
+      entry.tunnel = { procs, upstream, ns: nsName(id) };
       entry.error = null;
       log(`VPN ${id} is up`);
     } catch (error) {
@@ -491,7 +519,7 @@ async function raiseTunnel(id) {
           /* already gone */
         }
       }
-      await destroyNamespace(id);
+      if (provider.needsNamespace) await destroyNamespace(id);
       const reason = String(error.message ?? error);
       entry.error = reason;
       entry.refused = looksRefused(reason);
@@ -508,11 +536,11 @@ async function raiseTunnel(id) {
 
 /** Poll until the namespace's SOCKS server accepts, so the waiting
  * connection is handed to something that answers. */
-function waitForDoorwayUpstream(peer, timeoutMs = 10000) {
+function waitForDoorwayUpstream(upstream, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
     const attempt = () => {
-      const probe = net.connect(1080, peer);
+      const probe = net.connect(upstream.port, upstream.host);
       const retry = () => {
         probe.destroy();
         if (Date.now() > deadline) {
@@ -545,7 +573,9 @@ async function dropTunnel(id) {
       /* already gone */
     }
   }
-  await destroyNamespace(id);
+  if (PROVIDERS[entry.profile?.provider]?.needsNamespace) {
+    await destroyNamespace(id);
+  }
   log(`VPN ${id} taken down`);
 }
 
@@ -570,7 +600,6 @@ function noteIdle(id) {
  */
 function openDoorway(id) {
   const port = DOOR_BASE + id;
-  const { peer } = addresses(id);
 
   const server = net.createServer(async (client) => {
     const entry = networks.get(id);
@@ -597,7 +626,12 @@ function openDoorway(id) {
       return client.destroy();
     }
 
-    const upstream = net.connect(1080, peer);
+    // Where to hand it is the provider's answer, not this function's
+    // arithmetic: one puts its doorway in a namespace, the other in its own
+    // process.
+    const to = networks.get(id)?.tunnel?.upstream;
+    if (!to) return client.destroy();
+    const upstream = net.connect(to.port, to.host);
     const drop = () => {
       client.destroy();
       upstream.destroy();

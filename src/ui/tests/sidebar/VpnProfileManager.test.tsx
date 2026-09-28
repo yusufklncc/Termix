@@ -120,3 +120,60 @@ describe("what the manager last said", () => {
     expect(screen.queryByText("hosts.vpn.stateUp")).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Each provider is asked for what it uses and nothing else.
+ *
+ * The failure this guards is the one this fork keeps finding: a field that
+ * belongs to one kind of thing shown, or sent, for another. Here it would
+ * mean asking a mesh network for a gateway address it has no use for, or
+ * hiding the key without which it cannot sign in at all.
+ */
+describe("a network that is signed in to, not dialled", () => {
+  const mesh = {
+    id: "2",
+    name: "Mesh",
+    kind: "managed",
+    gatewayType: "socks5",
+    gatewayHost: "termix-netmgr",
+    gatewayPort: 20002,
+    hasGatewayPassword: false,
+  } as VpnProfile;
+
+  const edit = () => {
+    const pencil = document.querySelector("svg.lucide-pencil");
+    fireEvent.click(pencil!.closest("button")!);
+  };
+
+  it("asks a netbird network for a setup key, in its own words", () => {
+    setup([{ ...mesh, provider: "netbird" }]);
+    edit();
+
+    expect(screen.getByText("hosts.vpn.setupKey")).toBeInTheDocument();
+    expect(screen.getByText("hosts.vpn.managementServer")).toBeInTheDocument();
+    expect(
+      screen.queryByText("hosts.vpn.authUsername"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("hosts.vpn.serverPort")).not.toBeInTheDocument();
+  });
+
+  it("asks a tailnet for an auth key, in its own", () => {
+    setup([{ ...mesh, provider: "tailscale" }]);
+    edit();
+
+    expect(screen.getByText("hosts.vpn.authKey")).toBeInTheDocument();
+    expect(screen.getByText("hosts.vpn.loginServer")).toBeInTheDocument();
+    expect(
+      screen.queryByText("hosts.vpn.authUsername"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("still asks a gateway for an address and an account", () => {
+    setup([{ ...mesh, provider: "fortinet" }]);
+    edit();
+
+    expect(screen.getByText("hosts.vpn.serverHost")).toBeInTheDocument();
+    expect(screen.getByText("hosts.vpn.authUsername")).toBeInTheDocument();
+    expect(screen.queryByText("hosts.vpn.setupKey")).not.toBeInTheDocument();
+  });
+});

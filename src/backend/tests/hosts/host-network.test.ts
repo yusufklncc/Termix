@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   gatewayFailureMessage,
+  hostAddressIsInsideNetwork,
   hostNetworkFields,
   resolveHostGateway,
 } from "../../hosts/host-network.js";
@@ -270,5 +271,30 @@ describe("a VPN that is disabled", () => {
     ).resolves.toMatchObject({ socks5Port: 20004 });
     delete process.env.NET_MANAGER_TOKEN;
     delete process.env.NET_MANAGER_URL;
+  });
+});
+
+/**
+ * Whether the address means anything out here.
+ *
+ * A mesh host is named in its network's terms, so resolving it on this
+ * machine asks a resolver that has never heard of it and fails before the
+ * tunnel that would have answered exists. The name belongs in the SOCKS5
+ * CONNECT instead.
+ */
+describe("an address that only exists inside a network", () => {
+  it("says so for a host on a VPN", () => {
+    expect(hostAddressIsInsideNetwork({ vpnProfileId: 3 })).toBe(true);
+  });
+
+  it("says so for a host behind a proxy", () => {
+    expect(hostAddressIsInsideNetwork({ useSocks5: true })).toBe(true);
+  });
+
+  it("says nothing of the kind for a host reached directly", () => {
+    expect(hostAddressIsInsideNetwork({})).toBe(false);
+    expect(
+      hostAddressIsInsideNetwork({ vpnProfileId: null, useSocks5: false }),
+    ).toBe(false);
   });
 });

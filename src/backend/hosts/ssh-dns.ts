@@ -65,6 +65,13 @@ export async function resolveSshConnectConfigHost<
 > {
   if (typeof config.host !== "string") return config;
 
+  /*
+   * Already going through something else -- a jump host's forwarded stream or
+   * a proxy socket. The address is that side's to resolve, and most callers
+   * attach the socket before getting here.
+   */
+  if ((config as { sock?: unknown }).sock) return config;
+
   const originalHost = config.host;
   const resolution = await resolveHostForSshConnect(
     originalHost,

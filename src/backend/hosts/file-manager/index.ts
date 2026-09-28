@@ -71,6 +71,7 @@ import { applyCACertIfPresent } from "./ca-cert-auth.js";
 import { listenOnServicePort } from "../../utils/service-listen.js";
 import {
   gatewayFailureMessage,
+  hostAddressIsInsideNetwork,
   hostNetworkFields,
   resolveHostGateway,
 } from "../host-network.js";
@@ -283,7 +284,11 @@ async function buildDedicatedTransferConnectConfig(
       compress: ["none", "zlib@openssh.com", "zlib"],
     },
   };
-  await resolveSshConnectConfigHost(config);
+  // The jump host and the proxy are attached further down, so a name that
+  // only exists inside the host's network has nothing here to resolve it.
+  if (!hostAddressIsInsideNetwork(host)) {
+    await resolveSshConnectConfigHost(config);
+  }
 
   const authType = host.authType;
 

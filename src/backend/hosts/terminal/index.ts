@@ -76,6 +76,7 @@ import {
 import { hostSessionStatus } from "../host-session-status.js";
 import {
   gatewayFailureMessage,
+  hostAddressIsInsideNetwork,
   hostNetworkFields,
   resolveHostGateway,
 } from "../host-network.js";
@@ -1855,13 +1856,18 @@ wss.on("connection", async (ws: WebSocket, req) => {
     );
 
     let connectHost = ip;
-    if (connectsViaJumpHosts) {
-      // The target is only reachable through the jump host's network (e.g. a
-      // VPN-only address), so DNS must be resolved there, not on this host.
+    const addressIsInsideNetwork = hostAddressIsInsideNetwork(hostConfig);
+    if (connectsViaJumpHosts || addressIsInsideNetwork) {
+      // The target is only reachable through the jump host's or the VPN's
+      // network (e.g. a mesh name), so the address must be resolved there,
+      // not on this host. The gateway is built further down, long after this
+      // point, so there is nothing here that could have answered.
       sendLog(
         "dns",
         "info",
-        `Skipping local address resolution of ${ip} (resolved by jump host)`,
+        `Skipping local address resolution of ${ip} (resolved by ${
+          connectsViaJumpHosts ? "jump host" : "the host's network"
+        })`,
       );
     } else {
       sendLog("dns", "info", `Starting address resolution of ${ip}`);

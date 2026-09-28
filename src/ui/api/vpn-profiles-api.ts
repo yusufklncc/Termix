@@ -64,3 +64,17 @@ export async function deleteVpnProfile(
     throw handleApiError(error, "delete network profile");
   }
 }
+
+export async function setVpnProfileEnabled(
+  id: number,
+  enabled: boolean,
+): Promise<Record<string, unknown>> {
+  try {
+    const response = await authApi.put(`/vpn/profiles/${id}/enabled`, {
+      enabled,
+    });
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error, "switch the network");
+  }
+}

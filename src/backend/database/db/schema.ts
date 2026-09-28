@@ -1083,6 +1083,14 @@ export const vpnProfiles = sqliteTable("vpn_profiles", {
   authPassword: text("auth_password"),
   trustedFingerprint: text("trusted_fingerprint"),
   extraConfig: text("extra_config"),
+  /**
+   * Switched off by the operator, rather than failed.
+   *
+   * A tunnel that is up is a live path from this server into someone else's
+   * network, whether anyone is using it or not. Taking one down should not
+   * mean deleting the profile and its credentials.
+   */
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   // Last word from the manager, so the editor can say more than "saved".
   lastState: text("last_state"),
   lastError: text("last_error"),

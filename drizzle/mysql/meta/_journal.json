@@ -190,6 +190,13 @@
       "when": 1790540525596,
       "tag": "0026_left_thunderbird",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "5",
+      "when": 1790589119999,
+      "tag": "0027_luxuriant_the_fury",
+      "breakpoints": true
     }
   ]
 }

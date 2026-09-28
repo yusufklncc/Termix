@@ -248,3 +248,27 @@ describe("a managed network's address", () => {
     ).rejects.toThrow(/no network manager is configured/i);
   });
 });
+
+describe("a network that is switched off", () => {
+  it("says so, rather than failing as an empty address", async () => {
+    process.env.NET_MANAGER_TOKEN = "s";
+    await expect(
+      resolveHostGateway({ vpnProfileId: 4, userId: "user-1" }, async () =>
+        profile({ id: 4, kind: "managed", enabled: false }),
+      ),
+    ).rejects.toThrow(/switched off/i);
+    delete process.env.NET_MANAGER_TOKEN;
+  });
+
+  it("still resolves one that is on", async () => {
+    process.env.NET_MANAGER_TOKEN = "s";
+    process.env.NET_MANAGER_URL = "netmgr:3392";
+    await expect(
+      resolveHostGateway({ vpnProfileId: 4, userId: "user-1" }, async () =>
+        profile({ id: 4, kind: "managed", enabled: true }),
+      ),
+    ).resolves.toMatchObject({ socks5Port: 20004 });
+    delete process.env.NET_MANAGER_TOKEN;
+    delete process.env.NET_MANAGER_URL;
+  });
+});

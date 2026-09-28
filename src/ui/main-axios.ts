@@ -2138,6 +2138,7 @@ export {
   createVpnProfile,
   updateVpnProfile,
   deleteVpnProfile,
+  setVpnProfileEnabled,
   type VpnProfilePayload,
 } from "@/api/vpn-profiles-api";
 

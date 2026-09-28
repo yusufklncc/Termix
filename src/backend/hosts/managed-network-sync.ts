@@ -28,6 +28,8 @@ import { getErrorMessage } from "../utils/error-message.js";
  * only thing that can change the answer.
  */
 function worthRaising(profile: VpnProfileRecord): boolean {
+  // Switched off by the operator is not a state to recover from.
+  if (profile.enabled === false) return false;
   return profile.lastState !== "refused";
 }
 

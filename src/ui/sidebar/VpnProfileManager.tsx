@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Pencil, Plus, Trash2, X } from "lucide-react";
+import { Pencil, Play, Plus, Square, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { getErrorMessage } from "../lib/error-message.js";
@@ -10,6 +10,7 @@ import {
   createVpnProfile,
   updateVpnProfile,
   deleteVpnProfile,
+  setVpnProfileEnabled,
   type VpnProfilePayload,
 } from "@/main-axios";
 import type { VpnProfile } from "@/types/ui-types";
@@ -78,7 +79,16 @@ function toForm(profile: VpnProfile): FormState {
  * nobody to report, which is why it shows nothing rather than "unknown". */
 function StateBadge({ profile }: { profile: VpnProfile }) {
   const { t } = useTranslation();
-  if (profile.kind !== "managed" || !profile.lastState) return null;
+  if (profile.kind !== "managed") return null;
+  if (profile.enabled !== false && !profile.lastState) return null;
+
+  if (profile.enabled === false) {
+    return (
+      <span className="text-[10px] text-muted-foreground">
+        {t("hosts.vpn.stateOff")}
+      </span>
+    );
+  }
 
   const labels: Record<string, string> = {
     up: t("hosts.vpn.stateUp"),
@@ -142,6 +152,15 @@ export function VpnProfileManager({
       toast.error(getErrorMessage(error, t("hosts.vpn.saveFailed")));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSwitch = async (profile: VpnProfile) => {
+    try {
+      await setVpnProfileEnabled(Number(profile.id), profile.enabled === false);
+      onChanged();
+    } catch (error) {
+      toast.error(getErrorMessage(error, t("hosts.vpn.switchFailed")));
     }
   };
 
@@ -218,6 +237,25 @@ export function VpnProfileManager({
               <StateBadge profile={profile} />
             </div>
             <div className="flex items-center gap-1 shrink-0">
+              {profile.kind === "managed" && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2"
+                  title={
+                    profile.enabled === false
+                      ? t("hosts.vpn.switchOn")
+                      : t("hosts.vpn.switchOff")
+                  }
+                  onClick={() => handleSwitch(profile)}
+                >
+                  {profile.enabled === false ? (
+                    <Play className="size-3" />
+                  ) : (
+                    <Square className="size-3" />
+                  )}
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="sm"

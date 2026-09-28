@@ -1,0 +1,1 @@
+ALTER TABLE "vpn_profiles" ADD COLUMN "enabled" boolean DEFAULT true NOT NULL;

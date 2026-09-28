@@ -215,7 +215,9 @@ router.put("/profiles/:id", authenticateJWT, async (req, res: Response) => {
     // This is also the only thing that clears a refusal -- the sync leaves
     // those alone, because retrying a password the gateway rejected locks the
     // account rather than getting in.
-    if (managed && updated) {
+    // A switched-off network stays down when it is edited. The operator took
+    // it down deliberately; saving a name should not put it back.
+    if (managed && updated && updated.enabled !== false) {
       updated = await raiseAndRecord(updated as never);
     }
 
@@ -229,6 +231,68 @@ router.put("/profiles/:id", authenticateJWT, async (req, res: Response) => {
     res.status(500).json({ error: "Failed to update the network profile" });
   }
 });
+
+/**
+ * Switched on or off by hand.
+ *
+ * A tunnel that is up is a live path from this server into someone else's
+ * network, used or not. Taking one down should not mean deleting the profile
+ * and re-entering its credentials, and the sync must not undo the decision --
+ * which is why this is stored rather than just acted on.
+ */
+router.put(
+  "/profiles/:id/enabled",
+  authenticateJWT,
+  async (req, res: Response) => {
+    const userId = (req as AuthenticatedRequest).userId;
+    const id = Number.parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ error: "Invalid profile id" });
+    }
+    if (typeof req.body?.enabled !== "boolean") {
+      return res.status(400).json({ error: "enabled must be true or false" });
+    }
+
+    try {
+      const repository = createCurrentVpnProfileRepository();
+      const existing = await repository.findById(id, userId);
+      if (!existing) {
+        return res.status(404).json({ error: "Network profile not found" });
+      }
+      if (String(existing.kind) !== "managed") {
+        // A declared tunnel is the operator's to run; Termix switching it would
+        // be a promise it cannot keep.
+        return res.status(400).json({
+          error: "Only a network Termix raises can be switched from here",
+        });
+      }
+
+      const enabled = req.body.enabled as boolean;
+      let updated = await repository.updateById(id, userId, {
+        enabled,
+        ...(enabled ? {} : { lastState: "off", lastError: null }),
+      } as never);
+
+      if (!updated)
+        return res.status(404).json({ error: "Network profile not found" });
+
+      if (enabled) {
+        updated = await raiseAndRecord(updated as never);
+      } else {
+        await dropManagedNetwork(id);
+      }
+
+      res.json(toResponse(updated));
+    } catch (error) {
+      authLogger.error("Failed to switch a VPN profile", error, {
+        operation: "vpn_profile_switch",
+        userId,
+        profileId: id,
+      });
+      res.status(500).json({ error: "Failed to switch the network" });
+    }
+  },
+);
 
 router.delete("/profiles/:id", authenticateJWT, async (req, res: Response) => {
   const userId = (req as AuthenticatedRequest).userId;

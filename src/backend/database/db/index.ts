@@ -1999,6 +1999,7 @@ const migrateSchema = () => {
           auth_password TEXT,
           trusted_fingerprint TEXT,
           extra_config TEXT,
+          enabled INTEGER NOT NULL DEFAULT 1,
           last_state TEXT,
           last_error TEXT,
           created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -2028,6 +2029,7 @@ const migrateSchema = () => {
     { column: "auth_password", sql: "ALTER TABLE vpn_profiles ADD COLUMN auth_password TEXT" },
     { column: "trusted_fingerprint", sql: "ALTER TABLE vpn_profiles ADD COLUMN trusted_fingerprint TEXT" },
     { column: "extra_config", sql: "ALTER TABLE vpn_profiles ADD COLUMN extra_config TEXT" },
+    { column: "enabled", sql: "ALTER TABLE vpn_profiles ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1" },
     { column: "last_state", sql: "ALTER TABLE vpn_profiles ADD COLUMN last_state TEXT" },
     { column: "last_error", sql: "ALTER TABLE vpn_profiles ADD COLUMN last_error TEXT" },
   ];

@@ -1926,7 +1926,11 @@
       "stateUp": "Connected",
       "stateConnecting": "Connecting",
       "stateDown": "Down",
-      "stateError": "Failed"
+      "stateError": "Failed",
+      "switchOn": "Bring up",
+      "switchOff": "Take down",
+      "stateOff": "Switched off",
+      "switchFailed": "Could not switch the network"
     }
   },
   "commandPalette": {

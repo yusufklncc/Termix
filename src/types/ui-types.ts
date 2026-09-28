@@ -273,6 +273,8 @@ export type VpnProfile = {
   authUsername?: string | null;
   trustedFingerprint?: string | null;
   hasAuthPassword?: boolean;
+  /** Switched off by the operator, rather than failed. */
+  enabled?: boolean;
   lastState?: string | null;
   lastError?: string | null;
 };

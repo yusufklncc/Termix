@@ -66,6 +66,17 @@ function profileToConfig(profile: VpnProfileRecord): SOCKS5Config {
    * send a customer's traffic to another customer's doorway.
    */
   if (profile.kind === "managed") {
+    /*
+     * Switched off on purpose.
+     *
+     * The doorway is gone, so this would fail anyway -- but as "nothing is
+     * listening", which reads like a fault. Someone turned it off, and that
+     * is a different thing to be told.
+     */
+    if (profile.enabled === false) {
+      throw new Error("This host's network is switched off");
+    }
+
     const manager = resolveNetManagerOptions();
     if (!manager) {
       throw new Error(

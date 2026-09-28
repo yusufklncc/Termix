@@ -69,6 +69,19 @@ describe("putting managed networks back", () => {
     expect(raiseManagedNetwork).not.toHaveBeenCalled();
   });
 
+  it("leaves one the operator switched off alone", async () => {
+    listManaged.mockResolvedValue([
+      profile({ enabled: false, lastState: "off" }),
+    ]);
+    listManagedNetworks.mockResolvedValue([]);
+
+    await expect(syncManagedNetworks()).resolves.toMatchObject({
+      raised: 0,
+      skipped: 1,
+    });
+    expect(raiseManagedNetwork).not.toHaveBeenCalled();
+  });
+
   it("does retry one that failed for another reason", async () => {
     listManaged.mockResolvedValue([profile({ lastState: "error" })]);
     listManagedNetworks.mockResolvedValue([]);

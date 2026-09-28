@@ -117,7 +117,8 @@ export function VpnProfileManager({
 }: {
   profiles: VpnProfile[];
   onChanged: () => void;
-  onClose: () => void;
+  /** Absent where this is a panel of its own rather than a card inside a form. */
+  onClose?: () => void;
 }) {
   const { t } = useTranslation();
   const [form, setForm] = useState<FormState | null>(null);
@@ -202,14 +203,16 @@ export function VpnProfileManager({
         <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
           {t("hosts.vpn.manage")}
         </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 px-2"
-          onClick={onClose}
-        >
-          <X className="size-3.5" />
-        </Button>
+        {onClose && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2"
+            onClick={onClose}
+          >
+            <X className="size-3.5" />
+          </Button>
+        )}
       </div>
 
       <p className="text-[10px] text-muted-foreground">

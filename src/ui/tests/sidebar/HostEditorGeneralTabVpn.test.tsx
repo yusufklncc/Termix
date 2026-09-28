@@ -38,11 +38,19 @@ function setup(setField = vi.fn()) {
 afterEach(cleanup);
 
 describe("host editor, network selector", () => {
+  it("offers the choice and nothing else: a network belongs to every host on it", () => {
+    getVpnProfiles.mockResolvedValue([{ id: 1, name: "TIM" }]);
+    setup();
+    // Making, switching and deleting live in the Networks panel. Doing them
+    // here made a shared thing look like this host's own setting.
+    expect(screen.queryByText("hosts.vpn.manage")).not.toBeInTheDocument();
+  });
+
   it("renders when the profile list arrives", async () => {
     getVpnProfiles.mockResolvedValue([{ id: 1, name: "TIM" }]);
     setup();
     await waitFor(() =>
-      expect(screen.getByText("hosts.vpn.manage")).toBeInTheDocument(),
+      expect(screen.getByText("hosts.vpn.profile")).toBeInTheDocument(),
     );
   });
 
@@ -52,7 +60,7 @@ describe("host editor, network selector", () => {
     getVpnProfiles.mockResolvedValue("<!doctype html>" as never);
     setup();
     await waitFor(() =>
-      expect(screen.getByText("hosts.vpn.manage")).toBeInTheDocument(),
+      expect(screen.getByText("hosts.vpn.profile")).toBeInTheDocument(),
     );
   });
 });

@@ -209,6 +209,7 @@ import { resolveHostTabType } from "@/lib/host-connection-tabs";
 import { changeAppLanguage, consumeLoginLanguage } from "@/i18n/i18n";
 import { quickConnectHostToPayload } from "@/sidebar/quick-connect-host";
 import { buildHostTree } from "@/sidebar/build-host-tree";
+import { NetworksPanel } from "@/sidebar/NetworksPanel";
 import {
   assignTabsToSplit,
   createSplitConfig,
@@ -2525,6 +2526,12 @@ export function AppShell({
               />
             </div>
           </>
+        )}
+
+        {railView === "networks" && (
+          <div className="flex flex-col flex-1 min-h-0">
+            <NetworksPanel />
+          </div>
         )}
 
         {railView === "port-forwarding" && (

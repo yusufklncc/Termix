@@ -21,6 +21,7 @@ import { useAiAvailability } from "@/hooks/use-ai-availability";
 export type RailView =
   | "hosts"
   | "credentials"
+  | "networks"
   | "port-forwarding"
   | "sftp"
   | "termix-id"

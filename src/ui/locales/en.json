@@ -757,7 +757,8 @@
     "collapseSideMenu": "Collapse Menu",
     "roleAdministrator": "Administrator",
     "roleUser": "User",
-    "ai": "AI"
+    "ai": "AI",
+    "networks": "Networks & VPNs"
   },
   "hosts": {
     "hosts": "Hosts",

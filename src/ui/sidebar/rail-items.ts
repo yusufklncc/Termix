@@ -18,6 +18,7 @@ import {
   TerminalSquare,
   Usb,
   User,
+  Waypoints,
   Workflow,
   Zap,
   Presentation,
@@ -69,6 +70,18 @@ export const RAIL_ITEMS: RailItemDef[] = [
     id: "credentials",
     icon: KeyRound,
     labelKey: "nav.credentials",
+  },
+  /**
+   * A network belongs to no single host.
+   *
+   * It used to be managed from inside the host editor, which made a shared
+   * thing look like a host's own setting -- switching one off there switched
+   * it off for every host that uses it, with nothing on screen to say so.
+   */
+  {
+    id: "networks",
+    icon: Waypoints,
+    labelKey: "nav.networks",
     separatorAfter: true,
   },
   {

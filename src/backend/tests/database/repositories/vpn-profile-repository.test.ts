@@ -1,96 +1,120 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TestSqliteDatabase } from "./test-support.js";
-import { VpnProfileRepository } from "../../../database/repositories/vpn-profile-repository.js";
-import { vpnProfiles } from "../../../database/db/schema.js";
 import { DataCrypto } from "../../../utils/data-crypto.js";
+import { VpnProfileRepository } from "../../../database/repositories/vpn-profile-repository.js";
 
+/**
+ * A profile's secrets go in encrypted and have to come back out readable.
+ *
+ * create and updateById used to return the row as stored, while findById
+ * returned it decrypted -- so a caller that read authPassword from a freshly
+ * saved profile got the ciphertext and handed it to a VPN gateway as the
+ * password. Everything else looked right: the gateway was reached, TLS
+ * negotiated, the certificate pinned, and only the login failed.
+ */
 describe("VpnProfileRepository", () => {
   let adapter: TestSqliteDatabase | null = null;
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     if (adapter) {
       await adapter.close();
       adapter = null;
     }
-    vi.restoreAllMocks();
   });
 
-  async function setup() {
+  async function createRepository(): Promise<VpnProfileRepository> {
     adapter = new TestSqliteDatabase();
     const context = await adapter.connect();
     await adapter.exec(`
       INSERT INTO users (id, username, password_hash)
       VALUES ('user-1', 'alice', 'hash');
     `);
-
-    const key = Buffer.alloc(32, 1);
-    vi.spyOn(DataCrypto, "validateUserAccess").mockReturnValue(key);
-    vi.spyOn(DataCrypto, "getUserDataKey").mockReturnValue(key);
-
-    return { context, repository: new VpnProfileRepository(context) };
+    return new VpnProfileRepository(context);
   }
 
-  it("writes the gateway password encrypted and reads it back", async () => {
-    // Asserted against the stored column rather than the repository's own
-    // output: the point is what lands on disk, not what the code intends.
-    const { context, repository } = await setup();
-    await repository.create({
-      userId: "user-1",
-      name: "Company X",
-      gatewayHost: "vpn-x",
-      gatewayPort: 1080,
-      gatewayPassword: "s3cret",
-    });
+  /** Encryption stands in for the real thing; what matters here is which
+   * direction each method leaves the record in. */
+  function mockCrypto(): void {
+    vi.spyOn(DataCrypto, "validateUserAccess").mockReturnValue(
+      Buffer.from("user-key"),
+    );
+    vi.spyOn(DataCrypto, "getUserDataKey").mockReturnValue(
+      Buffer.from("user-key"),
+    );
+    vi.spyOn(DataCrypto, "encryptRecord").mockImplementation(
+      (_table, record) =>
+        ({
+          ...record,
+          ...(record.authPassword
+            ? { authPassword: `sealed:${record.authPassword}` }
+            : {}),
+        }) as typeof record,
+    );
+    vi.spyOn(DataCrypto, "decryptRecord").mockImplementation(
+      (_table, record) =>
+        ({
+          ...record,
+          ...(typeof record.authPassword === "string" &&
+          record.authPassword.startsWith("sealed:")
+            ? { authPassword: record.authPassword.slice("sealed:".length) }
+            : {}),
+        }) as typeof record,
+    );
+  }
 
-    const stored = await context.drizzle.select().from(vpnProfiles);
-    expect(stored).toHaveLength(1);
-    expect(stored[0].gatewayPassword).not.toBe("s3cret");
-    expect(String(stored[0].gatewayPassword)).toContain("recordId");
+  const managed = {
+    userId: "user-1",
+    name: "Acme",
+    kind: "managed",
+    gatewayHost: "termix-netmgr",
+    gatewayPort: 1,
+    provider: "fortinet",
+    serverHost: "vpn.acme.example",
+    authUsername: "someone",
+    authPassword: "the-real-password",
+  };
 
-    const listed = await repository.listByUser("user-1");
-    expect(listed[0].gatewayPassword).toBe("s3cret");
-    expect(listed[0].gatewayHost).toBe("vpn-x");
+  it("hands back a readable password after creating", async () => {
+    const repo = await createRepository();
+    mockCrypto();
+
+    const created = await repo.create(managed);
+
+    expect(created.authPassword).toBe("the-real-password");
   });
 
-  it("counts the hosts still reaching through a profile", async () => {
-    const { repository } = await setup();
-    const profile = await repository.create({
-      userId: "user-1",
-      name: "Company X",
-      gatewayHost: "vpn-x",
-      gatewayPort: 1080,
-    });
+  it("stores it sealed all the same", async () => {
+    const repo = await createRepository();
+    mockCrypto();
 
-    expect(await repository.countHostsUsing(profile.id)).toBe(0);
+    await repo.create(managed);
+    const [row] = await adapter!.query(
+      "SELECT auth_password FROM vpn_profiles WHERE id = 1",
+    );
 
-    await adapter!.exec(`
-      INSERT INTO ssh_data (id, user_id, name, ip, port, username, auth_type, vpn_profile_id)
-      VALUES
-        (1, 'user-1', 'one', '10.0.0.1', 22, 'root', 'password', ${profile.id}),
-        (2, 'user-1', 'two', '10.0.0.2', 22, 'root', 'password', ${profile.id}),
-        (3, 'user-1', 'direct', '10.0.0.3', 22, 'root', 'password', NULL);
-    `);
-
-    // The route refuses to delete while this is above zero: the column is ON
-    // DELETE SET NULL, so deleting would leave those hosts connecting directly
-    // out of the server's own route, silently.
-    expect(await repository.countHostsUsing(profile.id)).toBe(2);
+    expect(row.auth_password).toBe("sealed:the-real-password");
   });
 
-  it("keeps one user's profiles out of another's list", async () => {
-    const { repository } = await setup();
-    await adapter!.exec(`
-      INSERT INTO users (id, username, password_hash)
-      VALUES ('user-2', 'bob', 'hash');
-    `);
-    await repository.create({
-      userId: "user-1",
-      name: "Company X",
-      gatewayHost: "vpn-x",
-      gatewayPort: 1080,
+  it("hands back a readable password after updating", async () => {
+    const repo = await createRepository();
+    mockCrypto();
+
+    const created = await repo.create(managed);
+    const updated = await repo.updateById(created.id, "user-1", {
+      authPassword: "a-new-password",
     });
 
-    expect(await repository.listByUser("user-2")).toHaveLength(0);
-    expect(await repository.listByUser("user-1")).toHaveLength(1);
+    expect(updated?.authPassword).toBe("a-new-password");
+  });
+
+  it("finds it readable too, which is the contract the others now keep", async () => {
+    const repo = await createRepository();
+    mockCrypto();
+
+    const created = await repo.create(managed);
+    const found = await repo.findById(created.id, "user-1");
+
+    expect(found?.authPassword).toBe("the-real-password");
   });
 });

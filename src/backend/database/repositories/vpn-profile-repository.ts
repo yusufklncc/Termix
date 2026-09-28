@@ -96,7 +96,16 @@ export class VpnProfileRepository {
 
     const [created] = await insertReturning(this.context, vpnProfiles, record);
     await this.afterWrite();
-    return created;
+    // Decrypted on the way out, like findById. Returning the stored row meant
+    // a caller that read authPassword from it got the ciphertext and handed
+    // that to a VPN gateway as the password -- which fails at exactly the
+    // point where everything else looks right.
+    return DataCrypto.decryptRecord(
+      "vpn_profiles",
+      created,
+      input.userId,
+      userDataKey,
+    );
   }
 
   /**
@@ -150,7 +159,10 @@ export class VpnProfileRepository {
     );
 
     if (updated) await this.afterWrite();
-    return updated ?? null;
+    // Decrypted on the way out, for the same reason create is.
+    return updated
+      ? DataCrypto.decryptRecord("vpn_profiles", updated, userId, userDataKey)
+      : null;
   }
 
   /**

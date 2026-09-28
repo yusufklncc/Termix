@@ -88,6 +88,8 @@ function profileToConfig(profile: VpnProfileRecord): SOCKS5Config {
       useSocks5: true,
       socks5Host: manager.host,
       socks5Port: managedDoorPort(profile.id),
+      // So a name that only exists inside this network can be asked about.
+      managedNetworkId: profile.id,
     };
   }
 

@@ -485,7 +485,22 @@ async function raiseTailscale({ id, profile, credentials, watch, procs }) {
 
   await waitForTailscale(daemon, socket, up, watch.said);
 
-  return { upstream: { host: "127.0.0.1", port: socksPort } };
+  return {
+    upstream: { host: "127.0.0.1", port: socksPort },
+    resolve: async (name) => {
+      const status = JSON.parse(
+        await run("tailscale", [`--socket=${socket}`, "status", "--json"]),
+      );
+      const nodes = [status.Self, ...Object.values(status.Peer ?? {})];
+      return matchPeer(
+        name,
+        nodes.filter(Boolean).map((node) => ({
+          names: [node.DNSName, node.HostName],
+          ip: firstIPv4(node.TailscaleIPs),
+        })),
+      );
+    },
+  };
 }
 
 /** The daemon has to be listening on its socket before it will take a login,
@@ -579,7 +594,23 @@ async function raiseNetbird({ id, profile, credentials, watch, procs }) {
 
   await waitForNetbird(daemon, environment, up, watch.said);
 
-  return { upstream: { host: "127.0.0.1", port: socksPort } };
+  return {
+    upstream: { host: "127.0.0.1", port: socksPort },
+    resolve: async (name) => {
+      const status = JSON.parse(
+        await run("netbird", ["status", "-j"], { env: environment }),
+      );
+      const peers = Array.isArray(status.peers?.details)
+        ? status.peers.details
+        : [];
+      return matchPeer(
+        name,
+        [{ fqdn: status.fqdn, netbirdIp: status.netbirdIp }, ...peers].map(
+          (peer) => ({ names: [peer.fqdn], ip: peer.netbirdIp }),
+        ),
+      );
+    },
+  };
 }
 
 /**
@@ -689,6 +720,56 @@ function stateOf(entry) {
   return "idle";
 }
 
+/**
+ * Find a name in a network that keeps its own list of them.
+ *
+ * A mesh gives its members names that exist nowhere else, so the resolver on
+ * this machine cannot answer for them and the gateway's SOCKS5 server, asked
+ * for one, says the host is unreachable. The network itself knows, though, so
+ * it is asked directly rather than through DNS.
+ *
+ * A short name is accepted as well as the full one, because that is what
+ * people type and the first label is what distinguishes a peer.
+ */
+function matchPeer(name, entries) {
+  const wanted = String(name).trim().toLowerCase().replace(/\.$/, "");
+  if (!wanted) return null;
+
+  for (const entry of entries) {
+    if (!entry.ip) continue;
+    for (const candidate of entry.names) {
+      if (!candidate) continue;
+      const full = String(candidate).toLowerCase().replace(/\.$/, "");
+      if (full === wanted || full.split(".")[0] === wanted) return entry.ip;
+    }
+  }
+  return null;
+}
+
+/** A mesh hands out both families; the v4 address is the one to dial. */
+function firstIPv4(addresses) {
+  if (!Array.isArray(addresses)) return null;
+  return addresses.find((address) => net.isIPv4(String(address))) ?? null;
+}
+
+/**
+ * Answer what an address means inside one network.
+ *
+ * The tunnel has to be up to ask, and raising it is what the connection that
+ * follows would have done anyway -- so this raises it rather than reporting
+ * a name it could have looked up.
+ */
+async function resolveInNetwork(id, name) {
+  const entry = networks.get(id);
+  if (!entry) throw new Error("this VPN is not registered");
+  await raiseTunnel(id);
+  const resolve = networks.get(id)?.tunnel?.resolve;
+  // A gateway without a list of its own leaves the name to the far side,
+  // which is what happened before any of this existed.
+  if (!resolve) return null;
+  return resolve(name);
+}
+
 async function raiseTunnel(id) {
   const entry = networks.get(id);
   if (!entry) throw new Error("this VPN is not registered");
@@ -725,7 +806,7 @@ async function raiseTunnel(id) {
     const watch = watcher();
     const procs = [];
     try {
-      const { upstream } = await provider.raise({
+      const { upstream, resolve } = await provider.raise({
         id,
         profile,
         credentials,
@@ -748,7 +829,7 @@ async function raiseTunnel(id) {
       // gets a refusal the caller sees as the socket closing.
       await waitForDoorwayUpstream(upstream);
 
-      entry.tunnel = { procs, upstream, ns: nsName(id) };
+      entry.tunnel = { procs, upstream, resolve, ns: nsName(id) };
       entry.error = null;
       log(`VPN ${id} is up`);
     } catch (error) {
@@ -997,6 +1078,20 @@ async function handleFrame(magic, payload) {
         state: stateOf(entry),
         port: entry?.port ?? DOOR_BASE + id,
       };
+    }
+    /*
+     * What does this name mean inside that network?
+     *
+     * Asked just before a session connects, so the address in the SOCKS5
+     * request is one the gateway can route to.
+     */
+    case "NRES": {
+      const id = Number(body.id);
+      if (!id || !body.name) {
+        return { ok: false, error: "id and name are required" };
+      }
+      const address = await resolveInNetwork(id, String(body.name));
+      return { ok: true, address };
     }
     case "NSTA":
       return { ok: true, networks: snapshot() };

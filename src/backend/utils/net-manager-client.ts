@@ -212,6 +212,34 @@ export async function disconnectManagedNetwork(
   }
 }
 
+/**
+ * What does this name mean inside that network?
+ *
+ * A mesh names its members in terms that exist nowhere else, so neither this
+ * container's resolver nor the gateway's own can answer for them -- asked for
+ * one, a SOCKS5 server replies that the host is unreachable. The manager can
+ * answer, because the network keeps the list.
+ *
+ * Null means "no answer", not "no such host": a gateway that keeps no list of
+ * its own returns it, and then the name travels to the far side exactly as it
+ * did before any of this existed.
+ */
+export async function resolveInManagedNetwork(
+  id: number,
+  name: string,
+  options = resolveNetManagerOptions(),
+): Promise<string | null> {
+  if (!options) return null;
+  try {
+    const answer = await ask(options, "NRES", { id, name }, 60000);
+    return typeof answer.address === "string" && answer.address
+      ? answer.address
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function listManagedNetworks(
   options = resolveNetManagerOptions(),
 ): Promise<ManagedNetworkState[] | null> {

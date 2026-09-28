@@ -22,6 +22,11 @@ async function validateHost(host: string): Promise<void> {
 
 export interface SOCKS5Config {
   useSocks5?: boolean;
+  /**
+   * Set when Termix raised this gateway itself, so the network can be asked
+   * what a name in it means. A gateway someone else runs has no such list.
+   */
+  managedNetworkId?: number;
   socks5Host?: string;
   socks5Port?: number;
   socks5Username?: string;
@@ -50,7 +55,11 @@ export async function createSocks5Connection(
   }
 
   if (socks5Config.socks5Host) {
-    return createSingleProxyConnection(targetHost, targetPort, socks5Config);
+    return createSingleProxyConnection(
+      await addressInsideNetwork(targetHost, socks5Config),
+      targetPort,
+      socks5Config,
+    );
   }
 
   /*
@@ -65,6 +74,36 @@ export async function createSocks5Connection(
   throw new Error(
     "This host is configured to connect through a proxy, but no proxy address is set",
   );
+}
+
+/**
+ * Turn a name that only exists inside a managed network into an address.
+ *
+ * A mesh peer's name is known to the mesh and to nothing else: this
+ * container's resolver has never heard of it, and neither has the gateway's
+ * SOCKS5 server, which answers a name it cannot place with "host
+ * unreachable". The network keeps the list, so it is asked.
+ *
+ * The name is returned unchanged whenever there is no answer -- an address
+ * that is already an IP, a gateway Termix did not raise, a manager that is
+ * not there. The connection then carries the name to the far side, as it did
+ * before. Nothing here falls back to a direct route.
+ */
+async function addressInsideNetwork(
+  targetHost: string,
+  socks5Config: SOCKS5Config,
+): Promise<string> {
+  if (!socks5Config.managedNetworkId) return targetHost;
+
+  const bare = targetHost.replace(/^\[|\]$/g, "").trim();
+  if (!bare || net.isIP(bare) !== 0) return targetHost;
+
+  const { resolveInManagedNetwork } = await import("./net-manager-client.js");
+  const address = await resolveInManagedNetwork(
+    socks5Config.managedNetworkId,
+    bare,
+  );
+  return address ?? targetHost;
 }
 
 async function createSingleProxyConnection(

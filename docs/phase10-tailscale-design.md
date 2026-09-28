@@ -213,3 +213,38 @@ koyuyor — yani tailnet gibi: isim alanı yok, ayrıcalık yok, microsocks yok.
 
 Netbird için de gerçek bir kurulum anahtarı isteyen dört şey aynen açık:
 SOCKS ağ dışına çıkıyor mu, adlar çözülüyor mu, kalkış süresi, eş temizliği.
+
+---
+
+## Ad çözümü
+
+Gerçek bir ağa karşı denendiğinde çıkan şey: **mesh adları çözülmüyordu.** IP
+çalışıyordu, ad çalışmıyordu. Arkasında iki ayrı hata vardı ve ikincisi
+ancak birincisi düzelince göründü.
+
+1. **Termix adı kendi konteynerinde çözüyordu**, tünel daha kurulmadan.
+   `getaddrinfo ENOTFOUND` ile düşüyordu ve bağlantı VPN'e hiç ulaşmıyordu.
+   Atlama sunucusu yolu bu gerekçeyi zaten taşıyordu — "hedef yalnızca
+   atlama sunucusunun ağından erişilebilir, o yüzden DNS orada çözülmeli" —
+   ama VPN dalı yazılmamıştı. Aynı hata dosya yöneticisinin transfer
+   bağlantısında da vardı: çözüm 286. satırda, vekil 416'da.
+
+2. Ad geçide ulaşınca **netbird'ün kendi SOCKS sunucusu da çözemedi**:
+   `Socks5 proxy rejected connection - HostUnreachable`. Mesh adı yalnızca
+   mesh'in içinde var ve netstack kipindeki SOCKS sunucusu onu yerleştiremiyor.
+
+Çözüm DNS'e hiç bulaşmıyor: **ağın kendi eş listesi soruluyor.** Yönetici
+yeni bir denetim mesajı taşıyor (`NRES`), sağlayıcılar da kendi listelerini
+veriyor — `tailscale status --json` (`DNSName`/`HostName` ↔ `TailscaleIPs`)
+ve `netbird status -j` (`fqdn` ↔ `netbirdIp`). Termix, yönettiği bir geçitten
+geçen ve IP olmayan bir adresi bağlanmadan hemen önce soruyor.
+
+Kurallar: tam ad da kısa ad da kabul ediliyor (insanlar kısa olanı yazıyor),
+sondaki nokta ve harf büyüklüğü önemsiz, IPv6 yerine IPv4 seçiliyor, ve IP'si
+olmayan eş atlanıyor.
+
+**Cevap gelmezse ad olduğu gibi geçiyor** — zaten IP olan bir adres, Termix'in
+raise etmediği bir geçit, ya da ulaşılamayan bir yönetici. O durumda davranış
+bu iş yapılmadan öncekiyle birebir aynı. Hiçbir yerde doğrudan bağlantıya geri
+düşülmüyor. Fortinet'in listesi yok, dolayısıyla `null` dönüyor ve adı eskisi
+gibi karşı tarafa bırakıyor.

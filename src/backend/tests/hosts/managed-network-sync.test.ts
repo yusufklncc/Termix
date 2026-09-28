@@ -44,9 +44,22 @@ describe("putting managed networks back", () => {
     expect(raiseManagedNetwork).toHaveBeenCalledOnce();
   });
 
-  it("leaves one that is already up alone", async () => {
+  it("leaves one the manager already knows about alone", async () => {
     listManaged.mockResolvedValue([profile()]);
     listManagedNetworks.mockResolvedValue([{ id: 1, state: "up" }]);
+
+    await syncManagedNetworks();
+    expect(raiseManagedNetwork).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Down is the resting state now: the doorway listens, and the tunnel comes
+   * when something connects. Raising an idle VPN again would dial the gateway
+   * for nobody.
+   */
+  it("leaves an idle one alone, because idle is not a fault", async () => {
+    listManaged.mockResolvedValue([profile()]);
+    listManagedNetworks.mockResolvedValue([{ id: 1, state: "idle" }]);
 
     await syncManagedNetworks();
     expect(raiseManagedNetwork).not.toHaveBeenCalled();

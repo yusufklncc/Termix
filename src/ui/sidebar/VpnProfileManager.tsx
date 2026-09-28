@@ -91,6 +91,9 @@ function StateBadge({ profile }: { profile: VpnProfile }) {
   }
 
   const labels: Record<string, string> = {
+    // "Ready" rather than "down": the tunnel comes up when a session needs it
+    // and goes when none do, so not being connected is the resting state.
+    idle: t("hosts.vpn.stateIdle"),
     up: t("hosts.vpn.stateUp"),
     connecting: t("hosts.vpn.stateConnecting"),
     down: t("hosts.vpn.stateDown"),
@@ -99,7 +102,7 @@ function StateBadge({ profile }: { profile: VpnProfile }) {
   const tone =
     profile.lastState === "up"
       ? "text-green-500"
-      : profile.lastState === "error"
+      : profile.lastState === "error" || profile.lastState === "refused"
         ? "text-destructive"
         : "text-muted-foreground";
 

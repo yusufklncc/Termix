@@ -595,6 +595,23 @@ class PollingManager {
       return;
     }
 
+    /*
+     * A host behind a VPN is not polled.
+     *
+     * The poll would go through the VPN, which raises it and keeps it up for
+     * as long as anyone has the list on screen -- so a tunnel meant to open
+     * when work needs it would instead be open all day. What a poll buys is a
+     * dot in a list; what it would cost is the reason the VPN is raised on
+     * demand at all.
+     *
+     * The dot stays unknown until a session opens, which is the honest
+     * answer: nobody has looked.
+     */
+    if (refreshedHost.vpnProfileId) {
+      this.statusStore.delete(refreshedHost.id);
+      return;
+    }
+
     try {
       const ct = refreshedHost.connectionType || "ssh";
       let pingPort: number;

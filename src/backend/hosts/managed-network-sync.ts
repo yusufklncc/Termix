@@ -9,12 +9,16 @@ import { sshLogger } from "../utils/logger.js";
 import { getErrorMessage } from "../utils/error-message.js";
 
 /**
- * Putting the managed tunnels back.
+ * Making sure every VPN has a doorway.
  *
- * The manager holds its networks in memory, so a restart of it -- or of
- * Termix -- leaves profiles that say they are up in front of nothing. Hosts
- * on them then refuse to connect, correctly but unhelpfully, until someone
- * opens the profile and saves it again.
+ * The manager holds its VPNs in memory, so a restart of it -- or of Termix --
+ * leaves profiles pointing at an address nothing listens on. Hosts on them
+ * then refuse to connect, correctly but unhelpfully, until someone opens the
+ * profile and saves it again.
+ *
+ * This registers them instead. Registering opens a doorway; it does not dial
+ * the gateway, so putting a VPN back costs nothing and takes no login
+ * attempt.
  */
 
 /**
@@ -67,14 +71,20 @@ export async function syncManagedNetworks(): Promise<{
     return { raised: 0, skipped: profiles.length };
   }
 
-  const up = new Set(
-    state.filter((entry) => entry.state === "up").map((entry) => entry.id),
-  );
+  /*
+   * Registered, not up.
+   *
+   * A VPN's doorway listens for as long as the manager knows about it; the
+   * tunnel underneath comes when something connects and goes when nothing
+   * does. So "down" is the resting state, not a fault, and the only thing
+   * worth putting back is a VPN the manager has forgotten entirely.
+   */
+  const known = new Set(state.map((entry) => entry.id));
 
   let raised = 0;
   let skipped = 0;
   for (const profile of profiles) {
-    if (up.has(profile.id)) continue;
+    if (known.has(profile.id)) continue;
     if (!worthRaising(profile)) {
       skipped += 1;
       continue;
@@ -103,8 +113,8 @@ export async function syncManagedNetworks(): Promise<{
       } as never)
       .catch(() => undefined);
 
-    if (result.state === "up") raised += 1;
-    sshLogger.info("Managed network put back", {
+    if (result.state !== "error") raised += 1;
+    sshLogger.info("VPN made available again", {
       operation: "managed_network_sync",
       profileId: profile.id,
       state: result.state,

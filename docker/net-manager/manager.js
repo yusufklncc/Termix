@@ -266,31 +266,6 @@ async function applyStrictRoutes(id, iface, gatewayIps) {
   await rule(["-A", "OUTPUT", "-j", "TERMIX_OUT"]);
 }
 
-// ------------------------------------------------------------- doorway
-
-/**
- * The namespace's doorway is only reachable from inside this container, so
- * Termix is given one here that carries connections across. The port is
- * computed from the id, which is why a restart does not have to be announced.
- */
-function openDoorway(id, peerAddress) {
-  const port = DOOR_BASE + id;
-  const server = net.createServer((client) => {
-    const upstream = net.connect(1080, peerAddress);
-    const drop = () => {
-      client.destroy();
-      upstream.destroy();
-    };
-    client.on("error", drop);
-    upstream.on("error", drop);
-    client.pipe(upstream).pipe(client);
-  });
-  return new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, "0.0.0.0", () => resolve({ server, port }));
-  });
-}
-
 // ------------------------------------------------------------- providers
 
 async function resolveGatewayIps(host) {
@@ -341,19 +316,15 @@ function buildProviderCommand(profile, credentials, gatewayIps) {
   };
 }
 
-// ------------------------------------------------------------- lifecycle
-
-/** id -> { state, error, port, procs, doorway } */
-const networks = new Map();
-
 /*
  * A refusal is not a failure to retry.
  *
  * A dropped tunnel is worth raising again; a password the gateway refused is
  * not. Trying it again cannot succeed, and a FortiGate counts the attempts --
- * which is how an account gets locked, and then stays locked, because the next
- * attempt arrives before the lockout lapses. Saying which kind of failure this
- * was lets Termix leave it alone until someone changes the credentials.
+ * which is how an account gets locked, and then stays locked, because the
+ * next attempt arrives before the lockout lapses. With a doorway that raises
+ * on demand this matters twice over: without it, every connection would be
+ * another attempt.
  */
 function looksRefused(reason) {
   return /authentication (failed|error)|failed to complete authentication|login failed|permission denied|user input required|invalid credential/i.test(
@@ -398,25 +369,62 @@ function waitForInterface(id, iface, vpnProcess, timeoutMs = 60000, said) {
   });
 }
 
-async function bringUp(profile, credentials) {
-  const id = Number(profile.id);
-  await bringDown(id);
+// ------------------------------------------------------------- lifecycle
 
-  await ensureForwarding();
-  const { ns, peer } = await createNamespace(id);
-  const entry = {
-    state: "connecting",
-    error: null,
-    port: DOOR_BASE + id,
-    procs: [],
-    doorway: null,
-    ns,
-  };
-  networks.set(id, entry);
+/**
+ * id -> {
+ *   profile, credentials,   what it takes to raise this one again
+ *   doorway, port,          always listening while the VPN is registered
+ *   live,                   open connections through the doorway
+ *   tunnel,                 { procs, ns } while it is up, else null
+ *   raising,                a promise, so ten connections raise it once
+ *   refused, error,         a password the gateway rejected is not retried
+ *   idleTimer,
+ * }
+ */
+const networks = new Map();
 
-  try {
-    // Named gateways have to resolve before the namespace's rules exist; this
-    // container's resolver is what answers, since the tunnel is not up yet.
+/**
+ * How long a VPN stays up with nothing going through it.
+ *
+ * Not zero: opening and closing tabs in a row would otherwise raise and drop
+ * the tunnel each time, which is slow and is a login attempt at the gateway
+ * every time.
+ */
+const IDLE_MS = Number(process.env.NET_MANAGER_IDLE_MS ?? 300000);
+
+function stateOf(entry) {
+  if (!entry) return "unknown";
+  if (entry.refused) return "refused";
+  if (entry.tunnel) return "up";
+  if (entry.raising) return "connecting";
+  return "idle";
+}
+
+async function raiseTunnel(id) {
+  const entry = networks.get(id);
+  if (!entry) throw new Error("this VPN is not registered");
+  if (entry.tunnel) return;
+  if (entry.raising) return entry.raising;
+
+  /*
+   * A password the gateway refused is not tried again on the next
+   * connection.
+   *
+   * Every attempt counts at a FortiGate, and a doorway that raises on demand
+   * would turn one wrong password into an attempt per connection -- which
+   * locks the account and then keeps it locked. Editing the profile clears
+   * this, because editing is the only thing that can change the answer.
+   */
+  if (entry.refused) {
+    throw new Error(entry.error ?? "the gateway refused these credentials");
+  }
+
+  entry.raising = (async () => {
+    const { profile, credentials } = entry;
+    await ensureForwarding();
+    const { peer } = await createNamespace(id);
+
     const gatewayIps = await resolveGatewayIps(profile.serverHost);
     const { command, args, iface, stdin } = buildProviderCommand(
       profile,
@@ -425,11 +433,9 @@ async function bringUp(profile, credentials) {
     );
 
     /*
-     * The client's own words are kept, because they are the answer.
-     *
-     * "The VPN client exited" tells an operator nothing; "authentication
-     * failed" or "certificate does not match" tells them what to change. The
-     * output still goes to the log, and the tail of it goes back to Termix.
+     * The client's own words are kept, because they are the answer. "The VPN
+     * client exited" tells an operator nothing; "authentication failed" tells
+     * them what to change.
      */
     const said = [];
     const remember = (chunk) => {
@@ -441,72 +447,194 @@ async function bringUp(profile, credentials) {
       if (said.length > 40) said.splice(0, said.length - 40);
     };
 
-    const vpn = spawn(...inNamespace(id, command, args), {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    vpn.stdout.on("data", remember);
-    vpn.stderr.on("data", remember);
-    entry.procs.push(vpn);
-    entry.said = said;
-    vpn.stdin.end(stdin);
-    vpn.on("exit", (code) => {
+    const procs = [];
+    try {
+      const vpn = spawn(...inNamespace(id, command, args), {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      vpn.stdout.on("data", remember);
+      vpn.stderr.on("data", remember);
+      procs.push(vpn);
+      vpn.stdin.end(stdin);
+      vpn.on("exit", (code) => {
+        const current = networks.get(id);
+        if (!current || current.tunnel?.procs[0] !== vpn) return;
+        log(`VPN ${id}: tunnel ended (${code})`);
+        // Whatever is going through it now has nowhere to go, which is the
+        // point: it must not leave by this container's own route instead.
+        void dropTunnel(id);
+      });
+
+      await waitForInterface(id, iface, vpn, 60000, said);
+      await applyStrictRoutes(id, iface, gatewayIps);
+
+      const socks = spawn(
+        ...inNamespace(id, "microsocks", ["-i", peer, "-p", "1080"]),
+        { stdio: ["ignore", "inherit", "inherit"] },
+      );
+      procs.push(socks);
+
+      entry.tunnel = { procs, ns: nsName(id) };
+      entry.error = null;
+      log(`VPN ${id} is up`);
+    } catch (error) {
+      for (const proc of procs) {
+        try {
+          proc.kill("SIGTERM");
+        } catch {
+          /* already gone */
+        }
+      }
+      await destroyNamespace(id);
+      const reason = String(error.message ?? error);
+      entry.error = reason;
+      entry.refused = looksRefused(reason);
+      logError(`VPN ${id} failed: ${reason}`);
+      throw new Error(reason);
+    }
+  })().finally(() => {
+    const current = networks.get(id);
+    if (current) current.raising = null;
+  });
+
+  return entry.raising;
+}
+
+async function dropTunnel(id) {
+  const entry = networks.get(id);
+  if (!entry?.tunnel) return;
+  const { procs } = entry.tunnel;
+  entry.tunnel = null;
+  for (const proc of procs) {
+    try {
+      proc.kill("SIGTERM");
+    } catch {
+      /* already gone */
+    }
+  }
+  await destroyNamespace(id);
+  log(`VPN ${id} taken down`);
+}
+
+function noteIdle(id) {
+  const entry = networks.get(id);
+  if (!entry || entry.live > 0) return;
+  clearTimeout(entry.idleTimer);
+  entry.idleTimer = setTimeout(() => {
+    const current = networks.get(id);
+    if (current && current.live === 0) void dropTunnel(id);
+  }, IDLE_MS);
+  entry.idleTimer.unref();
+}
+
+/**
+ * The doorway outlives the tunnel, which is the whole of on-demand.
+ *
+ * It listens for as long as the VPN is registered. A connection arriving to a
+ * VPN that is down raises it and then waits; when the last connection goes,
+ * the tunnel follows it after a while. Nothing else has to know when a
+ * session starts or ends -- being connected to is what "in use" means.
+ */
+function openDoorway(id) {
+  const port = DOOR_BASE + id;
+  const { peer } = addresses(id);
+
+  const server = net.createServer(async (client) => {
+    const entry = networks.get(id);
+    if (!entry) return client.destroy();
+
+    entry.live += 1;
+    clearTimeout(entry.idleTimer);
+
+    const finish = () => {
       const current = networks.get(id);
-      if (!current || current.procs[0] !== vpn) return;
-      current.state = "down";
-      current.error = `the VPN client exited (${code})`;
-      // The doorway must never outlive the tunnel: a connection handed to it
-      // would leave by this container's route instead of the VPN.
-      current.doorway?.close();
-      current.doorway = null;
-      log(`network ${id}: tunnel ended (${code})`);
-    });
+      if (!current) return;
+      current.live = Math.max(0, current.live - 1);
+      noteIdle(id);
+    };
 
-    await waitForInterface(id, iface, vpn, 60000, said);
-    await applyStrictRoutes(id, iface, gatewayIps);
+    client.once("close", finish);
+    client.on("error", () => client.destroy());
 
-    const socks = spawn(
-      ...inNamespace(id, "microsocks", ["-i", peer, "-p", "1080"]),
-      { stdio: ["ignore", "inherit", "inherit"] },
-    );
-    entry.procs.push(socks);
+    try {
+      await raiseTunnel(id);
+    } catch {
+      // The reason is recorded on the entry and reported through NSTA; here
+      // there is nothing to say it to but a socket.
+      return client.destroy();
+    }
 
-    const { server, port } = await openDoorway(id, peer);
+    const upstream = net.connect(1080, peer);
+    const drop = () => {
+      client.destroy();
+      upstream.destroy();
+    };
+    upstream.on("error", drop);
+    client.pipe(upstream).pipe(client);
+  });
+
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "0.0.0.0", () => resolve({ server, port }));
+  });
+}
+
+/**
+ * Registering a VPN opens its doorway; it does not raise the tunnel.
+ *
+ * Raising happens when something connects. Termix asks for this at boot and
+ * whenever a profile is saved, so the address is ready to be used long before
+ * anything uses it.
+ */
+async function registerNetwork(profile, credentials) {
+  const id = Number(profile.id);
+  const existing = networks.get(id);
+
+  if (existing) {
+    // Edited: the server, the account or the pin may be what changed, so what
+    // is running was built from the old ones.
+    await dropTunnel(id);
+    existing.profile = profile;
+    existing.credentials = credentials;
+    existing.refused = false;
+    existing.error = null;
+    return { state: stateOf(existing), port: existing.port };
+  }
+
+  const entry = {
+    profile,
+    credentials,
+    doorway: null,
+    port: DOOR_BASE + id,
+    live: 0,
+    tunnel: null,
+    raising: null,
+    refused: false,
+    error: null,
+    idleTimer: null,
+  };
+  networks.set(id, entry);
+
+  try {
+    const { server, port } = await openDoorway(id);
     entry.doorway = server;
-    entry.state = "up";
-    entry.error = null;
-    log(`network ${id} is up on :${port}`);
-    return { state: "up", port };
+    entry.port = port;
+    log(`VPN ${id} is available on :${port}`);
+    return { state: "idle", port };
   } catch (error) {
-    await bringDown(id);
-    // Classified from the message, which already carries the client's own
-    // last words -- one place to look instead of two to keep in step.
+    networks.delete(id);
     const reason = String(error.message ?? error);
-    const entry2 = {
-      state: looksRefused(reason) ? "refused" : "error",
-      error: reason,
-      port: DOOR_BASE + id,
-    };
-    networks.set(id, entry2);
-    logError(`network ${id} failed: ${entry2.error}`);
-    return {
-      state: entry2.state,
-      error: entry2.error,
-      port: entry2.port,
-    };
+    logError(`VPN ${id} could not be made available: ${reason}`);
+    return { state: "error", error: reason, port: DOOR_BASE + id };
   }
 }
 
-async function bringDown(id) {
+async function unregisterNetwork(id) {
   const entry = networks.get(id);
   if (entry) {
+    clearTimeout(entry.idleTimer);
+    await dropTunnel(id);
     entry.doorway?.close();
-    for (const proc of entry.procs ?? []) {
-      try {
-        proc.kill("SIGTERM");
-      } catch {
-        /* already gone */
-      }
-    }
     networks.delete(id);
   }
   await destroyNamespace(id);
@@ -515,12 +643,12 @@ async function bringDown(id) {
 function snapshot() {
   return Array.from(networks.entries()).map(([id, entry]) => ({
     id,
-    state: entry.state,
+    state: stateOf(entry),
     error: entry.error ?? null,
     port: entry.port,
+    live: entry.live,
   }));
 }
-
 // ------------------------------------------------------------- control
 
 async function handleFrame(magic, payload) {
@@ -537,11 +665,13 @@ async function handleFrame(magic, payload) {
       if (!body.profile?.id)
         return { ok: false, error: "profile id is required" };
       const credentials = unseal(body.credentials);
-      const result = await bringUp(body.profile, credentials);
-      return { ok: result.state === "up", ...result };
+      const result = await registerNetwork(body.profile, credentials);
+      // "Available" is the answer now, not "up": the tunnel comes when
+      // something connects. Anything but an error is a VPN that can be used.
+      return { ok: result.state !== "error", ...result };
     }
     case "NDWN": {
-      await bringDown(Number(body.id));
+      await unregisterNetwork(Number(body.id));
       return { ok: true, state: "down" };
     }
     case "NSTA":
@@ -575,7 +705,7 @@ server.listen(PORT, BIND, () => log(`listening on ${BIND}:${PORT}`));
 
 const shutdown = async () => {
   log("stopping; taking every network down with it");
-  for (const id of Array.from(networks.keys())) await bringDown(id);
+  for (const id of Array.from(networks.keys())) await unregisterNetwork(id);
   process.exit(0);
 };
 process.on("SIGTERM", shutdown);

@@ -304,8 +304,17 @@ async function resolveGatewayIps(host) {
  * demand this matters twice over: without it, every connection would be
  * another attempt.
  */
+/**
+ * A reason that will read the same way next time.
+ *
+ * Retrying such a credential is how a real account got locked out once, so
+ * these are recorded and not tried again until the profile is edited. The
+ * list names refusals only: a certificate that will not verify or a node
+ * waiting on an admin's approval are left out, because re-saving the profile
+ * is not what fixes either of them.
+ */
 function looksRefused(reason) {
-  return /authentication (failed|error)|failed to complete authentication|login failed|permission denied|user input required|invalid credential|invalid key|unable to validate|key is expired|expired key|not authorized|unauthorized/i.test(
+  return /authentication (failed|error)|failed to complete authentication|login failed|permission denied|user input required|invalid credential|invalid key|key is expired|expired key/i.test(
     String(reason ?? ""),
   );
 }

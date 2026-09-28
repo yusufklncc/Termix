@@ -146,3 +146,27 @@ daha uzun tutulur.
 2. Tailscale sağlayıcısını ekle; yukarıdaki dört şeyi ölç.
 3. Doğrulamayı sağlayıcıya göre ayır; API ve arayüz alanları.
 4. Gerçek bir tailnet'e karşı uçtan uca deneme — bu adım sende.
+
+---
+
+## Ölçülenler
+
+Kimlik doğrulama gerektirmeyen ne varsa ölçüldü; gerisi gerçek bir tailnet
+anahtarı istiyor.
+
+| Ne                  | Sonuç                                                                                                                                              |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Ayrıcalıksız kalkış | `NET_ADMIN`, `SYS_ADMIN` ve `/dev/net/tun` olmadan kaydoldu: `{ ok: true, state: 'idle', port: 20003 }`. Tasarımın dayandığı iddia bu, doğrulandı. |
+| Geçersiz anahtar    | İlk bağlantı `refused`, ikinci bağlantı **1 ms**'de — kontrol sunucusuna hiç gidilmiyor. Fortinet için ölçülen davranışın aynısı.                  |
+| Anahtarın sızmaması | Hata metni `--authkey=***` diyor; anahtar veritabanına da ekrana da geçmiyor.                                                                      |
+| Fortinet gerilemesi | Sözleşme değişikliğinden sonra gerçek geçide karşı yeniden ölçüldü: kayıt `idle`, ilk bağlantı 4374 ms, yanlış parola `refused`.                   |
+
+Gerçek anahtar isteyen, açık kalan dört şey:
+
+1. **SOCKS tailnet dışına çıkıyor mu** — yani bir exit node olmadan genel
+   internete. Çıkmıyorsa bu bir kusur değil; o host'lar VPN'siz kalır.
+2. **MagicDNS adları çözülüyor mu** — host formuna `vds-1` yazılabilir mi,
+   yoksa `100.x.y.z` mi gerekir.
+3. **Kalkış süresi** — Fortinet'in 4,4 saniyesiyle karşılaştırmak için.
+4. **Ephemeral düğümler temizleniyor mu** — `--state=mem:` her kalkışta yeni
+   düğüm demek; ephemeral olmayan anahtarla tailnet'te ölü düğüm birikir.

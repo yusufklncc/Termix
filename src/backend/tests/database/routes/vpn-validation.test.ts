@@ -149,3 +149,35 @@ describe("vpnProfileAssignmentError", () => {
     );
   });
 });
+
+/** Netbird signs in the same way a tailnet does, in its own words. */
+describe("findVpnProfileError, for a netbird network", () => {
+  const netbird = {
+    name: "NetBird",
+    kind: "managed",
+    provider: "netbird",
+    authPassword: "A1B2C3D4-0000-0000-0000-000000000001",
+  };
+
+  it("accepts a profile with only a setup key", () => {
+    expect(findVpnProfileError(netbird)).toBeNull();
+  });
+
+  it("requires a setup key", () => {
+    expect(findVpnProfileError({ ...netbird, authPassword: "" })).toMatch(
+      /setup key/i,
+    );
+  });
+
+  it("takes a self-hosted management server, as a URL", () => {
+    expect(
+      findVpnProfileError({
+        ...netbird,
+        serverHost: "https://netbird.example.com",
+      }),
+    ).toBeNull();
+    expect(
+      findVpnProfileError({ ...netbird, serverHost: "netbird.example.com" }),
+    ).toMatch(/URL/i);
+  });
+});

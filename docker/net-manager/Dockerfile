@@ -19,6 +19,10 @@
 # so they are copied rather than installed.
 FROM tailscale/tailscale:latest AS tailscale
 
+# Netbird's, for the same reason, pinned because this is the version the
+# provider's behaviour was measured against.
+FROM netbirdio/netbird:0.79.0 AS netbird
+
 FROM node:22-trixie-slim
 
 RUN apt-get update \
@@ -28,6 +32,7 @@ RUN apt-get update \
 
 COPY --from=tailscale /usr/local/bin/tailscaled /usr/local/bin/tailscaled
 COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscale
+COPY --from=netbird /usr/local/bin/netbird /usr/local/bin/netbird
 
 COPY manager.js /app/manager.js
 COPY vpnc-script-no-dns /app/vpnc-script-no-dns

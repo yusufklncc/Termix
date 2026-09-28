@@ -34,6 +34,7 @@ const PROVIDERS: Record<
 > = {
   fortinet: findFortinetError,
   tailscale: findTailscaleError,
+  netbird: findNetbirdError,
 };
 
 export function findVpnProfileError(input: unknown): string | null {
@@ -85,18 +86,42 @@ function findFortinetError(data: Record<string, unknown>): string | null {
  * and there is no person here to open it.
  */
 function findTailscaleError(data: Record<string, unknown>): string | null {
+  return findKeyedProviderError(data, {
+    missingKey: "A tailnet needs an auth key to sign in with",
+    badServer:
+      "A self-hosted control server is a URL, such as https://headscale.example.com",
+  });
+}
+
+/** Netbird signs in the same way, and calls the two things by its own names. */
+function findNetbirdError(data: Record<string, unknown>): string | null {
+  return findKeyedProviderError(data, {
+    missingKey: "A NetBird network needs a setup key to sign in with",
+    badServer:
+      "A self-hosted management server is a URL, such as https://netbird.example.com",
+  });
+}
+
+/**
+ * The shape both userspace providers share: a key, and a server only when the
+ * network is self-hosted rather than the vendor's own.
+ */
+function findKeyedProviderError(
+  data: Record<string, unknown>,
+  words: { missingKey: string; badServer: string },
+): string | null {
   const key = data.authPassword;
   if (typeof key !== "string" || key.trim().length === 0) {
-    return "A tailnet needs an auth key to sign in with";
+    return words.missingKey;
   }
 
-  const loginServer = data.serverHost;
+  const server = data.serverHost;
   if (
-    typeof loginServer === "string" &&
-    loginServer.trim().length > 0 &&
-    !/^https?:\/\/\S+$/i.test(loginServer.trim())
+    typeof server === "string" &&
+    server.trim().length > 0 &&
+    !/^https?:\/\/\S+$/i.test(server.trim())
   ) {
-    return "A self-hosted control server is a URL, such as https://headscale.example.com";
+    return words.badServer;
   }
 
   return null;

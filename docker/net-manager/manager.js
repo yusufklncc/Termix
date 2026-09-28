@@ -1,4 +1,5 @@
 import net from "node:net";
+import fs from "node:fs";
 import crypto from "node:crypto";
 import { spawn, execFile } from "node:child_process";
 
@@ -20,6 +21,10 @@ const SUBNET_PREFIX = process.env.NET_MANAGER_SUBNET ?? "10.88";
 /** Each tailscaled gets its own SOCKS port, since they share this namespace. */
 const TAILSCALE_SOCKS_BASE = Number(
   process.env.NET_MANAGER_TAILSCALE_SOCKS_BASE ?? 30000,
+);
+/** The same for netbird, in a range of its own so the two never collide. */
+const NETBIRD_SOCKS_BASE = Number(
+  process.env.NET_MANAGER_NETBIRD_SOCKS_BASE ?? 31000,
 );
 
 if (!TOKEN) {
@@ -314,7 +319,7 @@ async function resolveGatewayIps(host) {
  * is not what fixes either of them.
  */
 function looksRefused(reason) {
-  return /authentication (failed|error)|failed to complete authentication|login failed|permission denied|user input required|invalid credential|invalid key|key is expired|expired key/i.test(
+  return /authentication (failed|error)|failed to complete authentication|login failed|permission denied|user input required|invalid credential|invalid key|key is expired|expired key|setup[- ]key (is |was )?(invalid|expired|exhausted|revoked)|invalid setup-key/i.test(
     String(reason ?? ""),
   );
 }
@@ -522,9 +527,134 @@ async function waitForTailscale(
   }
 }
 
+/**
+ * Netbird, by the same arrangement as Tailscale and for the same reason.
+ *
+ * Netstack mode gives it a network stack of its own instead of a wireguard
+ * device, and a SOCKS5 server in front of that stack -- so, like a tailnet, it
+ * needs no namespace, no privileges and no doorway built out of microsocks.
+ *
+ * Everything that separates one netbird from another is passed in the
+ * environment, not on the command line. The --daemon-addr flag is accepted
+ * and then ignored: a second daemon started with it tried to bind the default
+ * socket anyway, and a CLI pointed at one instance with it quietly configured
+ * whichever instance owned the default. Measured, both of them.
+ *
+ * The peer's state is kept for as long as the container lives, unlike the
+ * tailnet's. Netbird has no in-memory state option, and keeping it means a
+ * network that goes up and down with use re-registers as the same peer rather
+ * than leaving a new dead one behind each time.
+ */
+async function raiseNetbird({ id, profile, credentials, watch, procs }) {
+  const socksPort = NETBIRD_SOCKS_BASE + id;
+  const state = `/run/netbird-${id}`;
+  const daemonAddr = `unix://${state}.sock`;
+  await fs.promises.mkdir(state, { recursive: true });
+
+  const environment = {
+    ...process.env,
+    NB_DAEMON_ADDR: daemonAddr,
+    NB_USE_NETSTACK_MODE: "true",
+    NB_SOCKS5_LISTENER_ADDRESS: "127.0.0.1",
+    NB_SOCKS5_LISTENER_PORT: String(socksPort),
+    NB_STATE_DIR: state,
+    // Where the profile and config land; without it every instance shares one.
+    HOME: state,
+  };
+
+  const daemon = spawn("netbird", ["service", "run", "--log-file", "console"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env: environment,
+  });
+  watch.attach(daemon);
+  procs.push(daemon);
+
+  const up = [
+    "up",
+    `--hostname=termix-${id}`,
+    `--setup-key=${credentials.password}`,
+  ];
+  // A self-hosted management server goes here; empty means Netbird's own.
+  if (profile.serverHost) up.push(`--management-url=${profile.serverHost}`);
+
+  await waitForNetbird(daemon, environment, up, watch.said);
+
+  return { upstream: { host: "127.0.0.1", port: socksPort } };
+}
+
+/**
+ * Sign in, and stop as soon as the answer is no.
+ *
+ * `netbird up` does not give up on a rejected setup key for nearly two
+ * minutes -- measured at 1m49s -- while the daemon says why within a second.
+ * A connection is waiting on this, so the daemon's word is taken as soon as
+ * it arrives rather than sitting out the retries.
+ */
+async function waitForNetbird(
+  daemon,
+  environment,
+  upArgs,
+  said,
+  timeoutMs = 60000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (daemon.exitCode !== null) {
+      const reason = lastWords(said);
+      throw new Error(
+        reason ? `netbird stopped: ${reason}` : "netbird exited at once",
+      );
+    }
+    try {
+      await run("netbird", ["status"], { env: environment });
+      break;
+    } catch {
+      if (Date.now() > deadline) {
+        throw new Error("the netbird daemon never answered on its socket");
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+
+  const signIn = run("netbird", upArgs, { env: environment });
+  // The race may be decided before this settles, and a rejection nobody is
+  // listening to any more would take the manager down with it.
+  signIn.catch(() => {});
+
+  const refusal = watchForRefusal(said);
+  try {
+    await Promise.race([signIn, refusal.promise]);
+  } catch (error) {
+    throw new Error(
+      `netbird could not sign in: ${String(error.message ?? error).trim()}`,
+    );
+  } finally {
+    refusal.stop();
+  }
+}
+
+/**
+ * A promise that settles when the tunnel's own output says it was refused.
+ *
+ * Only refusals count. A process that merely has not succeeded yet is still
+ * worth waiting for; one that has been told no is not.
+ */
+function watchForRefusal(said) {
+  let timer;
+  const promise = new Promise((_resolve, reject) => {
+    timer = setInterval(() => {
+      const refusal = said.find((line) => looksRefused(line));
+      if (refusal) reject(new Error(refusal));
+    }, 250);
+  });
+  promise.catch(() => {});
+  return { promise, stop: () => clearInterval(timer) };
+}
+
 const PROVIDERS = {
   fortinet: { needsNamespace: true, raise: raiseFortinet },
   tailscale: { needsNamespace: false, raise: raiseTailscale },
+  netbird: { needsNamespace: false, raise: raiseNetbird },
 };
 
 // ------------------------------------------------------------- lifecycle

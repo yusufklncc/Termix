@@ -170,3 +170,46 @@ Gerçek anahtar isteyen, açık kalan dört şey:
 3. **Kalkış süresi** — Fortinet'in 4,4 saniyesiyle karşılaştırmak için.
 4. **Ephemeral düğümler temizleniyor mu** — `--state=mem:` her kalkışta yeni
    düğüm demek; ephemeral olmayan anahtarla tailnet'te ölü düğüm birikir.
+
+---
+
+## Netbird
+
+Aynı kalıp, aynı sebeple. Netbird'ün **netstack** kipi ona wireguard aygıtı
+yerine kendi ağ yığınını veriyor ve o yığının önüne bir SOCKS5 sunucusu
+koyuyor — yani tailnet gibi: isim alanı yok, ayrıcalık yok, microsocks yok.
+
+Ölçerek öğrenilen üç şey, çünkü hiçbiri belgelerden okunmuyor:
+
+1. **Örnekleri ayıran her şey ortam değişkeniyle geçiyor, bayrakla değil.**
+   `--daemon-addr` bayrağı kabul edilip **sessizce yok sayılıyor**: onunla
+   başlatılan ikinci daemon yine varsayılan sokete bağlanmaya çalıştı, ve
+   onunla bir örneğe yönlendirilen CLI varsayılan soketi kim tutuyorsa onu
+   yapılandırdı. `NB_DAEMON_ADDR` çalışıyor. Bayrağa güvenilseydi her VPN
+   yanlış daemon'ı ayağa kaldırırdı ve bu hiçbir yerde hata olarak görünmezdi.
+   Ayrıca `NB_STATE_DIR` **ve** `HOME` gerekiyor; ikincisi olmadan bütün
+   örnekler tek profili paylaşıyor.
+
+2. **`netbird up` reddedilen bir kurulum anahtarından 1 dakika 49 saniye
+   boyunca vazgeçmiyor**, oysa daemon sebebi bir saniye içinde söylüyor.
+   Kapıda bir bağlantı beklediği için daemon'ın sözü, CLI'ın pes etmesi
+   beklenmeden alınıyor: ölçülen 1765 ms.
+
+3. **Eş durumu konteyner yaşadığı sürece saklanıyor**, tailnet'inkinin
+   aksine. Netbird'ün bellek-içi durum seçeneği yok; saklamak, kullanımla inip
+   kalkan bir ağın her seferinde yeni bir ölü eş bırakmak yerine aynı eş
+   olarak yeniden kaydolması demek.
+
+### Netbird için ölçülenler
+
+| Ne                        | Sonuç                                                                                                   |
+| ------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Ayrıcalıksız kalkış       | `NET_ADMIN`, `SYS_ADMIN` ve `/dev/net/tun` olmadan kaydoldu: `{ ok: true, state: 'idle', port: 20005 }` |
+| Geçersiz kurulum anahtarı | İlk bağlantı **1765 ms**'de `refused`, ikinci bağlantı **2 ms** — yönetim sunucusuna hiç gidilmiyor     |
+| Anahtarın sızmaması       | Hata metninde anahtar yok                                                                               |
+| Süreç temizliği           | Ret sonrası ayakta kalan daemon yok                                                                     |
+| Fortinet gerilemesi       | İsim alanı yolu bozulmadı: kaydoldu, isim alanı kuruldu, openconnect çalıştı, `refused`                 |
+| Tailscale gerilemesi      | 787 ms'de `refused`                                                                                     |
+
+Netbird için de gerçek bir kurulum anahtarı isteyen dört şey aynen açık:
+SOCKS ağ dışına çıkıyor mu, adlar çözülüyor mu, kalkış süresi, eş temizliği.

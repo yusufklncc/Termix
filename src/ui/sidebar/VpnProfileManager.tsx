@@ -38,16 +38,6 @@ import type { VpnProfile } from "@/types/ui-types";
 
 type FormState = VpnProfilePayload & { id?: string };
 
-const emptyForm: FormState = {
-  name: "",
-  kind: "declared",
-  gatewayType: "socks5",
-  gatewayHost: "",
-  gatewayPort: 1080,
-  gatewayUsername: "",
-  gatewayPassword: "",
-};
-
 const emptyManagedForm: FormState = {
   name: "",
   kind: "managed",
@@ -60,6 +50,34 @@ const emptyManagedForm: FormState = {
   // A managed profile has no address to give; the manager answers with one.
   gatewayHost: "",
   gatewayPort: 0,
+};
+
+/**
+ * The providers Termix signs in to rather than dials, and what each calls the
+ * two things it needs. Fortinet is absent on purpose: it is the one that is
+ * dialled, at an address and as an account.
+ */
+const KEYED_PROVIDERS: Record<
+  string,
+  {
+    keyLabel: string;
+    keyPlaceholder: string;
+    serverLabel: string;
+    serverHint: string;
+  }
+> = {
+  tailscale: {
+    keyLabel: "hosts.vpn.authKey",
+    keyPlaceholder: "tskey-auth-",
+    serverLabel: "hosts.vpn.loginServer",
+    serverHint: "hosts.vpn.loginServerHint",
+  },
+  netbird: {
+    keyLabel: "hosts.vpn.setupKey",
+    keyPlaceholder: "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
+    serverLabel: "hosts.vpn.managementServer",
+    serverHint: "hosts.vpn.managementServerHint",
+  },
 };
 
 function toForm(profile: VpnProfile): FormState {
@@ -148,7 +166,7 @@ export function VpnProfileManager({
       const payload: VpnProfilePayload = {
         ...form,
         gatewayPort: Number(form.gatewayPort),
-        ...(form.kind === "managed" && form.provider !== "tailscale"
+        ...(form.kind === "managed" && !KEYED_PROVIDERS[form.provider ?? ""]
           ? { serverPort: Number(form.serverPort) || 443 }
           : {}),
       };
@@ -352,26 +370,31 @@ export function VpnProfileManager({
                     <SelectItem value="tailscale" className="text-xs">
                       {t("hosts.vpn.providerTailscale")}
                     </SelectItem>
+                    <SelectItem value="netbird" className="text-xs">
+                      {t("hosts.vpn.providerNetbird")}
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
-              {/* A tailnet is signed in to, not dialled: it has a key and,
-                  if self-hosted, a control server. Showing it a gateway
-                  address and a username would be asking for what it has no
-                  use for. */}
-              {form.provider === "tailscale" ? (
+              {/* A tailnet and a netbird network are signed in to, not
+                  dialled: each has a key and, if self-hosted, a server of its
+                  own. Showing either a gateway address and a username would
+                  be asking for what it has no use for. */}
+              {KEYED_PROVIDERS[form.provider ?? ""] ? (
                 <>
                   {field(
-                    t("hosts.vpn.authKey"),
+                    t(KEYED_PROVIDERS[form.provider ?? ""].keyLabel),
                     "authPassword",
-                    form.id ? t("hosts.vpn.passwordUnchanged") : "tskey-auth-",
+                    form.id
+                      ? t("hosts.vpn.passwordUnchanged")
+                      : KEYED_PROVIDERS[form.provider ?? ""].keyPlaceholder,
                     "password",
                   )}
                   {field(
-                    t("hosts.vpn.loginServer"),
+                    t(KEYED_PROVIDERS[form.provider ?? ""].serverLabel),
                     "serverHost",
-                    t("hosts.vpn.loginServerHint"),
+                    t(KEYED_PROVIDERS[form.provider ?? ""].serverHint),
                   )}
                 </>
               ) : (

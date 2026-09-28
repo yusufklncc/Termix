@@ -51,7 +51,7 @@ afterEach(() => {
 describe("making a managed profile", () => {
   it("sends what to dial and as whom, with the port as a number", async () => {
     setup();
-    fireEvent.click(screen.getByText("hosts.vpn.kindManaged"));
+    fireEvent.click(screen.getByText("hosts.vpn.add"));
 
     typeInto("hosts.vpn.name", "Acme");
     typeInto("hosts.vpn.serverHost", "vpn.acme.example");
@@ -74,15 +74,18 @@ describe("making a managed profile", () => {
 
   it("does not ask for an address, because the manager answers with one", () => {
     setup();
-    fireEvent.click(screen.getByText("hosts.vpn.kindManaged"));
+    fireEvent.click(screen.getByText("hosts.vpn.add"));
     expect(screen.queryByText("hosts.vpn.gatewayHost")).not.toBeInTheDocument();
   });
 
-  it("still asks for one when the operator runs the tunnel", () => {
+  it("offers one way to add a network, now that there is one", () => {
     setup();
-    fireEvent.click(screen.getByText("hosts.vpn.kindDeclared"));
-    expect(screen.getByText("hosts.vpn.gatewayHost")).toBeInTheDocument();
-    expect(screen.queryByText("hosts.vpn.serverHost")).not.toBeInTheDocument();
+    // The sidecar arrangement is gone: a network is raised by Termix, so
+    // there is nothing to choose between before filling the form in.
+    expect(
+      screen.queryByText("hosts.vpn.kindDeclared"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("hosts.vpn.add")).toBeInTheDocument();
   });
 });
 

@@ -1922,7 +1922,7 @@
       "authPassword": "VPN password",
       "trustedFingerprint": "Gateway key pin",
       "trustedFingerprintHint": "The gateway's public key digest. Leave empty unless its certificate is not publicly trusted.",
-      "managedHint": "Termix raises this tunnel itself through the network manager. No compose changes; the credentials are stored encrypted.",
+      "managedHint": "Termix raises this tunnel itself through the network manager. The credentials are stored encrypted.",
       "noManager": "No network manager is configured, so Termix cannot raise a tunnel itself.",
       "stateUp": "Connected",
       "stateConnecting": "Connecting",
@@ -1931,7 +1931,8 @@
       "switchOn": "Bring up",
       "switchOff": "Take down",
       "stateOff": "Switched off",
-      "switchFailed": "Could not switch the network"
+      "switchFailed": "Could not switch the network",
+      "kindDeclaredLegacy": "This network's tunnel is run outside Termix. New networks are raised by Termix; this one is kept as it is."
     }
   },
   "commandPalette": {

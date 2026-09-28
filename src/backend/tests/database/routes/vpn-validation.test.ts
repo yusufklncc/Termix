@@ -4,14 +4,18 @@ import {
   vpnProfileAssignmentError,
 } from "../../../database/routes/vpn-validation.js";
 
+/** What a network needs now that Termix raises the tunnel itself. */
 const valid = {
   name: "Company X",
-  gatewayHost: "vpn-x",
-  gatewayPort: 1080,
+  kind: "managed",
+  provider: "fortinet",
+  serverHost: "vpn.company-x.example",
+  serverPort: 443,
+  authUsername: "someone",
 };
 
 describe("findVpnProfileError", () => {
-  it("accepts a profile that names a gateway", () => {
+  it("accepts a network Termix can raise", () => {
     expect(findVpnProfileError(valid)).toBeNull();
   });
 
@@ -19,36 +23,49 @@ describe("findVpnProfileError", () => {
     expect(findVpnProfileError({ ...valid, name: "  " })).toMatch(/name/i);
   });
 
-  it("requires a gateway address", () => {
-    // Without one the host would be marked as going through a network it has
-    // no way to enter, and would connect directly instead.
-    expect(findVpnProfileError({ ...valid, gatewayHost: "" })).toMatch(
-      /gateway address/i,
+  it("requires the gateway's address", () => {
+    // Without one there is nothing to dial, and the profile would exist only
+    // to make hosts on it refuse.
+    expect(findVpnProfileError({ ...valid, serverHost: "" })).toMatch(
+      /gateway's address/i,
     );
   });
 
-  it("requires a usable port", () => {
-    for (const gatewayPort of [0, -1, 70000, 1080.5, "1080"]) {
-      expect(findVpnProfileError({ ...valid, gatewayPort })).toMatch(/port/i);
+  it("requires an account to sign in as", () => {
+    expect(findVpnProfileError({ ...valid, authUsername: "" })).toMatch(
+      /username/i,
+    );
+  });
+
+  it("requires a usable port when one is given", () => {
+    for (const serverPort of [0, -1, 70000, 443.5, "443"]) {
+      expect(findVpnProfileError({ ...valid, serverPort })).toMatch(/port/i);
     }
   });
 
-  it("rejects a gateway type nothing speaks", () => {
+  it("rejects a provider nothing implements", () => {
+    // Accepting it would promise a tunnel the manager does not know how to
+    // raise.
     expect(
-      findVpnProfileError({ ...valid, gatewayType: "carrier-pigeon" }),
-    ).toMatch(/gateway type/i);
+      findVpnProfileError({ ...valid, provider: "carrier-pigeon" }),
+    ).toMatch(/provider/i);
   });
 
-  it("rejects a managed kind while only declared tunnels exist", () => {
-    // Accepting it would promise a tunnel Termix does not yet run.
-    expect(findVpnProfileError({ ...valid, kind: "wireguard" })).toMatch(
-      /profile kind/i,
+  /**
+   * The sidecar arrangement, closed off. Rows made under it still resolve --
+   * a network someone is connecting through is not a thing to break on an
+   * upgrade -- but there is nothing to gain by making another.
+   */
+  it("no longer takes an operator-run sidecar", () => {
+    expect(findVpnProfileError({ ...valid, kind: "declared" })).toMatch(
+      /no longer/i,
     );
   });
 
-  it("accepts the kinds and types that are implemented", () => {
-    expect(findVpnProfileError({ ...valid, kind: "declared" })).toBeNull();
-    expect(findVpnProfileError({ ...valid, gatewayType: "http" })).toBeNull();
+  it("rejects a kind that means nothing", () => {
+    expect(findVpnProfileError({ ...valid, kind: "wireguard" })).toMatch(
+      /profile kind/i,
+    );
   });
 });
 

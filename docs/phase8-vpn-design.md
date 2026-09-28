@@ -361,3 +361,21 @@ yeni bir yol eklerken oraya uzanan kişi profili yine atlardı.
 
 **Ölçülmedi:** bu yol gerçek bir jump host'la denenmedi; jump host doğrulaması
 zaten açık bir borç olarak duruyor.
+
+---
+
+## Sidecar emekliye ayrıldı (2026-09-28)
+
+Faz 9 ile Termix tünelleri kendisi kurabildiği için `docker/vpn-sidecar/`
+kaldırıldı ve arayüzde yeni bir `declared` profil oluşturulamıyor. Aynı işi
+yapan iki yoldan, müşteri başına compose düzenlemesi gerektireni gitti.
+
+**Var olan `declared` satırlar çözülmeye devam ediyor.** Birinin üzerinden
+bağlanılan bir ağı yükseltmede kırmak doğru olmazdı; kapatılan yalnızca
+yenisini yapmak.
+
+Bunun bir bedeli var ve kayda geçsin: yönetici bugün yalnızca Fortinet
+konuşuyor. WireGuard ya da OpenVPN gerekirse yol, sidecar'ı geri yazmak değil,
+yöneticiye ikinci bir sağlayıcı eklemek olmalı — şekli `buildProviderCommand`
+içinde duruyor: bir komut, bir arayüz adı, ve standart girdiden ne istediği.
+Sidecar'ın kendisi git geçmişinde.

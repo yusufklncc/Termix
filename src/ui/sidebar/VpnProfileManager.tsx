@@ -282,18 +282,13 @@ export function VpnProfileManager({
 
       {form ? (
         <div className="flex flex-col gap-2 border-t border-border pt-2">
-          <div className="flex flex-col gap-1">
-            <label className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">
-              {t("hosts.vpn.kind")}
-            </label>
-            <span className="text-[10px] text-muted-foreground">
-              {form.kind === "managed"
-                ? t("hosts.vpn.kindManaged")
-                : t("hosts.vpn.kindDeclared")}
-              {" · "}
-              {t("hosts.vpn.kindLocked")}
-            </span>
-          </div>
+          {/* Only worth saying for a profile from before Termix raised its own
+              tunnels; a new one is always managed. */}
+          {form.kind !== "managed" && (
+            <p className="text-[10px] text-muted-foreground">
+              {t("hosts.vpn.kindDeclaredLegacy")}
+            </p>
+          )}
 
           {field(t("hosts.vpn.name"), "name", "Company X")}
 
@@ -363,26 +358,15 @@ export function VpnProfileManager({
           </div>
         </div>
       ) : (
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7"
-            onClick={() => setForm({ ...emptyManagedForm })}
-          >
-            <Plus className="size-3 mr-1" />
-            {t("hosts.vpn.kindManaged")}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7"
-            onClick={() => setForm({ ...emptyForm })}
-          >
-            <Plus className="size-3 mr-1" />
-            {t("hosts.vpn.kindDeclared")}
-          </Button>
-        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 self-start"
+          onClick={() => setForm({ ...emptyManagedForm })}
+        >
+          <Plus className="size-3 mr-1" />
+          {t("hosts.vpn.add")}
+        </Button>
       )}
     </div>
   );

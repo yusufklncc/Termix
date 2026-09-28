@@ -7,8 +7,19 @@
  * person sees why, while they are still looking at the form.
  */
 
-const GATEWAY_TYPES = new Set(["socks5", "http"]);
-const KINDS = new Set(["declared", "managed"]);
+/*
+ * "declared" is no longer offered.
+ *
+ * It was the arrangement before Termix could raise a tunnel itself: the
+ * operator ran a sidecar per network and a profile recorded its address. Two
+ * ways to do one thing, and the one that needs a compose edit per customer is
+ * the worse of them.
+ *
+ * Rows that already exist still resolve -- a profile someone is connecting
+ * through is not a thing to break on an upgrade. Only making new ones is
+ * closed, and only because nothing would be gained by it.
+ */
+const KINDS = new Set(["managed"]);
 /** One on purpose: the gateway this can be measured against. */
 const PROVIDERS = new Set(["fortinet"]);
 
@@ -21,40 +32,16 @@ export function findVpnProfileError(input: unknown): string | null {
   }
 
   if (data.kind !== undefined && !KINDS.has(String(data.kind))) {
-    return "Unsupported profile kind";
+    return String(data.kind) === "declared"
+      ? "Networks are raised by Termix now; an operator-run sidecar is no longer set up from here"
+      : "Unsupported profile kind";
   }
 
   /*
    * A managed profile has no address to give: Termix raises the tunnel, so it
    * works the address out. What it needs instead is what to dial and as whom.
    */
-  if (String(data.kind ?? "declared") === "managed") {
-    return findManagedProfileError(data);
-  }
-
-  const host = data.gatewayHost;
-  if (typeof host !== "string" || host.trim().length === 0) {
-    return "A network profile needs a gateway address";
-  }
-
-  const port = data.gatewayPort;
-  if (
-    typeof port !== "number" ||
-    !Number.isInteger(port) ||
-    port < 1 ||
-    port > 65535
-  ) {
-    return "A network profile needs a valid gateway port";
-  }
-
-  if (
-    data.gatewayType !== undefined &&
-    !GATEWAY_TYPES.has(String(data.gatewayType))
-  ) {
-    return "Unsupported gateway type";
-  }
-
-  return null;
+  return findManagedProfileError(data);
 }
 
 function findManagedProfileError(data: Record<string, unknown>): string | null {

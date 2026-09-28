@@ -407,7 +407,7 @@ Tasarım ve gerekçeler: [`docs/phase8-vpn-design.md`](docs/phase8-vpn-design.md
 - [x] Host editöründe seçici ve profil yöneticisi
 - [x] Yolda iki sızma bulundu ve kapatıldı (çağrı yerlerinin kendi proxy
       üretimi, ve guacd'nin proxy ayarını hiç okumaması)
-- [x] Referans sidecar (`docker/vpn-sidecar/`, Fortinet SSL-VPN) ve yerel
+- [x] Referans sidecar — Faz 9 ile emekliye ayrıldı, bkz. tasarım notu. Yerel
       doğrulama: zincir çalışıyor, çakışan adres doğru makineye çıkıyor, hem
       uygulama hem sidecar tünel yokken kapalı düşüyor
 - [x] Klasöre toplu uygulama (2026-09-27)

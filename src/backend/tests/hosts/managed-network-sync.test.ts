@@ -57,6 +57,24 @@ describe("putting managed networks back", () => {
    * when something connects. Raising an idle VPN again would dial the gateway
    * for nobody.
    */
+  it("writes down what the manager saw, since raising now happens elsewhere", async () => {
+    listManaged.mockResolvedValue([profile({ lastState: "idle" })]);
+    listManagedNetworks.mockResolvedValue([
+      { id: 1, state: "refused", error: "Failed to complete authentication" },
+    ]);
+
+    await syncManagedNetworks();
+
+    // A connection raised it and the gateway refused; nothing told Termix, so
+    // this is where the refusal is recorded -- and it is what stops the sweep
+    // trying again.
+    expect(updateById).toHaveBeenCalledWith(1, "user-1", {
+      lastState: "refused",
+      lastError: "Failed to complete authentication",
+    });
+    expect(raiseManagedNetwork).not.toHaveBeenCalled();
+  });
+
   it("leaves an idle one alone, because idle is not a fault", async () => {
     listManaged.mockResolvedValue([profile()]);
     listManagedNetworks.mockResolvedValue([{ id: 1, state: "idle" }]);

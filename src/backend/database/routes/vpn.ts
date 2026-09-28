@@ -7,6 +7,7 @@ import { AuthManager } from "../../utils/auth-manager.js";
 import { findVpnProfileError } from "./vpn-validation.js";
 import {
   disconnectManagedNetwork,
+  listManagedNetworks,
   dropManagedNetwork,
   managedDoorPort,
   raiseManagedNetwork,
@@ -94,7 +95,32 @@ router.get("/profiles", authenticateJWT, async (req, res: Response) => {
   try {
     const profiles =
       await createCurrentVpnProfileRepository().listByUser(userId);
-    res.json(profiles.map(toResponse));
+
+    /*
+     * The state shown is the state now, not the last one written down.
+     *
+     * The tunnel comes up when a session needs it and goes when none do, and
+     * the manager does not report either -- so a stored state would say
+     * "ready" while a VPN is carrying traffic, and keep saying it long after
+     * it stopped. One question to the manager costs a short connection and
+     * removes a whole class of lie.
+     */
+    const live = await listManagedNetworks();
+    const byId = new Map((live ?? []).map((entry) => [entry.id, entry]));
+
+    res.json(
+      profiles.map((profile) => {
+        const now = byId.get(profile.id);
+        if (String(profile.kind) !== "managed" || !now) {
+          return toResponse(profile);
+        }
+        return toResponse({
+          ...profile,
+          lastState: now.state,
+          lastError: now.error ?? profile.lastError,
+        });
+      }),
+    );
   } catch (error) {
     authLogger.error("Failed to list VPN profiles", error, {
       operation: "vpn_profile_list",

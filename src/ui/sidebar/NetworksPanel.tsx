@@ -29,7 +29,16 @@ export function NetworksPanel() {
       .catch(() => setProfiles([]));
   }, []);
 
-  useEffect(load, [load]);
+  useEffect(() => {
+    load();
+    /*
+     * A VPN comes up when a session needs it and goes when none do, without
+     * anyone pressing anything here. A list that only loaded once would sit
+     * saying "ready" while one is carrying traffic.
+     */
+    const timer = setInterval(load, 10000);
+    return () => clearInterval(timer);
+  }, [load]);
 
   return (
     <div className="flex flex-col flex-1 min-h-0 overflow-y-auto p-2">

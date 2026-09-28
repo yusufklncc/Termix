@@ -84,7 +84,26 @@ export async function syncManagedNetworks(): Promise<{
   let raised = 0;
   let skipped = 0;
   for (const profile of profiles) {
-    if (known.has(profile.id)) continue;
+    const seen = state.find((entry) => entry.id === profile.id);
+    if (seen) {
+      /*
+       * What the manager saw is written down.
+       *
+       * A tunnel now comes up on a connection, so a refusal happens where
+       * Termix is not watching -- and the rule that a refused credential is
+       * never raised again reads that from here. Without this it would be
+       * forgotten the moment the manager restarted.
+       */
+      if (seen.state !== profile.lastState) {
+        await repository
+          .updateById(profile.id, profile.userId, {
+            lastState: seen.state,
+            lastError: seen.error ?? null,
+          } as never)
+          .catch(() => undefined);
+      }
+      continue;
+    }
     if (!worthRaising(profile)) {
       skipped += 1;
       continue;

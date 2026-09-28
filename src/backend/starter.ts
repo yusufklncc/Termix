@@ -361,6 +361,18 @@ async function provisionLocalDesktopUserIfNeeded(): Promise<void> {
       });
     });
 
+    // Puts the managed tunnels back after a restart -- of Termix or of the
+    // manager, which holds its networks in memory. Does nothing where no
+    // manager is configured.
+    import("./hosts/managed-network-sync.js")
+      .then(({ startManagedNetworkSync }) => startManagedNetworkSync())
+      .catch((error) => {
+        systemLogger.warn("Failed to start the managed network sync", {
+          operation: "managed_network_sync_skip",
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+      });
+
     const { startAnalyticsHeartbeat } = await import("./utils/analytics.js");
     startAnalyticsHeartbeat();
 

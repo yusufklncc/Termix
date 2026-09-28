@@ -64,6 +64,43 @@ export class VpnProfileRepository {
     return DataCrypto.decryptRecords("vpn_profiles", rows, userId, userDataKey);
   }
 
+  /**
+   * Every managed profile, whoever owns it.
+   *
+   * For putting the tunnels back after a restart, which is nobody's request
+   * in particular -- so it decrypts under each owner's own key, one owner at
+   * a time. A key that cannot be unwrapped means that owner's networks stay
+   * down rather than the whole sweep failing.
+   */
+  async listManaged(): Promise<VpnProfileRecord[]> {
+    const rows = await this.context.drizzle
+      .select()
+      .from(vpnProfiles)
+      .where(eq(vpnProfiles.kind, "managed"));
+
+    const byUser = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const list = byUser.get(row.userId) ?? [];
+      list.push(row);
+      byUser.set(row.userId, list);
+    }
+
+    const decrypted: VpnProfileRecord[] = [];
+    for (const [userId, userRows] of byUser) {
+      const userDataKey = DataCrypto.getUserDataKey(userId);
+      if (!userDataKey) continue;
+      decrypted.push(
+        ...DataCrypto.decryptRecords(
+          "vpn_profiles",
+          userRows,
+          userId,
+          userDataKey,
+        ),
+      );
+    }
+    return decrypted;
+  }
+
   async create(input: VpnProfileCreateInput): Promise<VpnProfileRecord> {
     // The gateway password is a secret like any host credential; the table is
     // registered in field-crypto, and this is where that registration is used.

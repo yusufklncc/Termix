@@ -346,6 +346,21 @@ function buildProviderCommand(profile, credentials, gatewayIps) {
 /** id -> { state, error, port, procs, doorway } */
 const networks = new Map();
 
+/*
+ * A refusal is not a failure to retry.
+ *
+ * A dropped tunnel is worth raising again; a password the gateway refused is
+ * not. Trying it again cannot succeed, and a FortiGate counts the attempts --
+ * which is how an account gets locked, and then stays locked, because the next
+ * attempt arrives before the lockout lapses. Saying which kind of failure this
+ * was lets Termix leave it alone until someone changes the credentials.
+ */
+function looksRefused(reason) {
+  return /authentication (failed|error)|failed to complete authentication|login failed|permission denied|user input required|invalid credential/i.test(
+    String(reason ?? ""),
+  );
+}
+
 /** The last thing the client said, which is usually the reason. */
 function lastWords(said) {
   const interesting = (said ?? []).filter(
@@ -463,14 +478,21 @@ async function bringUp(profile, credentials) {
     return { state: "up", port };
   } catch (error) {
     await bringDown(id);
+    // Classified from the message, which already carries the client's own
+    // last words -- one place to look instead of two to keep in step.
+    const reason = String(error.message ?? error);
     const entry2 = {
-      state: "error",
-      error: String(error.message ?? error),
+      state: looksRefused(reason) ? "refused" : "error",
+      error: reason,
       port: DOOR_BASE + id,
     };
     networks.set(id, entry2);
     logError(`network ${id} failed: ${entry2.error}`);
-    return { state: "error", error: entry2.error, port: entry2.port };
+    return {
+      state: entry2.state,
+      error: entry2.error,
+      port: entry2.port,
+    };
   }
 }
 

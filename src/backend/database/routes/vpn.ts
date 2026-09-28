@@ -212,6 +212,9 @@ router.put("/profiles/:id", authenticateJWT, async (req, res: Response) => {
 
     // An edited tunnel is raised again: the server, the account or the pin may
     // be what changed, and the one that is running was built from the old ones.
+    // This is also the only thing that clears a refusal -- the sync leaves
+    // those alone, because retrying a password the gateway rejected locks the
+    // account rather than getting in.
     if (managed && updated) {
       updated = await raiseAndRecord(updated as never);
     }

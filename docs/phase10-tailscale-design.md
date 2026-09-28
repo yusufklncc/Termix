@@ -248,3 +248,37 @@ raise etmediği bir geçit, ya da ulaşılamayan bir yönetici. O durumda davran
 bu iş yapılmadan öncekiyle birebir aynı. Hiçbir yerde doğrudan bağlantıya geri
 düşülmüyor. Fortinet'in listesi yok, dolayısıyla `null` dönüyor ve adı eskisi
 gibi karşı tarafa bırakıyor.
+
+---
+
+## Eş kimliğinin kalıcılığı
+
+Gerçek kullanımda çıkan ikinci şey: `docker compose up -d` sonrası
+`setup key is invalid`.
+
+Sebep tasarımdaydı. Netbird'ün eş kimliği `/run/netbird-<id>` altında, yani
+**konteynerin kendi katmanında** duruyordu. Yeni bir imaj çekmek konteyneri
+yeniden yaratıyor, kimlik gidiyor, eş sıfırdan kaydoluyor ve kurulum
+anahtarından bir kullanım daha harcanıyor. Tek kullanımlık bir anahtar ilk
+güncellemede tükeniyor ve ağ bir daha kalkmıyor.
+
+Kimlik artık `NET_MANAGER_STATE_ROOT` (varsayılan `/var/lib/termix-netmgr`)
+altında. Ölçüldü: konteyner yok edilip yeniden yaratıldıktan sonra
+`default.json` ve içindeki özel anahtar yerinde duruyor. Soket `/run`'da
+kaldı — soketin bir şeyden uzun yaşaması gerekmiyor.
+
+Operatörün compose'una bir birim eklemesi gerekiyor:
+
+```yaml
+services:
+  termix-netmgr:
+    volumes:
+      - netmgr-state:/var/lib/termix-netmgr
+volumes:
+  netmgr-state:
+```
+
+Tailscale bu değişikliğin dışında: orada `--state=mem:` bilerek seçilmişti,
+her kalkışta yeni düğüm demek, dolayısıyla anahtarın yeniden kullanılabilir
+(ve tercihen ephemeral) olması zaten şart. Formda her iki sağlayıcı için de
+anahtarın hangi türden olması gerektiği yazıyor artık.

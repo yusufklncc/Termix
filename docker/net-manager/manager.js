@@ -26,6 +26,17 @@ const TAILSCALE_SOCKS_BASE = Number(
 const NETBIRD_SOCKS_BASE = Number(
   process.env.NET_MANAGER_NETBIRD_SOCKS_BASE ?? 31000,
 );
+/**
+ * Where a peer's identity is kept, for the providers that have one.
+ *
+ * Meant to be a mounted volume. Left inside the container, it is destroyed
+ * every time the container is recreated -- which is what pulling a new image
+ * does -- and the peer then registers again from nothing, spending one more
+ * use of the setup key. A single-use key is spent the first time that
+ * happens, and the network stops coming up with "setup key is invalid".
+ */
+const STATE_ROOT =
+  process.env.NET_MANAGER_STATE_ROOT ?? "/var/lib/termix-netmgr";
 
 if (!TOKEN) {
   // A control channel that carries passwords and takes anyone's word for who
@@ -555,15 +566,17 @@ async function waitForTailscale(
  * socket anyway, and a CLI pointed at one instance with it quietly configured
  * whichever instance owned the default. Measured, both of them.
  *
- * The peer's state is kept for as long as the container lives, unlike the
- * tailnet's. Netbird has no in-memory state option, and keeping it means a
- * network that goes up and down with use re-registers as the same peer rather
- * than leaving a new dead one behind each time.
+ * The peer's identity is kept, unlike the tailnet's. Netbird has no in-memory
+ * state option, and keeping it means a network that goes up and down with use
+ * comes back as the same peer rather than leaving a new dead one behind each
+ * time -- and, across a restart, without spending another use of the setup
+ * key. It lives under STATE_ROOT for that second reason; the socket does not,
+ * because a socket outlives nothing.
  */
 async function raiseNetbird({ id, profile, credentials, watch, procs }) {
   const socksPort = NETBIRD_SOCKS_BASE + id;
-  const state = `/run/netbird-${id}`;
-  const daemonAddr = `unix://${state}.sock`;
+  const state = `${STATE_ROOT}/netbird-${id}`;
+  const daemonAddr = `unix:///run/netbird-${id}.sock`;
   await fs.promises.mkdir(state, { recursive: true });
 
   const environment = {

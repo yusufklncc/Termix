@@ -62,6 +62,7 @@ const KEYED_PROVIDERS: Record<
   {
     keyLabel: string;
     keyPlaceholder: string;
+    keyNote: string;
     serverLabel: string;
     serverHint: string;
   }
@@ -69,12 +70,14 @@ const KEYED_PROVIDERS: Record<
   tailscale: {
     keyLabel: "hosts.vpn.authKey",
     keyPlaceholder: "tskey-auth-",
+    keyNote: "hosts.vpn.authKeyNote",
     serverLabel: "hosts.vpn.loginServer",
     serverHint: "hosts.vpn.loginServerHint",
   },
   netbird: {
     keyLabel: "hosts.vpn.setupKey",
     keyPlaceholder: "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX",
+    keyNote: "hosts.vpn.setupKeyNote",
     serverLabel: "hosts.vpn.managementServer",
     serverHint: "hosts.vpn.managementServerHint",
   },
@@ -391,6 +394,11 @@ export function VpnProfileManager({
                       : KEYED_PROVIDERS[form.provider ?? ""].keyPlaceholder,
                     "password",
                   )}
+                  {/* Which kind of key: the one trap here that costs a
+                      working VPN rather than a failed save. */}
+                  <p className="text-[10px] text-muted-foreground">
+                    {t(KEYED_PROVIDERS[form.provider ?? ""].keyNote)}
+                  </p>
                   {field(
                     t(KEYED_PROVIDERS[form.provider ?? ""].serverLabel),
                     "serverHost",

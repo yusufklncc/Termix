@@ -47,6 +47,12 @@ manager at `NET_MANAGER_URL` (default `termix-netmgr:3392`).
 | `NET_MANAGER_DOOR_BASE` | no (20000)   | A profile's doorway is this plus its id                 |
 | `NET_MANAGER_SUBNET`    | no (10.88)   | The /16 the namespaces are addressed from               |
 
+Termix puts its managed networks back after a restart of either side, at
+boot and every `NET_MANAGER_SYNC_INTERVAL_MS` (default 60000) thereafter. A
+credential the gateway refused is never raised again by that sweep: retrying
+it cannot succeed and a FortiGate counts the attempts. Editing the profile is
+what clears it.
+
 Forwarding is what lets a namespace reach its gateway through this
 container's route. Whether it is on by default depends on the host -- it is
 under plain Docker, it is not under Docker in LXC -- so the entry is in the

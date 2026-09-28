@@ -114,11 +114,17 @@ export async function syncManagedNetworks(): Promise<{
 
 let timer: NodeJS.Timeout | null = null;
 
-/** Started once at boot. The interval is long: this is a safety net for a
- * restart, not a health check -- the doorway's own absence already makes a
- * dead network refuse connections. */
+/**
+ * Started once at boot, then on an interval.
+ *
+ * A minute, because a network that is down is a host that cannot be reached,
+ * and the operator has no way to tell the difference between "still coming
+ * back" and "broken" except by waiting. The check itself is one short
+ * connection to the manager, so this is cheap; five minutes was chosen for
+ * tidiness and felt like a fault.
+ */
 export function startManagedNetworkSync(
-  intervalMs = Number(process.env.NET_MANAGER_SYNC_INTERVAL_MS ?? 300000),
+  intervalMs = Number(process.env.NET_MANAGER_SYNC_INTERVAL_MS ?? 60000),
 ): void {
   if (timer || !resolveNetManagerOptions()) return;
 

@@ -17,6 +17,10 @@ const BIND = process.env.NET_MANAGER_BIND ?? "0.0.0.0";
 /** Doorways start here; a profile's is this plus its id, as Termix computes. */
 const DOOR_BASE = Number(process.env.NET_MANAGER_DOOR_BASE ?? 20000);
 const SUBNET_PREFIX = process.env.NET_MANAGER_SUBNET ?? "10.88";
+/** Each tailscaled gets its own SOCKS port, since they share this namespace. */
+const TAILSCALE_SOCKS_BASE = Number(
+  process.env.NET_MANAGER_TAILSCALE_SOCKS_BASE ?? 30000,
+);
 
 if (!TOKEN) {
   // A control channel that carries passwords and takes anyone's word for who
@@ -88,11 +92,27 @@ function unseal(sealed) {
 
 // ------------------------------------------------------------- namespaces
 
+/**
+ * A failed command reports what it was, with the secrets taken out.
+ *
+ * The reason travels back to Termix and is shown to whoever is looking, so an
+ * auth key or a password on the command line would end up in the database and
+ * on the screen. What is useful about the command is its shape, not its
+ * credentials.
+ */
+function redactArgs(args) {
+  return args.map((arg) =>
+    /^--(authkey|auth-key|password|passwd|token)=/.test(arg)
+      ? arg.replace(/=.*/, "=***")
+      : arg,
+  );
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     execFile(command, args, options, (error, stdout, stderr) => {
       if (error) {
-        error.message = `${command} ${args.join(" ")}: ${stderr || error.message}`;
+        error.message = `${command} ${redactArgs(args).join(" ")}: ${stderr || error.message}`;
         reject(error);
       } else resolve(stdout);
     });
@@ -285,7 +305,7 @@ async function resolveGatewayIps(host) {
  * another attempt.
  */
 function looksRefused(reason) {
-  return /authentication (failed|error)|failed to complete authentication|login failed|permission denied|user input required|invalid credential/i.test(
+  return /authentication (failed|error)|failed to complete authentication|login failed|permission denied|user input required|invalid credential|invalid key|unable to validate|key is expired|expired key|not authorized|unauthorized/i.test(
     String(reason ?? ""),
   );
 }
@@ -413,8 +433,89 @@ async function raiseFortinet({ id, profile, credentials, watch, procs }) {
   return { upstream: { host: peer, port: 1080 } };
 }
 
+/**
+ * Tailscale needs none of what Fortinet needs.
+ *
+ * With userspace networking it builds its own network stack instead of a tun
+ * device, so there is no interface to wait for, no kernel route to collide
+ * with another tailnet's, and no namespace to keep them apart. And it puts a
+ * SOCKS5 server in front of that stack itself, which is the doorway this
+ * manager otherwise assembles out of microsocks.
+ *
+ * The node is not kept: --state=mem: means a fresh one each time the tunnel
+ * comes up, which is what an ephemeral auth key is for. Keeping state would
+ * leave a trail of dead nodes in the tailnet, since this raises and drops
+ * with use.
+ */
+async function raiseTailscale({ id, profile, credentials, watch, procs }) {
+  const socksPort = TAILSCALE_SOCKS_BASE + id;
+  const socket = `/run/tailscale-${id}.sock`;
+
+  const daemon = spawn(
+    "tailscaled",
+    [
+      "--tun=userspace-networking",
+      `--socks5-server=127.0.0.1:${socksPort}`,
+      "--state=mem:",
+      `--socket=${socket}`,
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  watch.attach(daemon);
+  procs.push(daemon);
+
+  const up = ["--socket=" + socket, "up", `--hostname=termix-${id}`];
+  if (credentials.password) up.push(`--authkey=${credentials.password}`);
+  // A self-hosted control server (Headscale) goes here; empty means Tailscale's.
+  if (profile.serverHost) up.push(`--login-server=${profile.serverHost}`);
+
+  await waitForTailscale(daemon, socket, up, watch.said);
+
+  return { upstream: { host: "127.0.0.1", port: socksPort } };
+}
+
+/** The daemon has to be listening on its socket before it will take a login,
+ * and the login is what decides whether these credentials are any good. */
+async function waitForTailscale(
+  daemon,
+  socket,
+  upArgs,
+  said,
+  timeoutMs = 60000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (daemon.exitCode !== null) {
+      const reason = lastWords(said);
+      throw new Error(
+        reason ? `tailscaled stopped: ${reason}` : "tailscaled exited at once",
+      );
+    }
+    try {
+      await run("tailscale", [`--socket=${socket}`, "status", "--json"]);
+      break;
+    } catch {
+      if (Date.now() > deadline) {
+        throw new Error("tailscaled never answered on its socket");
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+
+  try {
+    await run("tailscale", upArgs);
+  } catch (error) {
+    // The CLI's own words: an auth key that is used up, expired or meant for
+    // another tailnet each say so, and each needs a different answer.
+    throw new Error(
+      `tailscale could not sign in: ${String(error.message ?? error).trim()}`,
+    );
+  }
+}
+
 const PROVIDERS = {
   fortinet: { needsNamespace: true, raise: raiseFortinet },
+  tailscale: { needsNamespace: false, raise: raiseTailscale },
 };
 
 // ------------------------------------------------------------- lifecycle

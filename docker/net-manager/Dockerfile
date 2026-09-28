@@ -15,12 +15,19 @@
 # second form with "user input required in non-interactive mode" -- the same
 # account and password that 9.12 signs in with. Phase 8's sidecar is on trixie
 # and works; this had no business being older than it.
+# Tailscale's own binaries: Debian does not carry them, and they are static,
+# so they are copied rather than installed.
+FROM tailscale/tailscale:latest AS tailscale
+
 FROM node:22-trixie-slim
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       openconnect vpnc-scripts microsocks iproute2 iptables ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=tailscale /usr/local/bin/tailscaled /usr/local/bin/tailscaled
+COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscale
 
 COPY manager.js /app/manager.js
 COPY vpnc-script-no-dns /app/vpnc-script-no-dns

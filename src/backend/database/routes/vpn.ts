@@ -6,6 +6,7 @@ import { authLogger } from "../../utils/logger.js";
 import { AuthManager } from "../../utils/auth-manager.js";
 import { findVpnProfileError } from "./vpn-validation.js";
 import {
+  disconnectManagedNetwork,
   dropManagedNetwork,
   managedDoorPort,
   raiseManagedNetwork,
@@ -289,6 +290,53 @@ router.put(
         profileId: id,
       });
       res.status(500).json({ error: "Failed to switch the network" });
+    }
+  },
+);
+
+/**
+ * Take the tunnel down now, without disabling the VPN.
+ *
+ * Disabling says "do not use this"; this says "I am done with it for now".
+ * The doorway stays open, so the next session raises it again -- which is the
+ * difference someone means when they close a VPN rather than turn it off.
+ */
+router.post(
+  "/profiles/:id/disconnect",
+  authenticateJWT,
+  async (req, res: Response) => {
+    const userId = (req as AuthenticatedRequest).userId;
+    const id = Number.parseInt(String(req.params.id), 10);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ error: "Invalid profile id" });
+    }
+
+    try {
+      const repository = createCurrentVpnProfileRepository();
+      const existing = await repository.findById(id, userId);
+      if (!existing) {
+        return res.status(404).json({ error: "VPN not found" });
+      }
+      if (String(existing.kind) !== "managed") {
+        return res.status(400).json({
+          error: "Only a VPN Termix raises can be taken down from here",
+        });
+      }
+
+      const result = await disconnectManagedNetwork(id);
+      const updated = await repository.updateById(id, userId, {
+        lastState: result.state,
+        lastError: null,
+      } as never);
+
+      res.json(toResponse(updated ?? existing));
+    } catch (error) {
+      authLogger.error("Failed to take a VPN down", error, {
+        operation: "vpn_profile_disconnect",
+        userId,
+        profileId: id,
+      });
+      res.status(500).json({ error: "Failed to take the VPN down" });
     }
   },
 );

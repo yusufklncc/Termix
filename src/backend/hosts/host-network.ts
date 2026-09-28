@@ -67,14 +67,15 @@ function profileToConfig(profile: VpnProfileRecord): SOCKS5Config {
    */
   if (profile.kind === "managed") {
     /*
-     * Switched off on purpose.
+     * Disabled on purpose.
      *
-     * The doorway is gone, so this would fail anyway -- but as "nothing is
-     * listening", which reads like a fault. Someone turned it off, and that
-     * is a different thing to be told.
+     * Not the same as a tunnel that is simply down: that one is raised when a
+     * session needs it. This one is not to be used at all, and the doorway is
+     * gone with it -- so without saying so the refusal would read as "nothing
+     * is listening", which is a fault, not a decision.
      */
     if (profile.enabled === false) {
-      throw new Error("This host's VPN is switched off");
+      throw new Error("This host's VPN is disabled");
     }
 
     const manager = resolveNetManagerOptions();

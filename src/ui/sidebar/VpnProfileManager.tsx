@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Pencil, Play, Plus, Square, Trash2, X } from "lucide-react";
+import { Pencil, Play, Plug, Plus, Square, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { getErrorMessage } from "../lib/error-message.js";
@@ -11,6 +11,7 @@ import {
   updateVpnProfile,
   deleteVpnProfile,
   setVpnProfileEnabled,
+  disconnectVpnProfile,
   type VpnProfilePayload,
 } from "@/main-axios";
 import type { VpnProfile } from "@/types/ui-types";
@@ -168,6 +169,15 @@ export function VpnProfileManager({
     }
   };
 
+  const handleDisconnect = async (profile: VpnProfile) => {
+    try {
+      await disconnectVpnProfile(Number(profile.id));
+      onChanged();
+    } catch (error) {
+      toast.error(getErrorMessage(error, t("hosts.vpn.disconnectFailed")));
+    }
+  };
+
   const handleDelete = async (profile: VpnProfile) => {
     try {
       await deleteVpnProfile(Number(profile.id));
@@ -243,6 +253,19 @@ export function VpnProfileManager({
               <StateBadge profile={profile} />
             </div>
             <div className="flex items-center gap-1 shrink-0">
+              {/* Only while it is up: taking down a tunnel nothing is using
+                  would do nothing worth a button. */}
+              {profile.kind === "managed" && profile.lastState === "up" && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2"
+                  title={t("hosts.vpn.disconnectNow")}
+                  onClick={() => handleDisconnect(profile)}
+                >
+                  <Plug className="size-3" />
+                </Button>
+              )}
               {profile.kind === "managed" && (
                 <Button
                   variant="ghost"

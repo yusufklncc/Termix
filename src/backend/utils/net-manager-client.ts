@@ -187,6 +187,31 @@ export async function dropManagedNetwork(
   }
 }
 
+/**
+ * Take a VPN's tunnel down without forgetting it.
+ *
+ * The doorway stays, so the next session raises it again. This is "I am done
+ * with this for now", not "do not use this" -- which is what disabling a
+ * profile means.
+ */
+export async function disconnectManagedNetwork(
+  profileId: number,
+  options = resolveNetManagerOptions(),
+): Promise<{ state: string }> {
+  if (!options) return { state: "unknown" };
+  try {
+    const answer = await ask(options, "NDRP", { id: profileId }, 15000);
+    return { state: String(answer.state ?? "idle") };
+  } catch (error) {
+    sshLogger.warn("Failed to take a VPN's tunnel down", {
+      operation: "net_manager_drop",
+      profileId,
+      error: getErrorMessage(error),
+    });
+    return { state: "unknown" };
+  }
+}
+
 export async function listManagedNetworks(
   options = resolveNetManagerOptions(),
 ): Promise<ManagedNetworkState[] | null> {

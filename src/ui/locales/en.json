@@ -1928,12 +1928,14 @@
       "stateConnecting": "Connecting",
       "stateDown": "Not connected",
       "stateError": "Failed",
-      "switchOn": "Bring up",
-      "switchOff": "Take down",
-      "stateOff": "Switched off",
-      "switchFailed": "Could not switch the VPN",
+      "switchOn": "Enable",
+      "switchOff": "Disable",
+      "stateOff": "Disabled",
+      "switchFailed": "Could not enable or disable the VPN",
       "kindDeclaredLegacy": "This VPN's tunnel is run outside Termix. New ones are raised by Termix; this one is kept as it is.",
-      "stateIdle": "Ready"
+      "stateIdle": "Ready",
+      "disconnectNow": "Disconnect now",
+      "disconnectFailed": "Could not take the VPN down"
     }
   },
   "commandPalette": {

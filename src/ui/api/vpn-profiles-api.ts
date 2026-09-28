@@ -78,3 +78,14 @@ export async function setVpnProfileEnabled(
     throw handleApiError(error, "switch the network");
   }
 }
+
+export async function disconnectVpnProfile(
+  id: number,
+): Promise<Record<string, unknown>> {
+  try {
+    const response = await authApi.post(`/vpn/profiles/${id}/disconnect`);
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error, "take the VPN down");
+  }
+}

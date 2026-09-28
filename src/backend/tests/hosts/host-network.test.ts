@@ -249,14 +249,14 @@ describe("a managed network's address", () => {
   });
 });
 
-describe("a network that is switched off", () => {
+describe("a VPN that is disabled", () => {
   it("says so, rather than failing as an empty address", async () => {
     process.env.NET_MANAGER_TOKEN = "s";
     await expect(
       resolveHostGateway({ vpnProfileId: 4, userId: "user-1" }, async () =>
         profile({ id: 4, kind: "managed", enabled: false }),
       ),
-    ).rejects.toThrow(/switched off/i);
+    ).rejects.toThrow(/disabled/i);
     delete process.env.NET_MANAGER_TOKEN;
   });
 

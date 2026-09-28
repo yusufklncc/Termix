@@ -674,6 +674,23 @@ async function handleFrame(magic, payload) {
       await unregisterNetwork(Number(body.id));
       return { ok: true, state: "down" };
     }
+    /*
+     * Take the tunnel down, keep the doorway.
+     *
+     * Different from NDWN, which forgets the VPN entirely. This is someone
+     * closing a VPN they are done with for now: the next session raises it
+     * again, because it is still registered.
+     */
+    case "NDRP": {
+      const id = Number(body.id);
+      await dropTunnel(id);
+      const entry = networks.get(id);
+      return {
+        ok: true,
+        state: stateOf(entry),
+        port: entry?.port ?? DOOR_BASE + id,
+      };
+    }
     case "NSTA":
       return { ok: true, networks: snapshot() };
     default:

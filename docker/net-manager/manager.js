@@ -330,7 +330,7 @@ async function resolveGatewayIps(host) {
  * is not what fixes either of them.
  */
 function looksRefused(reason) {
-  return /authentication (failed|error)|failed to complete authentication|login failed|permission denied|user input required|invalid credential|invalid key|key is expired|expired key|setup[- ]key (is |was )?(invalid|expired|exhausted|revoked)|invalid setup-key/i.test(
+  return /authentication (failed|error)|failed to complete authentication|login failed|permission denied|user input required|invalid credential|invalid key|key is expired|expired key|setup[- ]key (is |was )?(invalid|expired|exhausted|revoked)|invalid setup-key|no longer matches this VPN's pinned/i.test(
     String(reason ?? ""),
   );
 }
@@ -407,6 +407,28 @@ function watcher() {
   };
 }
 
+/**
+ * Did the gateway's certificate stop matching the one this VPN pinned?
+ *
+ * Worth telling apart, because openconnect's last word for it is "Failed to
+ * complete authentication" -- the same thing it says when a password is
+ * refused, and nothing a person could act on. A renewed certificate is fixed
+ * by updating the profile, not by checking the password.
+ *
+ * openconnect prints the certificate's current pin when it rejects one, so
+ * the value needed to fix it is carried along rather than left to be worked
+ * out with openssl.
+ */
+function pinnedCertificateChanged(said) {
+  for (const line of said ?? []) {
+    const match = /match server's certificate:\s*(pin-sha256:\S+)/i.exec(line);
+    if (match) {
+      return `the gateway's certificate no longer matches this VPN's pinned fingerprint. Its current pin is ${match[1]} -- update the profile's trusted fingerprint if this change was expected`;
+    }
+  }
+  return null;
+}
+
 async function raiseFortinet({ id, profile, credentials, watch, procs }) {
   const { peer } = addresses(id);
   const host = profile.serverHost;
@@ -446,7 +468,14 @@ async function raiseFortinet({ id, profile, credentials, watch, procs }) {
   procs.push(vpn);
   vpn.stdin.end(`${credentials.password}\n`);
 
-  await waitForInterface(id, "tun0", vpn, 60000, watch.said);
+  try {
+    await waitForInterface(id, "tun0", vpn, 60000, watch.said);
+  } catch (error) {
+    // A pinned certificate that changed says so plainly, rather than through
+    // openconnect's parting words about authentication.
+    const changed = pinnedCertificateChanged(watch.said);
+    throw changed ? new Error(changed) : error;
+  }
   await applyStrictRoutes(id, "tun0", gatewayIps);
 
   const socks = spawn(

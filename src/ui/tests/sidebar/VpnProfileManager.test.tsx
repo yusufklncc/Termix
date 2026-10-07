@@ -22,6 +22,8 @@ vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+const copyToClipboard = vi.hoisted(() => vi.fn(async (_text: string) => true));
+vi.mock("@/lib/clipboard", () => ({ copyToClipboard }));
 
 import { VpnProfileManager } from "@/sidebar/VpnProfileManager";
 import type { VpnProfile } from "@/types/ui-types";
@@ -175,5 +177,48 @@ describe("a network that is signed in to, not dialled", () => {
     expect(screen.getByText("hosts.vpn.serverHost")).toBeInTheDocument();
     expect(screen.getByText("hosts.vpn.authUsername")).toBeInTheDocument();
     expect(screen.queryByText("hosts.vpn.setupKey")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * A reason you can keep.
+ *
+ * What a VPN says when it will not come up sometimes carries the value that
+ * fixes it -- the certificate pin a renewed gateway now presents, for one --
+ * and a tooltip cannot be selected, let alone copied.
+ */
+describe("the reason a VPN gives", () => {
+  const pin =
+    "the gateway's certificate no longer matches this VPN's pinned fingerprint. Its current pin is pin-sha256:abc123=";
+  const failed = {
+    id: "1",
+    name: "Acme",
+    kind: "managed",
+    gatewayType: "socks5",
+    gatewayHost: "termix-netmgr",
+    gatewayPort: 20001,
+    hasGatewayPassword: false,
+    provider: "fortinet",
+    lastState: "refused",
+    lastError: pin,
+  } as VpnProfile;
+
+  it("stays out of the way until it is asked for", () => {
+    setup([failed]);
+    expect(screen.queryByText(pin)).not.toBeInTheDocument();
+  });
+
+  it("opens as text, and hands the text over", async () => {
+    setup([failed]);
+    fireEvent.click(screen.getByText("hosts.vpn.stateRefused"));
+
+    expect(screen.getByText(pin)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("common.copy"));
+    await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith(pin));
+  });
+
+  it("says nothing to open when nothing went wrong", () => {
+    setup([{ ...failed, lastState: "up", lastError: undefined }]);
+    expect(screen.queryByLabelText("common.copy")).not.toBeInTheDocument();
   });
 });

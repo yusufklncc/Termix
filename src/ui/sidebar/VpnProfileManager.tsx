@@ -1,8 +1,18 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Pencil, Play, Plug, Plus, Square, Trash2, X } from "lucide-react";
+import {
+  Copy,
+  Pencil,
+  Play,
+  Plug,
+  Plus,
+  Square,
+  Trash2,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 
+import { copyToClipboard } from "../lib/clipboard.js";
 import { getErrorMessage } from "../lib/error-message.js";
 import { Button } from "@/components/button";
 import { Input } from "@/components/input";
@@ -108,6 +118,7 @@ function toForm(profile: VpnProfile): FormState {
  * nobody to report, which is why it shows nothing rather than "unknown". */
 function StateBadge({ profile }: { profile: VpnProfile }) {
   const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
   if (profile.kind !== "managed") return null;
   if (profile.enabled !== false && !profile.lastState) return null;
 
@@ -127,6 +138,10 @@ function StateBadge({ profile }: { profile: VpnProfile }) {
     connecting: t("hosts.vpn.stateConnecting"),
     down: t("hosts.vpn.stateDown"),
     error: t("hosts.vpn.stateError"),
+    // Was missing, so this one showed the raw state name. It is not the same
+    // as an error: the gateway said no, and saying so again changes nothing
+    // until the profile is saved, which is the only thing that clears it.
+    refused: t("hosts.vpn.stateRefused"),
   };
   const tone =
     profile.lastState === "up"
@@ -135,10 +150,54 @@ function StateBadge({ profile }: { profile: VpnProfile }) {
         ? "text-destructive"
         : "text-muted-foreground";
 
+  const label = labels[profile.lastState] ?? profile.lastState;
+  const reason = profile.lastError ?? "";
+  if (!reason) {
+    return <span className={`text-[10px] ${tone}`}>{label}</span>;
+  }
+
+  /*
+   * The reason is worth reading and sometimes worth keeping.
+   *
+   * It was only a tooltip, which a long one outgrows and which nothing can
+   * select -- and the reason a VPN gives can carry the value needed to fix
+   * it, such as the certificate pin a renewed gateway now presents. So it
+   * opens as text, and the text can be taken.
+   */
   return (
-    <span className={`text-[10px] ${tone}`} title={profile.lastError ?? ""}>
-      {labels[profile.lastState] ?? profile.lastState}
-    </span>
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen((shown) => !shown)}
+        className={`text-left text-[10px] underline decoration-dotted ${tone}`}
+        title={reason}
+      >
+        {label}
+      </button>
+      {open && (
+        <div className="mt-1 flex items-start gap-1">
+          <p className="min-w-0 flex-1 text-[10px] break-words whitespace-pre-wrap text-muted-foreground select-text">
+            {reason}
+          </p>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 shrink-0 px-1"
+            title={t("common.copy")}
+            aria-label={t("common.copy")}
+            onClick={async () => {
+              if (await copyToClipboard(reason)) {
+                toast.success(t("common.copied"));
+              } else {
+                toast.error(t("common.copyFailed"));
+              }
+            }}
+          >
+            <Copy className="size-3" />
+          </Button>
+        </div>
+      )}
+    </>
   );
 }
 

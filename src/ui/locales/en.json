@@ -1939,6 +1939,7 @@
       "stateConnecting": "Connecting",
       "stateDown": "Not connected",
       "stateError": "Failed",
+      "stateRefused": "Rejected · fix and save",
       "switchOn": "Enable",
       "switchOff": "Disable",
       "stateOff": "Disabled",

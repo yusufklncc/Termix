@@ -116,11 +116,17 @@ function unseal(sealed) {
  * on the screen. What is useful about the command is its shape, not its
  * credentials.
  */
+/*
+ * Named by what they are, not by one vendor's spelling. Netbird calls its
+ * secret --setup-key and that was missed once, so the key reached the
+ * database and the screen; anything whose name says key, password, token or
+ * secret is hidden now, whoever's flag it is.
+ */
+const SECRET_ARG = /^--[a-z0-9-]*(key|pass(word|wd)?|token|secret)[a-z0-9-]*=/i;
+
 function redactArgs(args) {
   return args.map((arg) =>
-    /^--(authkey|auth-key|password|passwd|token)=/.test(arg)
-      ? arg.replace(/=.*/, "=***")
-      : arg,
+    SECRET_ARG.test(arg) ? arg.replace(/=.*/, "=***") : arg,
   );
 }
 
@@ -673,7 +679,17 @@ async function raiseNetbird({ id, profile, credentials, watch, procs }) {
   // A self-hosted management server goes here; empty means Netbird's own.
   if (profile.serverHost) up.push(`--management-url=${profile.serverHost}`);
 
-  await waitForNetbird(daemon, environment, up, watch.said);
+  await waitForNetbird(
+    daemon,
+    environment,
+    up,
+    watch.said,
+    // Which server was asked. A key belongs to one network, so a key the
+    // server calls invalid is as often the wrong server as the wrong key --
+    // and an empty field means Netbird's own cloud, which is not where a
+    // self-hosted network's keys live.
+    profile.serverHost || "Netbird's own (netbird.io)",
+  );
 
   return {
     upstream: { host: "127.0.0.1", port: socksPort },
@@ -707,6 +723,7 @@ async function waitForNetbird(
   environment,
   upArgs,
   said,
+  management,
   timeoutMs = 60000,
 ) {
   const deadline = Date.now() + timeoutMs;
@@ -738,7 +755,9 @@ async function waitForNetbird(
     await Promise.race([signIn, refusal.promise]);
   } catch (error) {
     throw new Error(
-      `netbird could not sign in: ${String(error.message ?? error).trim()}`,
+      `netbird could not sign in to ${management}: ${String(
+        error.message ?? error,
+      ).trim()}`,
     );
   } finally {
     refusal.stop();

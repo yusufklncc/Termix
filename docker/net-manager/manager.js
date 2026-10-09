@@ -602,11 +602,50 @@ async function waitForTailscale(
  * key. It lives under STATE_ROOT for that second reason; the socket does not,
  * because a socket outlives nothing.
  */
+/**
+ * Keep a peer's identity only while it still belongs to the credentials that
+ * made it.
+ *
+ * The identity outliving the container is the point of STATE_ROOT, but it
+ * must not outlive the setup key it registered with. A key that was rotated,
+ * or a peer deleted from the dashboard, leaves a stored identity the daemon
+ * keeps presenting -- and then entering a new key in Termix changes nothing,
+ * because nothing asks the control server again. That is a hole with no way
+ * out from the UI, so the identity is dropped as soon as what it was built
+ * from no longer matches.
+ *
+ * Only a fingerprint is written down, never the key.
+ */
+async function useStateFor(state, key, server) {
+  const want = crypto
+    .createHash("sha256")
+    .update(`${key ?? ""}\u0000${server ?? ""}`)
+    .digest("hex");
+  const stamp = `${state}/.termix-credentials`;
+
+  let have = null;
+  try {
+    have = (await fs.promises.readFile(stamp, "utf8")).trim();
+  } catch {
+    /* never raised with these, or never raised at all */
+  }
+
+  if (have !== want) {
+    if (have !== null) {
+      log(`VPN state for ${state} was built from other credentials; dropping`);
+    }
+    await fs.promises.rm(state, { recursive: true, force: true });
+  }
+
+  await fs.promises.mkdir(state, { recursive: true });
+  await fs.promises.writeFile(stamp, want, { mode: 0o600 });
+}
+
 async function raiseNetbird({ id, profile, credentials, watch, procs }) {
   const socksPort = NETBIRD_SOCKS_BASE + id;
   const state = `${STATE_ROOT}/netbird-${id}`;
   const daemonAddr = `unix:///run/netbird-${id}.sock`;
-  await fs.promises.mkdir(state, { recursive: true });
+  await useStateFor(state, credentials.password, profile.serverHost);
 
   const environment = {
     ...process.env,

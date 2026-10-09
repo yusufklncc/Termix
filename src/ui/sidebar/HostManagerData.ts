@@ -92,6 +92,11 @@ export function sshHostToHost(h: SSHHostWithStatus): Host {
     statusCheckInterval: h.statusCheckInterval ?? null,
     forceKeyboardInteractive: h.forceKeyboardInteractive ?? false,
     useSocks5: h.useSocks5,
+    // The network this host is reached through. Dropped here twice now, and
+    // both times the editor showed "Direct Connection" for a host that had
+    // one -- and saving from that form wrote the emptiness back. The field is
+    // optional, so losing it is not a compile error; only a reader notices.
+    vpnProfileId: (h as { vpnProfileId?: number | null }).vpnProfileId ?? null,
     socks5Host: h.socks5Host,
     socks5Port: h.socks5Port,
     socks5Username: h.socks5Username,

@@ -1,81 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { sshHostToHost } from "../../sidebar/HostManagerData";
 import type { SSHHostWithStatus } from "@/main-axios";
+import { sshHostToHost } from "@/sidebar/HostManagerData";
 
-function apiHost(overrides: Record<string, unknown> = {}): SSHHostWithStatus {
-  return {
-    id: 1,
-    name: "box",
-    ip: "10.0.0.5",
-    port: 8080,
-    username: "",
-    authType: "none",
-    folder: "",
-    tags: [],
-    ...overrides,
-  } as unknown as SSHHostWithStatus;
-}
-
-/**
- * sshHostToHost maps the API response field by field, so a column added to the
- * backend is invisible to the editor until it is listed here too. That is not
- * hypothetical: the stream fields round-tripped through the database correctly
- * while the editor showed an empty form, because this mapper dropped them.
- */
-describe("sshHostToHost stream fields", () => {
-  it("carries every stream field through to the editor", () => {
-    const host = sshHostToHost(
-      apiHost({
-        connectionType: "stream",
-        enableSsh: false,
-        enableStream: true,
-        streamUrl: "http://10.0.0.5:8080",
-        streamPath: "/session",
-        streamMode: "webrtc",
-        streamPublisher: "neko",
-        streamAuthType: "direct",
-        streamUser: "admin",
-        hasStreamPassword: true,
-      }),
-    );
-
-    expect(host.enableStream).toBe(true);
-    expect(host.streamUrl).toBe("http://10.0.0.5:8080");
-    expect(host.streamPath).toBe("/session");
-    expect(host.streamMode).toBe("webrtc");
-    expect(host.streamPublisher).toBe("neko");
-    expect(host.streamAuthType).toBe("direct");
-    expect(host.streamUser).toBe("admin");
-    expect(host.hasStreamPassword).toBe(true);
-  });
-
-  it("infers enableStream from connectionType on rows predating the flag", () => {
-    const host = sshHostToHost(
-      apiHost({ connectionType: "stream", enableSsh: false }),
-    );
-    expect(host.enableStream).toBe(true);
-  });
-
-  it("leaves stream off for an ordinary ssh host", () => {
-    const host = sshHostToHost(apiHost({ connectionType: "ssh" }));
-    expect(host.enableStream).toBe(false);
-  });
-
-  it("defaults mode to embed so hosts created before webrtc keep rendering", () => {
-    const host = sshHostToHost(
-      apiHost({ enableStream: true, streamUrl: "http://a.example" }),
-    );
-    expect(host.streamMode).toBe("embed");
-  });
-
-  it("reads credential mode from a stored credential id", () => {
-    const host = sshHostToHost(
-      apiHost({ enableStream: true, streamCredentialId: 7 }),
-    );
-    expect(host.streamAuthType).toBe("credential");
-    expect(host.streamCredentialId).toBe("7");
-  });
-
+describe("sshHostToHost", () => {
   it.each(["local", "remote"] as const)(
     "preserves the %s connection origin for editing",
     (connectionOrigin) => {
@@ -105,21 +32,33 @@ describe("sshHostToHost stream fields", () => {
     expect(host.id).toBe("-12");
     expect(host.isShared).toBe(true);
   });
-});
 
-/**
- * The same trap, caught a second time. A host's network profile saved and came
- * back from the API correctly, but this mapper dropped it, so reopening the
- * editor showed "Direct Connection" -- and saving again wrote that back, quietly
- * undoing the assignment.
- */
-describe("sshHostToHost network profile", () => {
-  it("carries the network profile through to the editor", () => {
-    const host = sshHostToHost(apiHost({ vpnProfileId: 7 }));
-    expect(host.vpnProfileId).toBe(7);
+  it("keeps every plugin's host settings so the editor can load them", () => {
+    const pluginSettings = {
+      docker: { enableDocker: true, containerRuntime: "podman" },
+      "tmux-monitor": { enableTmuxMonitor: true },
+    };
+    const host = sshHostToHost({
+      id: 3,
+      name: "box",
+      ip: "10.0.0.3",
+      port: 22,
+      username: "root",
+      pluginSettings,
+    } as unknown as SSHHostWithStatus);
+
+    expect(host.pluginSettings).toEqual(pluginSettings);
   });
 
-  it("leaves a host with no network profile alone", () => {
-    expect(sshHostToHost(apiHost()).vpnProfileId ?? null).toBeNull();
+  it("defaults plugin settings to an empty map", () => {
+    const host = sshHostToHost({
+      id: 4,
+      name: "bare",
+      ip: "10.0.0.4",
+      port: 22,
+      username: "root",
+    } as SSHHostWithStatus);
+
+    expect(host.pluginSettings).toEqual({});
   });
 });

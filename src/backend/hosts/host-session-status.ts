@@ -1,8 +1,19 @@
+import { pluginEvents, TOPICS } from "../plugins/events.js";
+
 type HostSessionStatusListener = (hostId: number, online: boolean) => void;
+
+export interface HostSessionStatusPayload {
+  hostId: number;
+  online: boolean;
+}
 
 export class HostSessionStatus {
   private counts = new Map<number, number>();
   private listeners = new Set<HostSessionStatusListener>();
+
+  hasActiveSession(hostId: number): boolean {
+    return (this.counts.get(hostId) ?? 0) > 0;
+  }
 
   register(hostId: number): () => void {
     const count = this.counts.get(hostId) ?? 0;
@@ -32,6 +43,12 @@ export class HostSessionStatus {
 
   private emit(hostId: number, online: boolean): void {
     for (const listener of this.listeners) listener(hostId, online);
+    // Also published as a topic so plugins (and anything else on the bus) can
+    // observe session status without holding a reference to this singleton.
+    pluginEvents.emit(TOPICS.hostSessionStatus, {
+      hostId,
+      online,
+    } satisfies HostSessionStatusPayload);
   }
 }
 

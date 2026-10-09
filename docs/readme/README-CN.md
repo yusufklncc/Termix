@@ -215,7 +215,7 @@ Termix 是一个免费、开源、自托管的服务器管理平台。它把 SSH
 <td width="50%" valign="top">
 
 **命令行工具:**
-`termix` 命令行工具，可用于你的终端和脚本。打开终端、在单台主机或整个机群上执行命令、通过 SFTP 传输文件，以及管理主机、代码片段和凭据。用 `npm install -g @termix-cli/cli` 安装，或者直接下载独立的可执行文件。详见 [CLI 文档](https://docs.termix.site/cli)。
+`termix` 命令行工具，可用于你的终端和脚本。打开终端、在单台主机或整个机群上执行命令、通过 SFTP 传输文件，以及管理主机、代码片段和凭据。用 `npm install -g @termix-ssh/cli` 安装，或者直接下载独立的可执行文件。详见 [CLI 文档](https://docs.termix.site/cli)。
 
 </td>
 </tr>
@@ -349,7 +349,7 @@ networks:
 Termix 还提供命令行工具，让你可以在终端里管理服务器，也可以把 Termix 用在自己的脚本中。
 
 ```bash
-npm install -g @termix-cli/cli
+npm install -g @termix-ssh/cli
 termix login --url https://termix.example.com
 termix ssh 1
 ```
@@ -366,9 +366,9 @@ termix ssh 1
 
 ## 遥测
 
-Termix 每天会发送一次匿名的小型统计信息，让我了解有多少实例在运行、哪些功能被用到。内容包括一个随机的实例 ID、你有多少用户和主机、应用版本，以及过去 24 小时内使用了哪些功能（终端、文件管理器、隧道、Docker 等）。它绝不包含用户名、主机名、IP 地址、凭据，或任何能识别你和你服务器的信息。
+Termix 每天会发送一次匿名的小型报告，让我知道有多少实例在运行、哪些功能被使用。报告包含一个随机的实例 ID、应用版本，以及你的用户数和主机数。它还可以包含你的平台信息（操作系统、架构、Node.js 版本、数据库类型，以及你是用 Docker、桌面应用还是普通服务器运行）、每种标签页被打开的次数和 SSH 登录次数，以及正在运行的内置功能。它绝不会包含用户名、主机名、IP 地址、凭据或任何能识别你或你的服务器的信息。
 
-该功能默认开启。你可以在管理设置的"通用"中关闭它，或者在启动 Termix 之前设置 `ENABLE_TELEMETRY=false`。
+该功能默认开启。你可以在管理设置的"Usage Statistics"中关闭它或选择要包含的内容，还可以在那里预览将要发送的完整报告。每个用户都可以在个人资料中排除自己的功能使用数据。设置 `ENABLE_TELEMETRY=false` 会关闭它并锁定开关。
 
 <br />
 

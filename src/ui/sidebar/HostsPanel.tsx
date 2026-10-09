@@ -1,5 +1,7 @@
 import { getErrorMessage } from "../lib/error-message.js";
-import { useEffect, useRef, useState } from "react";
+import { enabledHostProtocols, useHostProtocols } from "./host-protocols";
+import { useSshAuthProviders } from "@/hooks/useSshAuthProviders";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { HostData } from "@/types/index";
 import { useTranslation } from "react-i18next";
 import {
@@ -17,7 +19,7 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Server,
+  Settings2,
   SlidersHorizontal,
   Upload,
   X,
@@ -28,7 +30,8 @@ import { HostManager } from "@/sidebar/HostManager";
 import { HostShareModal } from "@/sidebar/HostShareModal";
 import { HostExportDialog } from "@/sidebar/HostExportDialog";
 import { CustomizeSidebarPanel } from "@/sidebar/CustomizeSidebarPanel";
-import { ProxmoxDiscoverDialog } from "@/components/proxmox/ProxmoxDiscoverDialog";
+import { ComponentSlot } from "@/shell/ActionSlot";
+import { usePluginHostSections } from "@/settings/HostPluginSections";
 import { Button } from "@/components/button";
 import {
   DropdownMenu,
@@ -50,6 +53,8 @@ import {
 import type { SSHHostWithStatus } from "@/main-axios";
 import type { Host, HostFolder, TabType } from "@/types/ui-types";
 import { sortHostTree, type SortKey } from "@/sidebar/host-sort";
+import { withLiveStatus } from "@/sidebar/live-host-status";
+import { useServerStatus } from "@/lib/ServerStatusContext";
 import { useHostSidebarPreferences } from "@/sidebar/tree/hooks/useHostSidebarPreferences";
 import { useArrangeLock } from "@/sidebar/use-arrange-lock";
 import type {
@@ -87,10 +92,9 @@ function hostGroupNames(host: Host, key: GroupKey): string[] {
     case "protocol": {
       const protos: string[] = [];
       if (host.enableSsh) protos.push("ssh");
-      if (host.enableRdp) protos.push("rdp");
-      if (host.enableVnc) protos.push("vnc");
-      if (host.enableTelnet) protos.push("telnet");
-      if (host.enableStream) protos.push("stream");
+      for (const protocol of enabledHostProtocols(host)) {
+        protos.push(protocol.id);
+      }
       return protos.length > 0 ? protos : ["__none__"];
     }
     case "auth":
@@ -124,13 +128,18 @@ function groupHosts(
   return { name: "root", children };
 }
 
-function hostPassesFilters(host: Host, filters: FilterState): boolean {
+/** Plugin id to the host setting that switches it on. */
+type HostSwitches = Record<string, string>;
+
+function hostPassesFilters(
+  host: Host,
+  filters: FilterState,
+  switches: HostSwitches,
+): boolean {
   if (filters.status.length > 0) {
     const ok =
       (filters.status.includes("online") && host.online) ||
-      (filters.status.includes("offline") &&
-        host.status !== "reachable" &&
-        !host.online) ||
+      (filters.status.includes("offline") && host.status === "offline") ||
       (filters.status.includes("pinned") && !!host.pin);
     if (!ok) return false;
   }
@@ -145,18 +154,17 @@ function hostPassesFilters(host: Host, filters: FilterState): boolean {
   if (filters.protocol.length > 0) {
     const ok =
       (filters.protocol.includes("ssh") && host.enableSsh) ||
-      (filters.protocol.includes("rdp") && host.enableRdp) ||
-      (filters.protocol.includes("vnc") && host.enableVnc) ||
-      (filters.protocol.includes("telnet") && host.enableTelnet) ||
-      (filters.protocol.includes("stream") && host.enableStream);
+      enabledHostProtocols(host).some((protocol) =>
+        filters.protocol.includes(protocol.id),
+      );
     if (!ok) return false;
   }
-  if (filters.features.length > 0) {
-    const ok =
-      (filters.features.includes("terminal") && host.enableTerminal) ||
-      (filters.features.includes("fileManager") && host.enableFileManager) ||
-      (filters.features.includes("tunnel") && host.enableTunnel) ||
-      (filters.features.includes("docker") && host.enableDocker);
+  // A saved filter for a plugin that is gone or off is ignored.
+  const features = filters.features.filter((id) => switches[id]);
+  if (features.length > 0) {
+    const ok = features.some(
+      (id) => host.pluginSettings?.[id]?.[switches[id]] === true,
+    );
     if (!ok) return false;
   }
   if (filters.tags.length > 0) {
@@ -166,14 +174,18 @@ function hostPassesFilters(host: Host, filters: FilterState): boolean {
   return true;
 }
 
-function applyFilters(folder: HostFolder, filters: FilterState): HostFolder {
+function applyFilters(
+  folder: HostFolder,
+  filters: FilterState,
+  switches: HostSwitches,
+): HostFolder {
   const active = Object.values(filters).some((arr) => arr.length > 0);
   if (!active) return folder;
 
   const filteredChildren = folder.children
     .map((child) => {
-      if (isFolder(child)) return applyFilters(child, filters);
-      return hostPassesFilters(child, filters) ? child : null;
+      if (isFolder(child)) return applyFilters(child, filters, switches);
+      return hostPassesFilters(child, filters, switches) ? child : null;
     })
     .filter((child): child is Host | HostFolder => {
       if (child === null) return false;
@@ -194,7 +206,11 @@ export function HostsPanel({
   onOpenTab: (
     host: Host,
     type: TabType,
-    options?: { endpointId?: string; label?: string },
+    options?: {
+      data?: Record<string, unknown>;
+      label?: string;
+      forceNewTab?: boolean;
+    },
   ) => void;
   onEditHost: (host: Host) => void;
   hostTree?: HostFolder;
@@ -203,6 +219,24 @@ export function HostsPanel({
   active?: boolean;
 }) {
   const { t } = useTranslation();
+  const { statuses, getStatus } = useServerStatus();
+  const liveHostTree = useMemo(
+    () => (hostTree ? withLiveStatus(hostTree, getStatus) : undefined),
+    // statuses changes identity whenever a host's status changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hostTree, statuses, getStatus],
+  );
+  const hostSwitchPlugins = usePluginHostSections().filter(
+    (plugin) => !!plugin.contributes?.settings?.host?.enableKey,
+  );
+  const hostSwitches: Record<string, string> = Object.fromEntries(
+    hostSwitchPlugins.map((plugin) => [
+      plugin.id,
+      plugin.contributes!.settings!.host!.enableKey!,
+    ]),
+  );
+  const hostProtocols = useHostProtocols();
+  const sshAuthProviders = useSshAuthProviders();
   const [hostSearch, setHostSearch] = useState("");
   const [managerEditing, setManagerEditing] = useState(false);
   const [customizePanelOpen, setCustomizePanelOpen] = useState(false);
@@ -214,19 +248,6 @@ export function HostsPanel({
   const [exportPreselection, setExportPreselection] = useState<Set<string>>(
     new Set(),
   );
-  const [proxmoxDialogOpen, setProxmoxDialogOpen] = useState(false);
-  const [proxmoxHostId, setProxmoxHostId] = useState<number | undefined>(
-    undefined,
-  );
-  const [proxmoxDefaultCredentialId, setProxmoxDefaultCredentialId] = useState<
-    number | null
-  >(null);
-  const [proxmoxDefaultAuthType, setProxmoxDefaultAuthType] = useState<
-    string | undefined
-  >(undefined);
-  const [proxmoxDefaultUsername, setProxmoxDefaultUsername] = useState<
-    string | undefined
-  >(undefined);
   const { preferences: sidebarPrefs, update: updateSidebarPrefs } =
     useHostSidebarPreferences();
   const sortKey = sidebarPrefs.sort.key;
@@ -278,10 +299,10 @@ export function HostsPanel({
         ? t("hosts.filterOnline")
         : t("hosts.filterOffline");
     if (key === "protocol") return group.toUpperCase();
-    if (key === "auth")
-      return t(
-        `hosts.filterAuth${group.charAt(0).toUpperCase() + group.slice(1)}`,
-      );
+    if (key === "auth") {
+      const labelKey = sshAuthProviders.find(group)?.labelKey;
+      return labelKey ? t(labelKey, { defaultValue: group }) : group;
+    }
     return group;
   }
 
@@ -361,14 +382,10 @@ export function HostsPanel({
             pin: true,
             notes: "Main production web server running Nginx",
             enableSsh: true,
-            enableRdp: false,
-            enableVnc: false,
-            enableTelnet: false,
             sshPort: 22,
             enableTerminal: true,
             enableTunnel: false,
             enableFileManager: true,
-            enableDocker: false,
             defaultPath: "/var/www",
           },
           {
@@ -382,14 +399,10 @@ export function HostsPanel({
             folder: "Production",
             tags: ["database", "production", "postgresql"],
             enableSsh: true,
-            enableRdp: false,
-            enableVnc: false,
-            enableTelnet: false,
             sshPort: 22,
             enableTerminal: true,
             enableTunnel: true,
             enableFileManager: false,
-            enableDocker: false,
           },
         ],
       },
@@ -449,11 +462,11 @@ export function HostsPanel({
                     ? parsed.credentials
                     : undefined;
                 if (!Array.isArray(hostsArray) || hostsArray.length === 0) {
-                  toast.error("No hosts found in file");
+                  toast.error(t("hosts.importNoHosts"));
                   return;
                 }
                 if (hostsArray.length > 100) {
-                  toast.error("Cannot import more than 100 hosts at once");
+                  toast.error(t("hosts.importTooMany", { max: 100 }));
                   return;
                 }
                 const normalized = hostsArray.map(
@@ -461,12 +474,6 @@ export function HostsPanel({
                     ...h,
                     port: h.port ?? h.sshPort ?? 22,
                     enableSsh: h.enableSsh ?? h.connectionType === "ssh",
-                    enableRdp: h.enableRdp ?? h.connectionType === "rdp",
-                    enableVnc: h.enableVnc ?? h.connectionType === "vnc",
-                    enableTelnet:
-                      h.enableTelnet ?? h.connectionType === "telnet",
-                    enableStream:
-                      h.enableStream ?? h.connectionType === "stream",
                   }),
                 );
                 const result = await bulkImportSSHHosts(
@@ -477,16 +484,15 @@ export function HostsPanel({
                 const hosts = await getSSHHosts();
                 setRawHosts(hosts);
                 window.dispatchEvent(new CustomEvent("termix:hosts-changed"));
-                const msg = [
-                  result.success ? `${result.success} imported` : null,
-                  result.updated ? `${result.updated} updated` : null,
-                  result.failed ? `${result.failed} failed` : null,
-                ]
-                  .filter(Boolean)
-                  .join(", ");
-                toast.success(`Import complete: ${msg}`);
+                toast.success(
+                  t("hosts.importSummary", {
+                    imported: result.success ?? 0,
+                    updated: result.updated ?? 0,
+                    failed: result.failed ?? 0,
+                  }),
+                );
               } catch (err: unknown) {
-                toast.error(getErrorMessage(err, "Failed to import hosts"));
+                toast.error(getErrorMessage(err, t("hosts.importHostsFailed")));
               }
             }}
           />
@@ -579,16 +585,7 @@ export function HostsPanel({
                     <Upload className="size-3.5 mr-2" />
                     {t("hosts.importSSHConfig")}
                   </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => {
-                      setProxmoxHostId(undefined);
-                      setProxmoxDialogOpen(true);
-                    }}
-                    disabled={!rawHosts.some((h) => h.enableProxmox)}
-                  >
-                    <Server className="size-3.5 mr-2" />
-                    {t("hosts.proxmoxImportTitle")}
-                  </DropdownMenuItem>
+                  <ComponentSlot slotId="hosts.importMenu" />
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     onClick={() => {
@@ -773,73 +770,54 @@ export function HostsPanel({
                   <DropdownMenuLabel>
                     {t("hosts.filterAuthGroup")}
                   </DropdownMenuLabel>
-                  {(
-                    [
-                      "password",
-                      "key",
-                      "credential",
-                      "none",
-                      "opkssh",
-                      "stepca",
-                    ] as const
-                  ).map((val) => (
+                  {sshAuthProviders.providers.map((option) => (
                     <DropdownMenuCheckboxItem
-                      key={val}
-                      checked={filterState.authType.includes(val)}
+                      key={option.type}
+                      checked={filterState.authType.includes(option.type)}
                       onCheckedChange={() =>
-                        handleFilterToggle("authType", val)
+                        handleFilterToggle("authType", option.type)
                       }
                       onSelect={(e) => e.preventDefault()}
                     >
-                      {t(
-                        `hosts.filterAuth${val.charAt(0).toUpperCase() + val.slice(1)}`,
-                      )}
+                      {option.editorTitleKey
+                        ? t(option.editorTitleKey)
+                        : t(option.labelKey, { defaultValue: option.type })}
                     </DropdownMenuCheckboxItem>
                   ))}
                   <DropdownMenuSeparator />
                   <DropdownMenuLabel>
                     {t("hosts.filterProtocolGroup")}
                   </DropdownMenuLabel>
-                  {(
-                    [
-                      ["ssh", "Ssh"],
-                      ["rdp", "Rdp"],
-                      ["vnc", "Vnc"],
-                      ["telnet", "Telnet"],
-                    ] as const
-                  ).map(([val, key]) => (
+                  {[
+                    { id: "ssh", label: t("hosts.filterProtocolSsh") },
+                    ...hostProtocols.map((protocol) => ({
+                      id: protocol.id,
+                      label: t(protocol.titleKey),
+                    })),
+                  ].map(({ id, label }) => (
                     <DropdownMenuCheckboxItem
-                      key={val}
-                      checked={filterState.protocol.includes(val)}
-                      onCheckedChange={() =>
-                        handleFilterToggle("protocol", val)
-                      }
+                      key={id}
+                      checked={filterState.protocol.includes(id)}
+                      onCheckedChange={() => handleFilterToggle("protocol", id)}
                       onSelect={(e) => e.preventDefault()}
                     >
-                      {t(`hosts.filterProtocol${key}`)}
+                      {label}
                     </DropdownMenuCheckboxItem>
                   ))}
                   <DropdownMenuSeparator />
                   <DropdownMenuLabel>
                     {t("hosts.filterFeaturesGroup")}
                   </DropdownMenuLabel>
-                  {(
-                    [
-                      ["terminal", "Terminal"],
-                      ["fileManager", "FileManager"],
-                      ["tunnel", "Tunnel"],
-                      ["docker", "Docker"],
-                    ] as const
-                  ).map(([val, key]) => (
+                  {hostSwitchPlugins.map((plugin) => (
                     <DropdownMenuCheckboxItem
-                      key={val}
-                      checked={filterState.features.includes(val)}
+                      key={plugin.id}
+                      checked={filterState.features.includes(plugin.id)}
                       onCheckedChange={() =>
-                        handleFilterToggle("features", val)
+                        handleFilterToggle("features", plugin.id)
                       }
                       onSelect={(e) => e.preventDefault()}
                     >
-                      {t(`hosts.filterFeature${key}`)}
+                      {plugin.name}
                     </DropdownMenuCheckboxItem>
                   ))}
                   {allTags.length > 0 && (
@@ -956,6 +934,18 @@ export function HostsPanel({
                       ? t("hosts.exitSelectionTitle")
                       : t("hosts.selectHosts")}
                   </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() =>
+                      window.dispatchEvent(
+                        new CustomEvent("host-manager:edit-defaults", {
+                          detail: { level: "user" },
+                        }),
+                      )
+                    }
+                  >
+                    <Settings2 className="size-3.5 mr-2" />
+                    {t("hostDefaults.menuMyDefaults")}
+                  </DropdownMenuItem>
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger className="flex items-center gap-2">
                       <Upload className="size-3.5 shrink-0" />
@@ -1045,11 +1035,12 @@ export function HostsPanel({
         <div className="flex flex-col flex-1 min-h-0">
           <SidebarTree
             children={
-              hostTree
+              liveHostTree
                 ? groupHosts(
                     applyFilters(
-                      sortHostTree(hostTree, sortKey, pinnedFirst),
+                      sortHostTree(liveHostTree, sortKey, pinnedFirst),
                       filterState,
+                      hostSwitches,
                     ),
                     groupKey,
                     groupLabel,
@@ -1059,14 +1050,6 @@ export function HostsPanel({
             onOpenTab={onOpenTab}
             onEditHost={onEditHost}
             onShareHost={(host) => setShareModalHost(host)}
-            onProxmoxDiscover={(host) => {
-              const cfg = host.proxmoxConfig;
-              setProxmoxHostId(Number(host.id));
-              setProxmoxDefaultCredentialId(cfg?.defaultCredentialId ?? null);
-              setProxmoxDefaultAuthType(cfg?.defaultAuthType ?? undefined);
-              setProxmoxDefaultUsername(undefined);
-              setProxmoxDialogOpen(true);
-            }}
             query={hostSearch.trim().toLowerCase()}
             selectionMode={selectionMode}
             onToggleSelectionMode={toggleSelectionMode}
@@ -1080,6 +1063,8 @@ export function HostsPanel({
             trayTrigger={sidebarPrefs.display.trayTrigger}
             showTags={sidebarPrefs.display.showTags}
             openOnDoubleClick={sidebarPrefs.display.openOnDoubleClick}
+            showFolderPaths={sidebarPrefs.display.showFolderPaths}
+            hostClickBehavior={sidebarPrefs.display.hostClickBehavior}
           />
         </div>
       )}
@@ -1103,18 +1088,10 @@ export function HostsPanel({
         preselectedHostIds={exportPreselection}
       />
 
-      <ProxmoxDiscoverDialog
-        open={proxmoxDialogOpen}
-        onClose={() => {
-          setProxmoxDialogOpen(false);
-          setProxmoxHostId(undefined);
-        }}
-        hosts={rawHosts}
-        onHostsChanged={setRawHosts}
-        preselectedHostId={proxmoxHostId}
-        defaultCredentialId={proxmoxDefaultCredentialId}
-        defaultAuthType={proxmoxDefaultAuthType}
-        defaultUsername={proxmoxDefaultUsername}
+      {/* Plugins mount their own host-list dialogs here. */}
+      <ComponentSlot
+        slotId="hosts.panel"
+        props={{ hosts: rawHosts, onHostsChanged: setRawHosts }}
       />
     </div>
   );

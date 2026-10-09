@@ -2,18 +2,42 @@ import {
   prepareHostImports,
   remapImportedJumpHosts,
 } from "./host-import-order.js";
+import { sshOptionsForWrite } from "../../hosts/ssh-options.js";
+import {
+  applyDefaultsAfterHostWrites,
+  applyHostDefaultsToWrite,
+} from "../../hosts/defaults/index.js";
+import {
+  changeHostOverrides,
+  type OverrideChange,
+} from "../../hosts/defaults/overrides.js";
+import { recompute } from "../../hosts/defaults/recompute.js";
+import { splitDefaultKey } from "../../../types/host-defaults.js";
+import {
+  keepUsableProtocolCredentials,
+  readProtocolAuthPayload,
+  writeProtocolAuth,
+} from "../../hosts/protocol-auth/protocol-auth.js";
 import { getErrorMessage } from "../../utils/error-message.js";
 import type { AuthenticatedRequest } from "../../../types/index.js";
 import type { Request, RequestHandler, Response, Router } from "express";
 import { sshLogger } from "../../utils/logger.js";
+import { DatabaseSaveTrigger } from "../../utils/database-save-trigger.js";
 import {
   createCurrentCredentialRepository,
   createCurrentHostRepository,
   createCurrentHostResolutionRepository,
+  createCurrentHostDefaultsRepository,
 } from "../repositories/factory.js";
 import { validateParentHostId } from "./host-parent-validation.js";
-import { serializeWebUiConfig } from "./host-web-endpoints.js";
-import { vpnProfileAssignmentError } from "./vpn-validation.js";
+import {
+  listSshAuthProviders,
+  listSshAuthTypeOwners,
+} from "../../hosts/connect/auth-provider-registry.js";
+import {
+  applyPluginHostImportSettings,
+  setHostPluginEnabled,
+} from "./host-plugin-settings.js";
 import {
   isNonEmptyString,
   isValidPort,
@@ -160,8 +184,6 @@ export function registerHostBulkRoutes(
    *   patch:
    *     summary: Bulk update partial fields on multiple SSH hosts
    *     tags: [SSH]
-   *     security:
-   *       - bearerAuth: []
    *     requestBody:
    *       required: true
    *       content:
@@ -182,6 +204,29 @@ export function registerHostBulkRoutes(
    *                   parentHostId:
    *                     type: integer
    *                     nullable: true
+   *                   statusCheckEnabled:
+   *                     type: boolean
+   *                   pin:
+   *                     type: boolean
+   *                   pluginEnable:
+   *                     type: object
+   *                     description: Plugin id to on or off, for each plugin that declares a host enable switch.
+   *                     additionalProperties:
+   *                       type: boolean
+   *                   resetDefaults:
+   *                     type: object
+   *                     description: Hands keys back to the host defaults. `all`, or `namespaces` ("core" or a plugin id), or `keys` as "namespace.key".
+   *                     properties:
+   *                       all:
+   *                         type: boolean
+   *                       namespaces:
+   *                         type: array
+   *                         items:
+   *                           type: string
+   *                       keys:
+   *                         type: array
+   *                         items:
+   *                           type: string
    *     responses:
    *       200:
    *         description: Bulk update completed.
@@ -193,7 +238,7 @@ export function registerHostBulkRoutes(
     authenticateJWT,
     requireEditPermission,
     requireDataAccess,
-    async (req: Request, res: Response) => {
+    DatabaseSaveTrigger.batched(async (req: Request, res: Response) => {
       const userId = (req as AuthenticatedRequest).userId;
       const { hostIds, updates } = req.body;
 
@@ -278,43 +323,8 @@ export function registerHostBulkRoutes(
             simpleUpdates.folder = null;
           }
         }
-        // The network a batch of hosts is reached through -- the reason this
-        // is bulk-editable at all, since a folder usually is one customer's
-        // estate. Validated against the same owner as the hosts: assigning in
-        // bulk must not be a way around assigning one at a time.
-        if (updates.vpnProfileId !== undefined) {
-          const vpnAssignmentError = await vpnProfileAssignmentError(
-            updates.vpnProfileId,
-            userId!,
-          );
-          if (vpnAssignmentError) {
-            return res.status(400).json({ error: vpnAssignmentError });
-          }
-          simpleUpdates.vpnProfileId =
-            updates.vpnProfileId === null ? null : Number(updates.vpnProfileId);
-        }
-        if (typeof updates.enableTerminal === "boolean")
-          simpleUpdates.enableTerminal = updates.enableTerminal;
-        if (typeof updates.enableTunnel === "boolean")
-          simpleUpdates.enableTunnel = updates.enableTunnel;
-        if (typeof updates.enableFileManager === "boolean")
-          simpleUpdates.enableFileManager = updates.enableFileManager;
-        if (typeof updates.enableDocker === "boolean")
-          simpleUpdates.enableDocker = updates.enableDocker;
-        if (typeof updates.enableWebUi === "boolean") {
-          simpleUpdates.enableWebUi = updates.enableWebUi;
-          if (!updates.enableWebUi) simpleUpdates.webUiConfig = null;
-        }
-        if (typeof updates.enableTmuxMonitor === "boolean")
-          simpleUpdates.enableTmuxMonitor = updates.enableTmuxMonitor;
-        if (typeof updates.enableTerminalToolbar === "boolean")
-          simpleUpdates.enableTerminalToolbar = updates.enableTerminalToolbar;
-        if (typeof updates.enableAiAssistant === "boolean")
-          simpleUpdates.enableAiAssistant = updates.enableAiAssistant;
-        // Disabling Proxmox is a plain flag flip; enabling is handled per-host
-        // below so each host can default to its own stored credential.
-        if (updates.enableProxmox === false)
-          simpleUpdates.enableProxmox = false;
+        if (typeof updates.statusCheckEnabled === "boolean")
+          simpleUpdates.statusCheckEnabled = updates.statusCheckEnabled;
 
         if (Object.keys(simpleUpdates).length > 0) {
           await hostRepository.updateManyForUser(
@@ -323,53 +333,30 @@ export function registerHostBulkRoutes(
             simpleUpdates,
           );
         }
+        if (typeof updates.statusCheckEnabled === "boolean") {
+          await changeHostOverrides(ownedIds, {
+            own: [["core", "statusCheckEnabled"]],
+          });
+        }
+        if ("folder" in simpleUpdates || "parentHostId" in simpleUpdates) {
+          void recompute({ userIds: [userId] }).catch(() => {});
+        }
 
-        if (updates.statsConfig && typeof updates.statsConfig === "object") {
-          for (const host of ownedHosts) {
-            try {
-              const existing = host.statsConfig
-                ? JSON.parse(host.statsConfig as string)
-                : {};
-              const merged = { ...existing, ...updates.statsConfig };
-              await hostRepository.updateForUser(userId, host.id, {
-                statsConfig: JSON.stringify(merged),
-              });
-            } catch {
-              errors.push(`Failed to update statsConfig for host ${host.id}`);
+        // Each plugin's own host switch, by plugin id: the field its manifest
+        // names in contributes.settings.host.enableKey.
+        if (updates.pluginEnable && typeof updates.pluginEnable === "object") {
+          for (const [pluginId, enabled] of Object.entries(
+            updates.pluginEnable as Record<string, unknown>,
+          )) {
+            if (typeof enabled !== "boolean") continue;
+            if (!(await setHostPluginEnabled(pluginId, ownedIds, enabled))) {
+              errors.push(`Plugin ${pluginId} has no host switch`);
             }
           }
         }
 
-        // Enabling Proxmox needs per-host handling: each host defaults its
-        // Proxmox credential to the credential already stored on that host, so
-        // discovery works right away without picking one by hand. Existing
-        // proxmoxConfig values are preserved.
-        if (updates.enableProxmox === true) {
-          for (const host of ownedHosts) {
-            try {
-              const existing = host.proxmoxConfig
-                ? JSON.parse(host.proxmoxConfig as string)
-                : {};
-              const merged = {
-                defaultCredentialId:
-                  existing.defaultCredentialId ?? host.credentialId ?? null,
-                windowsPatterns: existing.windowsPatterns ?? "win, windows",
-                dockerPatterns: existing.dockerPatterns ?? "docker",
-                preferredPrefixes:
-                  existing.preferredPrefixes ?? "10., 192.168.",
-                autoSyncEnabled: existing.autoSyncEnabled ?? false,
-                syncIntervalMinutes: existing.syncIntervalMinutes ?? 15,
-                markMissingGuests: existing.markMissingGuests ?? true,
-              };
-              await hostRepository.updateForUser(userId, host.id, {
-                enableProxmox: true,
-                proxmoxConfig: JSON.stringify(merged),
-              });
-            } catch {
-              errors.push(`Failed to enable Proxmox for host ${host.id}`);
-            }
-          }
-        }
+        const reset = readDefaultsReset(updates.resetDefaults);
+        if (reset) await changeHostOverrides(ownedIds, reset);
 
         return res.json({
           updated: ownedIds.length,
@@ -380,7 +367,7 @@ export function registerHostBulkRoutes(
         sshLogger.error("Failed to bulk update hosts:", error);
         return res.status(500).json({ error: "Failed to bulk update hosts" });
       }
-    },
+    }),
   );
 
   /**
@@ -469,7 +456,7 @@ export function registerHostBulkRoutes(
     requireCreatePermission,
     requireEditPermission,
     requireDataAccess,
-    async (req: Request, res: Response) => {
+    DatabaseSaveTrigger.batched(async (req: Request, res: Response) => {
       const userId = (req as AuthenticatedRequest).userId;
       const {
         hosts: hostsToImport,
@@ -588,6 +575,8 @@ export function registerHostBulkRoutes(
         }
       }
 
+      const knownAuthTypes = listKnownAuthTypes();
+      const writtenHostIds: number[] = [];
       for (const { host: hostData, index: i, exportId } of orderedHosts) {
         try {
           const effectiveConnectionType = hostData.connectionType || "ssh";
@@ -627,20 +616,11 @@ export function registerHostBulkRoutes(
           if (
             effectiveConnectionType === "ssh" &&
             hostData.authType &&
-            ![
-              "password",
-              "key",
-              "credential",
-              "none",
-              "opkssh",
-              "stepca",
-              "tailscale",
-              "vault",
-            ].includes(hostData.authType)
+            !knownAuthTypes.has(hostData.authType)
           ) {
             results.failed++;
             results.errors.push(
-              `Host ${i + 1}: Invalid authType. Must be 'password', 'key', 'credential', 'none', 'opkssh', 'stepca', 'tailscale', or 'vault'`,
+              `Host ${i + 1}: Invalid authType. Must be one of ${[...knownAuthTypes].join(", ")}`,
             );
             continue;
           }
@@ -727,45 +707,18 @@ export function registerHostBulkRoutes(
             port: hostData.port,
             username,
             pin: hostData.pin || false,
-            enableTerminal: hostData.enableTerminal !== false,
-            enableTunnel: hostData.enableTunnel !== false,
-            enableFileManager: hostData.enableFileManager !== false,
-            enableDocker: hostData.enableDocker || false,
-            enableWebUi: hostData.enableWebUi || false,
-            enableProxmox: hostData.enableProxmox || false,
-            enableTmuxMonitor: hostData.enableTmuxMonitor || false,
-            enableTerminalToolbar: hostData.enableTerminalToolbar !== false,
-            enableAiAssistant: hostData.enableAiAssistant || false,
-            enableCommandHistory: hostData.enableCommandHistory !== false,
-            showTerminalInSidebar: hostData.showTerminalInSidebar ? 1 : 0,
-            showFileManagerInSidebar: hostData.showFileManagerInSidebar ? 1 : 0,
-            showTunnelInSidebar: hostData.showTunnelInSidebar ? 1 : 0,
-            showDockerInSidebar: hostData.showDockerInSidebar ? 1 : 0,
-            showServerStatsInSidebar: hostData.showServerStatsInSidebar ? 1 : 0,
-            defaultPath: hostData.defaultPath || "/",
             sudoPassword: hostData.sudoPassword || null,
-            tunnelConnections: hostData.tunnelConnections
-              ? JSON.stringify(hostData.tunnelConnections)
-              : "[]",
             jumpHosts: jumpHosts ? JSON.stringify(jumpHosts) : null,
-            quickActions: hostData.quickActions
-              ? JSON.stringify(hostData.quickActions)
-              : null,
-            statsConfig: hostData.statsConfig
-              ? JSON.stringify(hostData.statsConfig)
-              : null,
-            dockerConfig: hostData.dockerConfig
-              ? JSON.stringify(hostData.dockerConfig)
-              : null,
-            webUiConfig: hostData.enableWebUi
-              ? serializeWebUiConfig(hostData.webUiConfig)
-              : null,
-            proxmoxConfig: hostData.proxmoxConfig
-              ? JSON.stringify(hostData.proxmoxConfig)
-              : null,
+            ...importedStatusCheck(hostData as Record<string, unknown>),
             terminalConfig: hostData.terminalConfig
               ? JSON.stringify(hostData.terminalConfig)
               : null,
+            // A 2.8 export carries these inside terminalConfig.
+            sshOptions:
+              sshOptionsForWrite({
+                sshOptions: hostData.sshOptions,
+                terminalConfig: hostData.terminalConfig,
+              }) ?? null,
             forceKeyboardInteractive: hostData.forceKeyboardInteractive
               ? "true"
               : "false",
@@ -785,10 +738,6 @@ export function registerHostBulkRoutes(
               ? 1
               : 0,
             enableSsh: hostData.enableSsh ?? effectiveConnectionType === "ssh",
-            enableRdp: hostData.enableRdp ?? false,
-            enableVnc: hostData.enableVnc ?? false,
-            enableTelnet: hostData.enableTelnet ?? false,
-            enableStream: hostData.enableStream ?? false,
             updatedAt: new Date().toISOString(),
           };
 
@@ -799,30 +748,6 @@ export function registerHostBulkRoutes(
             sshDataObj.key = null;
             sshDataObj.keyPassword = null;
             sshDataObj.keyType = null;
-            sshDataObj.rdpUser = hostData.rdpUser || null;
-            sshDataObj.rdpPassword = hostData.rdpPassword || null;
-            sshDataObj.rdpDomain = hostData.rdpDomain || null;
-            sshDataObj.rdpSecurity = hostData.rdpSecurity || null;
-            sshDataObj.rdpIgnoreCert = hostData.rdpIgnoreCert ? 1 : 0;
-            sshDataObj.rdpPort = hostData.rdpPort || 3389;
-            sshDataObj.vncUser = hostData.vncUser || null;
-            sshDataObj.vncPassword = hostData.vncPassword || null;
-            sshDataObj.vncPort = hostData.vncPort || 5900;
-            sshDataObj.telnetUser = hostData.telnetUser || null;
-            sshDataObj.telnetPassword = hostData.telnetPassword || null;
-            sshDataObj.telnetPort = hostData.telnetPort || 23;
-            sshDataObj.enableRdp = hostData.enableRdp ? 1 : 0;
-            sshDataObj.enableVnc = hostData.enableVnc ? 1 : 0;
-            sshDataObj.enableTelnet = hostData.enableTelnet ? 1 : 0;
-            sshDataObj.enableStream = hostData.enableStream ? 1 : 0;
-            sshDataObj.streamUrl = hostData.streamUrl || null;
-            sshDataObj.streamPath = hostData.streamPath || null;
-            sshDataObj.streamAuthType = hostData.streamAuthType || null;
-            sshDataObj.streamUser = hostData.streamUser || null;
-            sshDataObj.streamPassword = hostData.streamPassword || null;
-            sshDataObj.guacamoleConfig = hostData.guacamoleConfig
-              ? JSON.stringify(hostData.guacamoleConfig)
-              : null;
           } else {
             sshDataObj.password =
               hostData.authType === "password" ? hostData.password : null;
@@ -834,15 +759,18 @@ export function registerHostBulkRoutes(
               hostData.authType === "key" ? hostData.keyPassword || null : null;
             sshDataObj.keyType =
               hostData.authType === "key" ? hostData.keyType || "auto" : null;
-            sshDataObj.domain = null;
-            sshDataObj.security = null;
-            sshDataObj.ignoreCert = 0;
-            sshDataObj.guacamoleConfig = null;
           }
 
           const lookupKey = `${hostData.ip}:${hostData.port}:${hostData.username}`;
           const existing = existingHostMap?.get(lookupKey);
+          await withHostDefaults(
+            userId,
+            existing?.id ?? null,
+            sshDataObj,
+            hostData as Record<string, unknown>,
+          );
 
+          let savedHostId: number;
           if (existing) {
             const saved = await hostRepository.updateEncryptedForUser(
               userId,
@@ -851,6 +779,7 @@ export function registerHostBulkRoutes(
             );
             if (!saved) throw new Error("Host no longer exists");
             if (exportId !== undefined) importedIds.set(exportId, existing.id);
+            savedHostId = existing.id;
             results.updated++;
           } else {
             sshDataObj.createdAt = new Date().toISOString();
@@ -859,13 +788,38 @@ export function registerHostBulkRoutes(
               sshDataObj,
             );
             if (exportId !== undefined) importedIds.set(exportId, saved.id);
+            savedHostId = saved.id;
             results.success++;
           }
+
+          const protocolAuth = readProtocolAuthPayload(
+            hostData as Record<string, unknown>,
+          );
+          if (protocolAuth) {
+            await writeProtocolAuth(
+              userId,
+              savedHostId,
+              await keepUsableProtocolCredentials(protocolAuth, userId),
+              { isOwner: true },
+            );
+          }
+
+          // Every enabled plugin that declares host-scope settings and
+          // registered a hostImportNormalizer validates and writes its own
+          // fields here, so this loop does not need to know which plugins
+          // exist. See host-plugin-settings.ts.
+          await applyPluginHostImportSettings(
+            savedHostId,
+            hostData as Record<string, unknown>,
+          );
+          writtenHostIds.push(savedHostId);
         } catch (error) {
           results.failed++;
           results.errors.push(`Host ${i + 1}: ${getErrorMessage(error)}`);
         }
       }
+
+      await applyDefaultsAfterHostWrites(writtenHostIds);
 
       res.json({
         message: `Import completed: ${results.success} created, ${results.updated} updated, ${results.failed} failed`,
@@ -875,7 +829,7 @@ export function registerHostBulkRoutes(
         failed: results.failed,
         errors: results.errors,
       });
-    },
+    }),
   );
 
   /**
@@ -912,7 +866,7 @@ export function registerHostBulkRoutes(
     requireCreatePermission,
     requireEditPermission,
     requireDataAccess,
-    async (req: Request, res: Response) => {
+    DatabaseSaveTrigger.batched(async (req: Request, res: Response) => {
       const userId = (req as AuthenticatedRequest).userId;
       const { content, overwrite } = req.body;
 
@@ -984,6 +938,7 @@ export function registerHostBulkRoutes(
         }
       }
 
+      const writtenHostIds: number[] = [];
       for (let i = 0; i < hostsToImport.length; i++) {
         const hostData = normalizeImportedHost(
           hostsToImport[i] as Record<string, unknown>,
@@ -1014,32 +969,14 @@ export function registerHostBulkRoutes(
             keyType: null,
             credentialId: null,
             pin: false,
-            enableTerminal: true,
-            enableTunnel: true,
-            enableFileManager: true,
-            enableDocker: false,
-            enableWebUi: false,
-            enableProxmox: false,
-            enableTmuxMonitor: false,
-            enableTerminalToolbar: true,
-            enableAiAssistant: false,
-            showTerminalInSidebar: 0,
-            showFileManagerInSidebar: 0,
-            showTunnelInSidebar: 0,
-            showDockerInSidebar: 0,
-            showServerStatsInSidebar: 0,
-            defaultPath: "/",
             sudoPassword: null,
-            tunnelConnections: "[]",
             jumpHosts: hostData.jumpHosts
               ? JSON.stringify(hostData.jumpHosts)
               : null,
-            quickActions: null,
-            statsConfig: null,
-            dockerConfig: null,
-            webUiConfig: null,
-            proxmoxConfig: null,
+            statusCheckEnabled: true,
+            statusCheckInterval: null,
             terminalConfig: null,
+            sshOptions: null,
             forceKeyboardInteractive: "false",
             notes: null,
             useSocks5: 0,
@@ -1051,15 +988,17 @@ export function registerHostBulkRoutes(
             portKnockSequence: null,
             overrideCredentialUsername: 0,
             enableSsh: true,
-            enableRdp: false,
-            enableVnc: false,
-            enableTelnet: false,
-            enableStream: false,
             updatedAt: new Date().toISOString(),
           };
 
           const lookupKey = `${hostData.ip}:${hostData.port}:${hostData.username}`;
           const existing = existingHostMap?.get(lookupKey);
+          await withHostDefaults(
+            userId,
+            existing?.id ?? null,
+            sshDataObj,
+            hostData as unknown as Record<string, unknown>,
+          );
 
           if (existing) {
             await hostRepository.updateEncryptedForUser(
@@ -1067,10 +1006,15 @@ export function registerHostBulkRoutes(
               existing.id,
               sshDataObj,
             );
+            writtenHostIds.push(existing.id);
             results.updated++;
           } else {
             sshDataObj.createdAt = new Date().toISOString();
-            await hostRepository.createEncryptedForUser(userId, sshDataObj);
+            const saved = await hostRepository.createEncryptedForUser(
+              userId,
+              sshDataObj,
+            );
+            writtenHostIds.push(saved.id);
             results.success++;
           }
         } catch (error) {
@@ -1081,6 +1025,8 @@ export function registerHostBulkRoutes(
         }
       }
 
+      await applyDefaultsAfterHostWrites(writtenHostIds);
+
       res.json({
         message: `Import completed: ${results.success} created, ${results.updated} updated, ${results.failed} failed`,
         success: results.success,
@@ -1089,6 +1035,95 @@ export function registerHostBulkRoutes(
         failed: results.failed,
         errors: results.errors,
       });
-    },
+    }),
   );
+}
+
+/**
+ * Status check fields from an import row. Exports from before 2.9.0 carried
+ * them inside statsConfig.
+ */
+function importedStatusCheck(raw: Record<string, unknown>): {
+  statusCheckEnabled: boolean;
+  statusCheckInterval: number | null;
+} {
+  const legacy =
+    raw.statsConfig && typeof raw.statsConfig === "object"
+      ? (raw.statsConfig as Record<string, unknown>)
+      : {};
+  const enabled = raw.statusCheckEnabled ?? legacy.statusCheckEnabled;
+  const useGlobal = legacy.useGlobalStatusInterval !== false;
+  const interval =
+    raw.statusCheckInterval ?? (useGlobal ? null : legacy.statusCheckInterval);
+  const seconds = Number(interval);
+  return {
+    statusCheckEnabled: enabled !== false && legacy.disableTcpPing !== true,
+    statusCheckInterval:
+      interval != null && Number.isInteger(seconds) && seconds >= 5
+        ? seconds
+        : null,
+  };
+}
+
+const BUILTIN_SSH_AUTH_TYPES = [
+  "password",
+  "key",
+  "credential",
+  "agent",
+  "none",
+];
+
+/** Core's own types plus every type a plugin registers or declares. */
+function listKnownAuthTypes(): Set<string> {
+  return new Set([
+    ...BUILTIN_SSH_AUTH_TYPES,
+    ...listSshAuthProviders().map((provider) => provider.type),
+    ...listSshAuthTypeOwners().map((owner) => owner.type),
+  ]);
+}
+
+/** Fills an imported host's inherited keys and records what it sets itself. */
+async function withHostDefaults(
+  userId: string,
+  hostId: number | null,
+  columns: Record<string, unknown>,
+  body: Record<string, unknown>,
+): Promise<void> {
+  const stored =
+    hostId === null
+      ? null
+      : ((
+          await createCurrentHostDefaultsRepository().listHosts({
+            hostIds: [hostId],
+          })
+        )[0] ?? null);
+  columns.defaultOverrides = JSON.stringify(
+    await applyHostDefaultsToWrite({
+      ownerId: userId,
+      hostId,
+      columns,
+      body,
+      stored,
+    }),
+  );
+}
+
+/** A resetDefaults body as an override change, or null when there is none. */
+export function readDefaultsReset(raw: unknown): OverrideChange | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const source = raw as Record<string, unknown>;
+  const strings = (value: unknown) =>
+    Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string")
+      : [];
+  const change: OverrideChange = {
+    inheritAll: source.all === true,
+    inheritNamespaces: strings(source.namespaces),
+    inherit: strings(source.keys).map(splitDefaultKey),
+  };
+  return change.inheritAll ||
+    change.inheritNamespaces!.length > 0 ||
+    change.inherit!.length > 0
+    ? change
+    : null;
 }

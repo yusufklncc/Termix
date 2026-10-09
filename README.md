@@ -322,7 +322,7 @@ Save a set of tabs with their split layout and reopen the whole thing in one cli
 <td width="50%" valign="top">
 
 **Command Line Interface:**
-A `termix` CLI for your shell and your scripts. Open terminals, run a command on one host or a whole fleet, move files over SFTP, and manage hosts, snippets, and credentials. Install with `npm install -g @termix-cli/cli` or grab a standalone binary. See the [CLI docs](https://docs.termix.site/cli).
+A `termix` CLI for your shell and your scripts. Open terminals, run a command on one host or a whole fleet, move files over SFTP, and manage hosts, snippets, and credentials. Install with `npm install -g @termix-ssh/cli` or grab a standalone binary. See the [CLI docs](https://docs.termix.site/cli).
 
 </td>
 </tr>
@@ -457,7 +457,7 @@ networks:
 Termix also has a CLI, so you can manage your servers from a terminal and use Termix in your own scripts.
 
 ```bash
-npm install -g @termix-cli/cli
+npm install -g @termix-ssh/cli
 termix login --url https://termix.example.com
 termix ssh 1
 ```
@@ -474,9 +474,9 @@ You can run the Termix server on a VPS instead of inside your own network. If Te
 
 ## Telemetry
 
-Termix sends a small anonymous ping once a day so I can see how many instances are running and which features get used. It contains a random instance ID, how many users and hosts you have, the app version, and which features (terminal, file manager, tunnels, docker, etc.) were used in the last 24 hours. It never contains usernames, hostnames, IP addresses, credentials, or anything else that identifies you or your servers.
+Termix sends a small anonymous report once a day so I can see how many instances are running and which features get used. It contains a random instance ID, the app version, and how many users and hosts you have. It can also include your platform (OS, architecture, Node.js version, database type, and whether you run Docker, the desktop app or a plain server), how often each kind of tab was opened and how many SSH logins happened, and which built-in features are running. It never contains usernames, hostnames, IP addresses, credentials, or anything else that identifies you or your servers.
 
-It is on by default. Turn it off in Admin Settings under General, or set `ENABLE_TELEMETRY=false` before you ever start Termix.
+It is on by default. Turn it off, or choose what it includes, in Admin Settings under Usage Statistics, where you can also preview the exact report. Each user can leave out their own feature usage in their profile. Setting `ENABLE_TELEMETRY=false` turns it off and locks the switch.
 
 <br />
 

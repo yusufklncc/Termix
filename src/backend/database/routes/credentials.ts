@@ -1,10 +1,13 @@
 import { getErrorMessage } from "../../utils/error-message.js";
 import type { AuthenticatedRequest } from "../../../types/index.js";
+import { listCredentialTypes } from "../../hosts/connect/auth-provider-registry.js";
+import { ensureCoreSshAuthProviders } from "../../hosts/connect/core-providers.js";
+import { deleteOwnedCredential } from "../../hosts/delete-credential.js";
 import express, { type Request, type Response } from "express";
 import { authLogger } from "../../utils/logger.js";
 import { PermissionManager } from "../../utils/permission-manager.js";
 import { AuthManager } from "../../utils/auth-manager.js";
-import { parseSSHKey } from "../../utils/ssh-key-utils.js";
+import { parseKeyForStorage } from "../../hosts/stored-ssh-key.js";
 import { registerCredentialKeyRoutes } from "./credential-key-routes.js";
 import { registerCredentialDeployRoutes } from "./credential-deploy-routes.js";
 import { registerCredentialBulkRoutes } from "./credential-bulk-routes.js";
@@ -20,10 +23,18 @@ import {
   createCurrentRoleRepository,
   createCurrentHostResolutionRepository,
   createCurrentHostRepository,
-  createCurrentSyncTombstoneRepository,
 } from "../repositories/factory.js";
+import { rejectSharedCopyWrites } from "../../sync/shared-copy-guard.js";
+import { parseSharedSource } from "./host-normalizers.js";
+
+/** Built-in password and key, plus any type a plugin offers for credentials. */
+function getCredentialTypes(): string[] {
+  ensureCoreSshAuthProviders();
+  return listCredentialTypes();
+}
 
 const router = express.Router();
+router.use(rejectSharedCopyWrites("credential", /^\/(\d+)$/));
 
 function isNonEmptyString(val: unknown): val is string {
   return typeof val === "string" && val.trim().length > 0;
@@ -110,16 +121,17 @@ router.post(
       return res.status(400).json({ error: "Name is required" });
     }
 
-    if (!["password", "key"].includes(authType)) {
+    const credentialTypes = getCredentialTypes();
+    if (!credentialTypes.includes(authType)) {
       authLogger.warn("Invalid auth type provided", {
         operation: "credential_create",
         userId,
         name,
         authType,
       });
-      return res
-        .status(400)
-        .json({ error: 'Auth type must be "password" or "key"' });
+      return res.status(400).json({
+        error: `Auth type must be one of: ${credentialTypes.join(", ")}`,
+      });
     }
 
     try {
@@ -153,7 +165,7 @@ router.post(
 
       let keyInfo = null;
       if (authType === "key" && plainKey) {
-        keyInfo = parseSSHKey(plainKey, plainKeyPassword);
+        keyInfo = parseKeyForStorage(plainKey, plainKeyPassword);
         if (!keyInfo.success) {
           authLogger.warn("SSH key parsing failed", {
             operation: "credential_create",
@@ -180,7 +192,11 @@ router.post(
         password: plainPassword,
         key: plainKey,
         privateKey: keyInfo?.privateKey || plainKey,
-        publicKey: keyInfo?.publicKey || null,
+        publicKey:
+          keyInfo?.publicKey ||
+          (keyInfo?.reference && typeof req.body?.publicKey === "string"
+            ? req.body.publicKey.trim() || null
+            : null),
         keyPassword: plainKeyPassword,
         keyType: keyType || null,
         detectedKeyType: keyInfo?.keyType || null,
@@ -490,7 +506,7 @@ router.post(
 
       let keyInfo = null;
       if (authType === "key" && plainKey) {
-        keyInfo = parseSSHKey(plainKey, plainKeyPassword);
+        keyInfo = parseKeyForStorage(plainKey, plainKeyPassword);
         if (!keyInfo.success) {
           return res.status(400).json({
             error: keyInfo.error
@@ -512,7 +528,11 @@ router.post(
         password: authType === "password" ? plainPassword : null,
         key: authType === "key" ? plainKey : null,
         privateKey: authType === "key" ? keyInfo?.privateKey || plainKey : null,
-        publicKey: authType === "key" ? keyInfo?.publicKey || null : null,
+        publicKey:
+          authType === "key"
+            ? keyInfo?.publicKey ||
+              (keyInfo?.reference ? source.publicKey || null : null)
+            : null,
         keyPassword: authType === "key" ? plainKeyPassword : null,
         keyType: source.keyType,
         detectedKeyType: authType === "key" ? keyInfo?.keyType || null : null,
@@ -659,8 +679,14 @@ router.put(
       }
       if (updateData.username !== undefined)
         updateFields.username = updateData.username?.trim() || null;
-      if (updateData.authType !== undefined)
+      if (updateData.authType !== undefined) {
+        if (!getCredentialTypes().includes(updateData.authType)) {
+          return res.status(400).json({
+            error: `Auth type must be one of: ${getCredentialTypes().join(", ")}`,
+          });
+        }
         updateFields.authType = updateData.authType;
+      }
       if (updateData.keyType !== undefined)
         updateFields.keyType = updateData.keyType;
 
@@ -670,8 +696,14 @@ router.put(
       if (updateData.key !== undefined) {
         updateFields.key = updateData.key || null;
 
-        if (updateData.key && existingCredential.authType === "key") {
-          const keyInfo = parseSSHKey(updateData.key, updateData.keyPassword);
+        if (
+          updateData.key &&
+          (updateData.authType ?? existingCredential.authType) === "key"
+        ) {
+          const keyInfo = parseKeyForStorage(
+            updateData.key,
+            updateData.keyPassword,
+          );
           if (!keyInfo.success) {
             authLogger.warn("SSH key parsing failed during update", {
               operation: "credential_update",
@@ -686,8 +718,10 @@ router.put(
             });
           }
           updateFields.privateKey = keyInfo.privateKey;
-          updateFields.publicKey = keyInfo.publicKey;
-          updateFields.detectedKeyType = keyInfo.keyType;
+          updateFields.publicKey = keyInfo.reference
+            ? updateData.publicKey?.trim() || null
+            : keyInfo.publicKey;
+          updateFields.detectedKeyType = keyInfo.keyType || null;
         }
       }
       if (updateData.keyPassword !== undefined) {
@@ -801,57 +835,9 @@ router.delete(
 
     try {
       const credentialId = parseInt(id);
-      const credentialToDelete =
-        await createCurrentCredentialRepository().findDecryptedByIdForUser(
-          userId,
-          credentialId,
-        );
-
-      if (!credentialToDelete) {
+      const deleted = await deleteOwnedCredential(userId, credentialId);
+      if (!deleted) {
         return res.status(404).json({ error: "Credential not found" });
-      }
-
-      const hostsUsingCredential =
-        await createCurrentHostResolutionRepository().listHostsUsingCredentialForUser(
-          userId,
-          credentialId,
-        );
-
-      if (hostsUsingCredential.length > 0) {
-        await createCurrentHostRepository().updateManyForUser(
-          userId,
-          hostsUsingCredential.map((host) => host.id),
-          {
-            credentialId: null,
-            password: null,
-            key: null,
-            keyPassword: null,
-            authType: "password",
-          },
-        );
-      }
-
-      const { SharedHostSecretsManager } =
-        await import("../../utils/shared-host-secrets-manager.js");
-      const sharedSecretsManager = SharedHostSecretsManager.getInstance();
-      await sharedSecretsManager.deleteForCredential(credentialId);
-
-      await createCurrentCredentialRepository().deleteForUser(
-        userId,
-        credentialId,
-      );
-      if (credentialToDelete.syncId) {
-        await createCurrentSyncTombstoneRepository().record(
-          userId,
-          "sshCredentials",
-          credentialToDelete.syncId,
-        );
-      }
-
-      // Shares stay in place; re-snapshot so recipients fall back to whatever
-      // auth the host still has (or lose the stale credential copy).
-      for (const host of hostsUsingCredential) {
-        await sharedSecretsManager.resyncHost(host.id);
       }
 
       authLogger.success("SSH credential deleted", {
@@ -867,7 +853,7 @@ router.delete(
         action: "delete_credential",
         resourceType: "credential",
         resourceId: id,
-        resourceName: String(credentialToDelete.name ?? id),
+        resourceName: String(deleted.name ?? id),
         ipAddress: cdIp,
         userAgent: cdUa,
         success: true,
@@ -1123,6 +1109,19 @@ function formatCredentialOutput(
     lastUsed: credential.lastUsed,
     createdAt: credential.createdAt,
     updatedAt: credential.updatedAt,
+    ...sharedCopyFields(credential.sharedSource),
+  };
+}
+
+/** A read-only copy of a credential shared with a linked desktop's account. */
+function sharedCopyFields(value: unknown): Record<string, unknown> {
+  const shared = parseSharedSource(value);
+  if (!shared) return {};
+  return {
+    isShared: true,
+    sharedCopy: true,
+    ownerUsername: shared.owner || null,
+    permissionLevel: shared.permissionLevel === "manage" ? "manage" : "use",
   };
 }
 
@@ -1145,13 +1144,6 @@ function formatSSHHostOutput(
         : [],
     pin: !!host.pin,
     authType: host.authType,
-    enableTerminal: !!host.enableTerminal,
-    enableTunnel: !!host.enableTunnel,
-    tunnelConnections: host.tunnelConnections
-      ? JSON.parse(host.tunnelConnections as string)
-      : [],
-    enableFileManager: host.enableFileManager !== false,
-    defaultPath: host.defaultPath,
     createdAt: host.createdAt,
     updatedAt: host.updatedAt,
   };

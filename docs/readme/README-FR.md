@@ -215,7 +215,7 @@ Enregistrez un ensemble d'onglets avec leur disposition en écran divisé et rou
 <td width="50%" valign="top">
 
 **Ligne de commande:**
-Un CLI `termix` pour votre shell et vos scripts. Ouvrez des terminaux, lancez une commande sur un hôte ou une flotte entière, déplacez des fichiers en SFTP et gérez hôtes, extraits et identifiants. Installez-le avec `npm install -g @termix-cli/cli` ou récupérez un binaire autonome. Voir la [documentation du CLI](https://docs.termix.site/cli).
+Un CLI `termix` pour votre shell et vos scripts. Ouvrez des terminaux, lancez une commande sur un hôte ou une flotte entière, déplacez des fichiers en SFTP et gérez hôtes, extraits et identifiants. Installez-le avec `npm install -g @termix-ssh/cli` ou récupérez un binaire autonome. Voir la [documentation du CLI](https://docs.termix.site/cli).
 
 </td>
 </tr>
@@ -348,7 +348,7 @@ networks:
 Termix propose aussi un CLI, pour gérer vos serveurs depuis un terminal et utiliser Termix dans vos propres scripts.
 
 ```bash
-npm install -g @termix-cli/cli
+npm install -g @termix-ssh/cli
 termix login --url https://termix.example.com
 termix ssh 1
 ```
@@ -365,9 +365,9 @@ Vous pouvez faire tourner le serveur Termix sur un VPS plutôt que dans votre pr
 
 ## Télémétrie
 
-Termix envoie une fois par jour un petit signal anonyme, pour que je puisse voir combien d'instances tournent et quelles fonctionnalités servent vraiment. Il contient un identifiant d'instance aléatoire, le nombre d'utilisateurs et d'hôtes, la version de l'application et les fonctionnalités utilisées ces dernières 24 heures (terminal, gestionnaire de fichiers, tunnels, docker, etc.). Il ne contient jamais de noms d'utilisateur, de noms d'hôtes, d'adresses IP, d'identifiants ni quoi que ce soit qui puisse vous identifier, vous ou vos serveurs.
+Termix envoie une fois par jour un petit rapport anonyme, pour que je puisse voir combien d'instances tournent et quelles fonctionnalités sont utilisées. Il contient un identifiant d'instance aléatoire, la version de l'application et le nombre d'utilisateurs et d'hôtes. Il peut aussi inclure votre plateforme (système, architecture, version de Node.js, type de base de données, et si vous utilisez Docker, l'application de bureau ou un simple serveur), combien de fois chaque type d'onglet a été ouvert et combien de connexions SSH ont eu lieu, ainsi que les fonctionnalités intégrées actives. Il ne contient jamais de noms d'utilisateur, de noms d'hôte, d'adresses IP, d'identifiants ni quoi que ce soit qui permette de vous identifier, vous ou vos serveurs.
 
-C'est activé par défaut. Désactivez-le dans les paramètres d'administration, section Général, ou définissez `ENABLE_TELEMETRY=false` avant même de démarrer Termix.
+C'est activé par défaut. Désactivez-le ou choisissez ce qu'il contient dans les paramètres d'administration, section Usage Statistics, où vous pouvez aussi voir le rapport exact avant l'envoi. Chaque utilisateur peut exclure sa propre utilisation dans son profil. Définir `ENABLE_TELEMETRY=false` le désactive et verrouille l'interrupteur.
 
 <br />
 

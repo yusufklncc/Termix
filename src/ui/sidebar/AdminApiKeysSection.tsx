@@ -150,7 +150,7 @@ export function AdminApiKeysSection({
                     <span className="text-accent-brand">*</span>
                   </label>
                   <Input
-                    placeholder="e.g., CI Pipeline"
+                    placeholder={t("placeholders.apiKeyName")}
                     value={newKeyName}
                     onChange={(e) => setNewKeyName(e.target.value)}
                     className="text-xs"
@@ -230,11 +230,13 @@ export function AdminApiKeysSection({
               <span className="text-[10px] font-mono text-muted-foreground truncate">
                 {key.tokenPrefix}…
               </span>
-              <span className="text-[10px] text-muted-foreground">
-                {key.createdAt.split("T")[0]} ·{" "}
-                {key.expiresAt
-                  ? key.expiresAt.split("T")[0]
-                  : t("admin.apiKeyNoExpiry")}
+              <span className="flex gap-2.5 text-[10px] text-muted-foreground">
+                <span>{key.createdAt.split("T")[0]}</span>
+                <span>
+                  {key.expiresAt
+                    ? key.expiresAt.split("T")[0]
+                    : t("admin.apiKeyNoExpiry")}
+                </span>
               </span>
             </div>
             <Button

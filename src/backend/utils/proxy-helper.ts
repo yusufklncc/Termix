@@ -143,7 +143,7 @@ async function createSingleProxyConnection(
   }
 }
 
-export async function createHttpConnectConnection(
+async function createHttpConnectConnection(
   targetHost: string,
   targetPort: number,
   proxyHost: string,
@@ -225,7 +225,7 @@ export async function createHttpConnectConnection(
   });
 }
 
-export async function createMixedProxyChainConnection(
+async function createMixedProxyChainConnection(
   targetHost: string,
   targetPort: number,
   proxyChain: ProxyNode[],

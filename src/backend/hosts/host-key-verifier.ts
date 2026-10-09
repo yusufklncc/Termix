@@ -1,4 +1,4 @@
-import { authFailureTracker } from "./metrics/state.js";
+import { pluginEvents, TOPICS } from "../plugins/events.js";
 import type { WebSocket } from "ws";
 import { createCurrentHostResolutionRepository } from "../database/repositories/factory.js";
 import { sshLogger } from "../utils/logger.js";
@@ -84,18 +84,47 @@ export class SSHHostKeyVerifier {
                   hostId,
                 );
 
+          // No row means nothing to compare against and nowhere to save the
+          // key, so it is never accepted silently (#1397): the user decides
+          // when there is a socket to ask on, otherwise it is refused.
           if (!host) {
+            if (!ws) {
+              sshLogger.error(
+                "Host not found in database during key verification, rejecting",
+                {
+                  operation: "host_key_no_host",
+                  hostId,
+                  ip,
+                  port,
+                  userId,
+                },
+              );
+              verify(false);
+              return;
+            }
+            const accepted = await this.promptUserForNewKey(
+              ws,
+              ip,
+              port,
+              undefined,
+              fingerprint,
+              keyType,
+              algorithm,
+            );
             sshLogger.warn(
-              "Host not found in database during key verification",
+              accepted
+                ? "Key for a host missing from the database accepted for this session only"
+                : "Key for a host missing from the database rejected",
               {
                 operation: "host_key_no_host",
                 hostId,
                 ip,
                 port,
+                fingerprint,
                 userId,
               },
             );
-            verify(true);
+            verify(accepted);
             return;
           }
 
@@ -328,7 +357,7 @@ export class SSHHostKeyVerifier {
       algorithm,
       currentChangeCount,
     );
-    authFailureTracker.resetHostKeyFailure(hostId);
+    pluginEvents.emit(TOPICS.hostKeyUpdated, { hostId });
   }
 
   private static async promptUserForNewKey(

@@ -215,7 +215,7 @@ Speichere eine Reihe von Tabs samt Aufteilung und öffne alles mit einem Klick w
 <td width="50%" valign="top">
 
 **Kommandozeile:**
-Ein `termix`-CLI für deine Shell und deine Skripte. Terminals öffnen, einen Befehl auf einem Host oder einer ganzen Flotte ausführen, Dateien per SFTP verschieben und Hosts, Snippets und Zugangsdaten verwalten. Installiere es mit `npm install -g @termix-cli/cli` oder nimm eine eigenständige Binärdatei. Siehe die [CLI-Dokumentation](https://docs.termix.site/cli).
+Ein `termix`-CLI für deine Shell und deine Skripte. Terminals öffnen, einen Befehl auf einem Host oder einer ganzen Flotte ausführen, Dateien per SFTP verschieben und Hosts, Snippets und Zugangsdaten verwalten. Installiere es mit `npm install -g @termix-ssh/cli` oder nimm eine eigenständige Binärdatei. Siehe die [CLI-Dokumentation](https://docs.termix.site/cli).
 
 </td>
 </tr>
@@ -350,7 +350,7 @@ networks:
 Termix hat auch ein CLI, damit du deine Server vom Terminal aus verwalten und Termix in eigenen Skripten nutzen kannst.
 
 ```bash
-npm install -g @termix-cli/cli
+npm install -g @termix-ssh/cli
 termix login --url https://termix.example.com
 termix ssh 1
 ```
@@ -367,9 +367,9 @@ Du kannst den Termix-Server auf einem VPS laufen lassen statt im eigenen Netz. L
 
 ## Telemetrie
 
-Termix schickt einmal am Tag ein kleines anonymes Signal, damit ich sehen kann, wie viele Instanzen laufen und welche Funktionen genutzt werden. Enthalten sind eine zufällige Instanz-ID, wie viele Benutzer und Hosts du hast, die App-Version und welche Funktionen (Terminal, Dateimanager, Tunnel, Docker usw.) in den letzten 24 Stunden benutzt wurden. Niemals enthalten sind Benutzernamen, Hostnamen, IP-Adressen, Zugangsdaten oder irgendetwas anderes, das dich oder deine Server identifiziert.
+Termix schickt einmal am Tag einen kleinen anonymen Bericht, damit ich sehe, wie viele Instanzen laufen und welche Funktionen genutzt werden. Er enthält eine zufällige Instanz-ID, die App-Version und wie viele Benutzer und Hosts du hast. Er kann außerdem deine Plattform enthalten (Betriebssystem, Architektur, Node.js-Version, Datenbanktyp und ob du Docker, die Desktop-App oder einen normalen Server nutzt), wie oft jede Art von Tab geöffnet wurde und wie viele SSH-Logins es gab, sowie welche eingebauten Funktionen laufen. Er enthält nie Benutzernamen, Hostnamen, IP-Adressen, Zugangsdaten oder sonst etwas, das dich oder deine Server erkennbar macht.
 
-Es ist standardmäßig an. Schalte es in den Administrationseinstellungen unter Allgemein aus oder setze `ENABLE_TELEMETRY=false`, bevor du Termix überhaupt startest.
+Es ist standardmäßig an. Schalte es in den Administrationseinstellungen unter Usage Statistics aus oder wähle dort, was gesendet wird. Dort kannst du dir auch den genauen Bericht vorab ansehen. Jeder Benutzer kann seine eigene Funktionsnutzung in seinem Profil ausschließen. `ENABLE_TELEMETRY=false` schaltet es aus und sperrt den Schalter.
 
 <br />
 

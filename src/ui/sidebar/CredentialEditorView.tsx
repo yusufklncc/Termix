@@ -1,8 +1,5 @@
 import { useRef, useState } from "react";
-import {
-  SecretReferenceHint,
-  SecretSourceManager,
-} from "./SecretSourceManager";
+import { PluginComponent } from "@/plugin-host/component-registry";
 import { useTranslation } from "react-i18next";
 import { copyToClipboard } from "@/lib/clipboard";
 import { Copy, Info, Lock, Upload, X } from "lucide-react";
@@ -186,7 +183,7 @@ export function CredentialEditorView({
                 {t("hosts.friendlyNameLabel")}
               </label>
               <Input
-                placeholder="e.g. Production SSH Key"
+                placeholder={t("placeholders.credentialName")}
                 value={credForm.name}
                 onChange={(e) => setCredField("name", e.target.value)}
               />
@@ -206,7 +203,7 @@ export function CredentialEditorView({
                 {t("hosts.descriptionLabel")}
               </label>
               <Input
-                placeholder="Optional details..."
+                placeholder={t("placeholders.optionalDetails")}
                 value={credForm.description}
                 onChange={(e) => setCredField("description", e.target.value)}
               />
@@ -281,7 +278,7 @@ export function CredentialEditorView({
                 {t("hosts.username")}
               </label>
               <Input
-                placeholder="e.g. root or deploy"
+                placeholder={t("placeholders.sshUsername")}
                 value={credForm.username}
                 onChange={(e) => setCredField("username", e.target.value)}
               />
@@ -296,12 +293,14 @@ export function CredentialEditorView({
                 value={credForm.password}
                 onChange={(e) => setCredField("password", e.target.value)}
               />
-              <SecretReferenceHint
+              <PluginComponent
+                id="credentials.secretHint"
                 onManage={() => setShowSecretSources((v) => !v)}
               />
             </div>
             {showSecretSources && (
-              <SecretSourceManager
+              <PluginComponent
+                id="credentials.secretManager"
                 onClose={() => setShowSecretSources(false)}
               />
             )}
@@ -394,7 +393,7 @@ export function CredentialEditorView({
                 />
                 {credForm.value === "existing_key" && (
                   <div className="px-3 py-2 text-[10px] border border-accent-brand/30 bg-accent-brand/5 text-accent-brand">
-                    {t("hosts.keySaved")} — {t("hosts.keyReplaceNotice")}
+                    {t("hosts.keySaved")}. {t("hosts.keyReplaceNotice")}
                   </div>
                 )}
                 <textarea

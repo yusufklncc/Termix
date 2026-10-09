@@ -67,6 +67,18 @@ const emptyManagedForm: FormState = {
  * two things it needs. Fortinet is absent on purpose: it is the one that is
  * dialled, at an address and as an account.
  */
+/**
+ * Every provider the network manager can raise, in the order offered.
+ *
+ * Listed here rather than written out in the form, so adding one is a single
+ * edit and the two places cannot disagree about what exists.
+ */
+const PROVIDERS: ReadonlyArray<{ id: string; labelKey: string }> = [
+  { id: "fortinet", labelKey: "hosts.vpn.providerFortinet" },
+  { id: "tailscale", labelKey: "hosts.vpn.providerTailscale" }, // plugin-id-ok: a VPN provider the manager dials, not the Tailscale plugin
+  { id: "netbird", labelKey: "hosts.vpn.providerNetbird" },
+];
+
 const KEYED_PROVIDERS: Record<
   string,
   {
@@ -426,15 +438,15 @@ export function VpnProfileManager({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="fortinet" className="text-xs">
-                      {t("hosts.vpn.providerFortinet")}
-                    </SelectItem>
-                    <SelectItem value="tailscale" className="text-xs">
-                      {t("hosts.vpn.providerTailscale")}
-                    </SelectItem>
-                    <SelectItem value="netbird" className="text-xs">
-                      {t("hosts.vpn.providerNetbird")}
-                    </SelectItem>
+                    {PROVIDERS.map((provider) => (
+                      <SelectItem
+                        key={provider.id}
+                        value={provider.id}
+                        className="text-xs"
+                      >
+                        {t(provider.labelKey)}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

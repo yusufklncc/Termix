@@ -1,4 +1,5 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
+import { setHostProtocolSource } from "../../../hosts/protocol-auth/registry.js";
 import {
   applyHostKeyTypeUpdate,
   containsOwnerPrivateAuthUpdate,
@@ -11,7 +12,6 @@ import {
   sanitizeHostForRecipient,
   stripSensitiveFields,
   transformHostResponse,
-  findProxyConfigError,
 } from "../../../database/routes/host-normalizers.js";
 
 describe("applyHostKeyTypeUpdate", () => {
@@ -48,13 +48,13 @@ describe("containsOwnerPrivateAuthUpdate", () => {
     );
   });
 
-  it("keeps protocol field definitions isolated", () => {
-    expect(containsOwnerPrivateAuthUpdate({ rdpCredentialId: 7 }, "rdp")).toBe(
-      true,
-    );
-    expect(containsOwnerPrivateAuthUpdate({ rdpCredentialId: 7 }, "ssh")).toBe(
-      false,
-    );
+  it("leaves plugin protocol logins to their own guard", () => {
+    expect(
+      containsOwnerPrivateAuthUpdate(
+        { protocolAuth: { spice: { credentialId: 7 } } },
+        "ssh",
+      ),
+    ).toBe(false);
   });
 
   it("allows shared editors to update non-authentication host settings", () => {
@@ -106,15 +106,10 @@ describe("normalizeProtocolEnableFields", () => {
     expect(normalizeProtocolEnableFields({ name: "server" })).toEqual({});
   });
 
-  it("converts explicitly provided protocol booleans to database integers", () => {
+  it("converts an explicitly provided SSH switch to a database integer", () => {
     expect(
-      normalizeProtocolEnableFields({
-        enableSsh: true,
-        enableRdp: false,
-        enableVnc: undefined,
-        enableTelnet: true,
-      }),
-    ).toEqual({ enableSsh: 1, enableRdp: 0, enableTelnet: 1 });
+      normalizeProtocolEnableFields({ enableSsh: true, enableRdp: false }),
+    ).toEqual({ enableSsh: 1 });
   });
 });
 
@@ -175,22 +170,43 @@ describe("normalizeImportedHost", () => {
     expect(host.connectionType).toBe("ssh");
     expect(host.port).toBe(22);
     expect(host.enableSsh).toBe(true);
-    expect(host.enableRdp).toBe(false);
   });
 
-  it("infers rdp from enableRdp and uses default rdp port", () => {
-    const host = normalizeImportedHost({ enableRdp: true, ip: "10.0.0.2" });
-    expect(host.connectionType).toBe("rdp");
-    expect(host.port).toBe(3389);
-    expect(host.enableRdp).toBe(true);
-  });
+  describe("with a plugin protocol declared", () => {
+    afterEach(() => setHostProtocolSource(() => []));
 
-  it("infers stream from enableStream and defaults to port 443", () => {
-    const host = normalizeImportedHost({ enableStream: true, ip: "s.example" });
-    expect(host.connectionType).toBe("stream");
-    expect(host.port).toBe(443);
-    expect(host.enableStream).toBe(true);
-    expect(host.enableSsh).toBe(false);
+    function declareSpice() {
+      setHostProtocolSource(() => [
+        {
+          id: "spice",
+          defaultPort: 5930,
+          pluginId: "spice-plugin",
+          pluginName: "Spice",
+        },
+      ]);
+    }
+
+    it("infers the protocol from its enable flag and uses its default port", () => {
+      declareSpice();
+      const host = normalizeImportedHost({ enableSpice: true, ip: "10.0.0.2" });
+      expect(host.connectionType).toBe("spice");
+      expect(host.port).toBe(5930);
+      expect(host.enableSsh).toBe(false);
+    });
+
+    it("reads the protocol's own port field", () => {
+      declareSpice();
+      const host = normalizeImportedHost({
+        connectionType: "spice",
+        spicePort: 5999,
+      });
+      expect(host.port).toBe(5999);
+    });
+
+    it("ignores the flag of a protocol nobody declares", () => {
+      const host = normalizeImportedHost({ enableSpice: true });
+      expect(host.connectionType).toBe("ssh");
+    });
   });
 
   it("honors an explicit port over protocol defaults", () => {
@@ -282,100 +298,53 @@ describe("stripSensitiveFields", () => {
     ).toBeUndefined();
   });
 
-  it("strips rdp/vnc/telnet passwords and adds their presence flags", () => {
-    const result = stripSensitiveFields({
-      name: "rdp-box",
-      rdpPassword: "rdp-secret",
-      vncPassword: "vnc-secret",
-      telnetPassword: "telnet-secret",
-    });
-    expect(result.rdpPassword).toBeUndefined();
-    expect(result.vncPassword).toBeUndefined();
-    expect(result.telnetPassword).toBeUndefined();
-    expect(result.hasRdpPassword).toBe(true);
-    expect(result.hasVncPassword).toBe(true);
-    expect(result.hasTelnetPassword).toBe(true);
-  });
-
-  it("marks rdp/vnc/telnet presence flags false when absent", () => {
-    const result = stripSensitiveFields({ name: "rdp-box" });
-    expect(result.hasRdpPassword).toBe(false);
-    expect(result.hasVncPassword).toBe(false);
-    expect(result.hasTelnetPassword).toBe(false);
-  });
-
-  it("strips the stream password but keeps the embed target", () => {
-    const result = stripSensitiveFields({
-      name: "stream-box",
-      streamUrl: "https://desktop.example.com",
-      streamPath: "/session",
-      streamPassword: "stream-secret",
-    });
-    expect(result.streamPassword).toBeUndefined();
-    expect(result.hasStreamPassword).toBe(true);
-    expect(result.streamUrl).toBe("https://desktop.example.com");
-    expect(result.streamPath).toBe("/session");
+  it("leaves protocol login summaries alone for the owner", () => {
+    const protocolAuth = {
+      spice: { authType: "direct", hasPassword: true, secretFieldKeys: [] },
+    };
+    expect(stripSensitiveFields({ protocolAuth }).protocolAuth).toEqual(
+      protocolAuth,
+    );
   });
 });
 
 describe("transformHostResponse", () => {
-  it("parses tags and coerces enable flags to booleans", () => {
+  it("parses tags and coerces flags to booleans", () => {
     const result = transformHostResponse({
       tags: "a,b,c",
-      enableTerminal: 1,
-      enableTunnel: 0,
       shareSshAuth: 1,
       pin: 1,
     });
     expect(result.tags).toEqual(["a", "b", "c"]);
-    expect(result.enableTerminal).toBe(true);
-    expect(result.enableTunnel).toBe(false);
     expect(result.shareSshAuth).toBe(true);
     expect(result.pin).toBe(true);
   });
 
   it("parses JSON array fields and defaults them to []", () => {
     const result = transformHostResponse({
-      tunnelConnections: '[{"sourcePort":8080}]',
-      jumpHosts: null,
+      jumpHosts: '[{"hostId":8}]',
+      portKnockSequence: null,
     });
-    expect(result.tunnelConnections).toEqual([{ sourcePort: 8080 }]);
-    expect(result.jumpHosts).toEqual([]);
+    expect(result.jumpHosts).toEqual([{ hostId: 8 }]);
+    expect(result.portKnockSequence).toEqual([]);
   });
 
-  it("infers protocol flags for a migrated non-ssh host", () => {
+  it("leaves the 2.8 quick_actions column out, for its plugin to put back", () => {
     const result = transformHostResponse({
-      connectionType: "rdp",
-      enableSsh: true,
+      quickActions: '[{"name":"x","snippetId":1}]',
     });
-    expect(result.enableSsh).toBe(false);
-    expect(result.enableRdp).toBe(true);
+    expect(result.quickActions).toBeUndefined();
   });
 
-  it("applies default protocol ports", () => {
+  it("passes the stored SSH switch through", () => {
+    // The remote desktop migration corrects connection_type-only hosts once.
+    expect(transformHostResponse({ enableSsh: false }).enableSsh).toBe(false);
+  });
+
+  it("applies the default SSH port", () => {
     const result = transformHostResponse({ port: 22 });
     expect(result.sshPort).toBe(22);
-    expect(result.rdpPort).toBe(3389);
-    expect(result.vncPort).toBe(5900);
-    expect(result.telnetPort).toBe(23);
-  });
-
-  it("coerces enableProxmox and parses proxmoxConfig", () => {
-    const result = transformHostResponse({
-      enableProxmox: 1,
-      proxmoxConfig: '{"defaultCredentialId":3,"windowsPatterns":"win"}',
-    });
-    expect(result.enableProxmox).toBe(true);
-    expect(result.proxmoxConfig).toEqual({
-      defaultCredentialId: 3,
-      windowsPatterns: "win",
-    });
-  });
-
-  it("defaults enableProxmox to false when absent", () => {
-    const result = transformHostResponse({ port: 22 });
-    expect(result.enableProxmox).toBe(false);
-    expect(result.proxmoxConfig).toBeUndefined();
+    expect(result).not.toHaveProperty("rdpPort");
   });
 });
 
@@ -401,8 +370,17 @@ describe("sanitizeHostForRecipient", () => {
     password: "hunter2",
     key: "PRIVATE",
     sudoPassword: "sudo",
-    rdpPassword: "rdp",
     socks5Password: "socks",
+    protocolAuth: {
+      spice: {
+        authType: "direct",
+        credentialId: null,
+        username: "viewer",
+        fields: { display: "0" },
+        hasPassword: true,
+        secretFieldKeys: ["ticket"],
+      },
+    },
     enableSsh: true,
     enableRdp: true,
     sshPort: 22,
@@ -420,8 +398,15 @@ describe("sanitizeHostForRecipient", () => {
     expect(result.password).toBeUndefined();
     expect(result.key).toBeUndefined();
     expect(result.sudoPassword).toBeUndefined();
-    expect(result.rdpPassword).toBeUndefined();
     expect(result.socks5Password).toBeUndefined();
+    expect(result.protocolAuth).toEqual({
+      spice: {
+        authType: "direct",
+        credentialId: null,
+        username: "viewer",
+        fields: { display: "0" },
+      },
+    });
     expect(result.credentialId).toBeUndefined();
     expect(result.overrideCredentialUsername).toBeUndefined();
     expect(result.terminalConfig).toEqual({ theme: "termix" });
@@ -453,7 +438,6 @@ describe("sanitizeHostForRecipient", () => {
       {
         ...sharedHost,
         permissionLevel: "connect",
-        rdpAuthType: "none",
         authOverrides: {
           ssh: {
             credentialId: 9,
@@ -466,9 +450,7 @@ describe("sanitizeHostForRecipient", () => {
     );
     expect(result.name).toBe("prod");
     expect(result.ip).toBe("10.0.0.42");
-    expect(result.enableRdp).toBe(true);
-    expect(result.rdpPort).toBe(3389);
-    expect(result.rdpAuthType).toBe("none");
+    expect(result.protocolAuth).toEqual({ spice: { authType: "direct" } });
     expect(result.permissionLevel).toBe("connect");
     expect(result.shareSshAuth).toBe(true);
     expect(result.authOverrides).toEqual({
@@ -484,42 +466,53 @@ describe("sanitizeHostForRecipient", () => {
   });
 });
 
-describe("findProxyConfigError", () => {
-  it("accepts a host that does not use a proxy", () => {
-    expect(findProxyConfigError({ useSocks5: false })).toBeNull();
-    expect(findProxyConfigError({})).toBeNull();
-  });
+describe("transformHostResponse terminal fields", () => {
+  const row = (extra: Record<string, unknown>) =>
+    transformHostResponse({ id: 1, tags: "", ...extra });
 
-  it("accepts a proxy with an address", () => {
-    expect(
-      findProxyConfigError({ useSocks5: true, socks5Host: "10.0.0.9" }),
-    ).toBeNull();
-  });
-
-  it("accepts a proxy chain", () => {
-    expect(
-      findProxyConfigError({
-        useSocks5: true,
-        socks5ProxyChain: [{ type: "socks5", host: "10.0.0.9", port: 1080 }],
+  it("sends the SSH options and core's own terminalConfig keys only", () => {
+    const host = row({
+      sshOptions: JSON.stringify({ keepaliveInterval: 20 }),
+      terminalConfig: JSON.stringify({
+        startupSnippetId: 3,
+        theme: "nord",
+        keepaliveInterval: 5,
       }),
-    ).toBeNull();
+    });
+    expect(host.sshOptions).toEqual({ keepaliveInterval: 20 });
+    expect(host.terminalConfig).toEqual({ keepaliveInterval: 20 });
   });
 
-  it("rejects a proxy that was switched on and never addressed", () => {
-    // Saving this used to be allowed, and the connection was then made
-    // directly -- out of the server's own route, silently.
-    expect(findProxyConfigError({ useSocks5: true })).toMatch(/proxy address/i);
+  it("reads the options out of terminal_config before the boot copy", () => {
+    const host = row({
+      sshOptions: null,
+      terminalConfig: JSON.stringify({ agentForwarding: true }),
+    });
+    expect(host.sshOptions).toEqual({ agentForwarding: true });
   });
 
-  it("rejects an address that was cleared but left switched on", () => {
-    expect(
-      findProxyConfigError({ useSocks5: true, socks5Host: "   " }),
-    ).toMatch(/proxy address/i);
+  it("surfaces a 2.8 sudo password for the sanitizers to strip", () => {
+    const host = row({
+      sudoPassword: null,
+      terminalConfig: JSON.stringify({ sudoPassword: "legacy" }),
+    });
+    const stripped = stripSensitiveFields(host);
+    expect(stripped.hasSudoPassword).toBe(true);
+    expect(stripped).not.toHaveProperty("sudoPassword");
+    expect(JSON.stringify(stripped)).not.toContain("legacy");
   });
 
-  it("rejects an empty proxy chain", () => {
-    expect(
-      findProxyConfigError({ useSocks5: true, socks5ProxyChain: [] }),
-    ).toMatch(/proxy address/i);
+  it("hides the owner's agent socket from a shared recipient", () => {
+    const shared = sanitizeHostForRecipient(
+      row({
+        sshOptions: JSON.stringify({
+          agentSocketPath: "/run/agent",
+          keepaliveInterval: 9,
+        }),
+      }),
+      "edit",
+    );
+    expect(shared.sshOptions).toEqual({ keepaliveInterval: 9 });
+    expect(shared.terminalConfig).toEqual({ keepaliveInterval: 9 });
   });
 });

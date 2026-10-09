@@ -15,30 +15,17 @@ class FieldCrypto {
   private static readonly SALT_LENGTH = 32;
 
   private static readonly ENCRYPTED_FIELDS = {
-    users: new Set([
-      "passwordHash",
-      "clientSecret",
-      "totpSecret",
-      "totpBackupCodes",
-      "oidcIdentifier",
-    ]),
+    users: new Set(["passwordHash", "clientSecret", "oidcIdentifier"]),
     ssh_data: new Set([
       "password",
       "key",
       "keyPassword",
       "sudoPassword",
-      "autostartPassword",
-      "autostartKey",
-      "autostartKeyPassword",
       "socks5Password",
-      "rdpPassword",
-      "vncPassword",
-      "telnetPassword",
-      "streamPassword",
     ]),
-    // authPassword is the VPN account's; extraConfig holds a provider's own
-    // secret material (a WireGuard key, say). Both are presented to a gateway
-    // rather than verified, so they are encrypted and not hashed.
+    // A gateway password and a managed profile's auth secret: an auth key, a
+    // setup key, or a password. All are presented to a gateway rather than
+    // verified, so they are encrypted and not hashed.
     vpn_profiles: new Set(["gatewayPassword", "authPassword", "extraConfig"]),
     ssh_credentials: new Set([
       "password",
@@ -49,12 +36,6 @@ class FieldCrypto {
     ]),
     // Channel configs hold ntfy tokens, webhook auth headers and Discord
     // webhook URLs, which are credentials like any other.
-    notification_channels: new Set(["config"]),
-    opkssh_tokens: new Set(["sshCert", "privateKey"]),
-    termix_identity_ca: new Set(["privateKey"]),
-    vault_tokens: new Set(["sshCert", "privateKey"]),
-    // Third-party AI provider keys are user credentials like any other.
-    ai_providers: new Set(["apiKey"]),
   };
 
   static encryptField(
@@ -145,6 +126,13 @@ class FieldCrypto {
     decrypted += decipher.final("utf8");
 
     return decrypted;
+  }
+
+  /** The encrypted fields of a table, as property names. */
+  static fieldsFor(tableName: string): string[] {
+    const fields =
+      this.ENCRYPTED_FIELDS[tableName as keyof typeof this.ENCRYPTED_FIELDS];
+    return fields ? [...fields] : [];
   }
 
   static shouldEncryptField(tableName: string, fieldName: string): boolean {

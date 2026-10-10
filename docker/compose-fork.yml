@@ -8,8 +8,7 @@
 #   docker compose -f docker-compose.yml -f compose-fork.yml up -d
 #
 # The GitLab project is public, so this pulls without a login. Docker Hub
-# still carries the same images (yusufklncc/termix) while the move to
-# GitLab finishes.
+# holds the same images up to 2.9.2-rdp.11 and nothing after it.
 #
 # To build from a checkout rather than pull, drop this overlay and use
 # compose-dev.yml, which builds both the application and the bridge.

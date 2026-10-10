@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Builds and publishes this fork's images to the GitLab registry, and to
-# Docker Hub while the move there is still in progress.
+# Builds and publishes this fork's images to the GitLab registry.
 #
 # The nginx config is rendered from a template at container start, so a
 # config that does not parse only shows up as a restart loop on the server.
@@ -10,14 +9,15 @@
 #   bash scripts/publish-fork-images.sh app 2.9.2-rdp.12
 #   bash scripts/publish-fork-images.sh netmgr 2.9.2-rdp.5
 #   bash scripts/publish-fork-images.sh bridge 2.8.0-rdp.2
-#   DOCKER_HUB=0 bash scripts/publish-fork-images.sh app 2.9.2-rdp.12
+#   DOCKER_HUB=1 bash scripts/publish-fork-images.sh app 2.9.2-rdp.12   # also Docker Hub
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GITLAB_REGISTRY="${GITLAB_REGISTRY:-registry.fatihk.tr/yusufihsankilinc/termix}"
 DOCKER_HUB_NS="${DOCKER_HUB_NS:-yusufklncc}"
-# Set to 0 once the server pulls from GitLab and Docker Hub is retired.
-DOCKER_HUB="${DOCKER_HUB:-1}"
+# Off since 2026-10-10: the server pulls from GitLab, which is what Docker
+# Hub was kept alongside for. Set to 1 to publish there as well.
+DOCKER_HUB="${DOCKER_HUB:-0}"
 
 component="${1:-}"
 tag="${2:-}"

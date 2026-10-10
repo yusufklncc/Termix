@@ -1,0 +1,52 @@
+{
+  "tabs": {
+    "stream": "Stream"
+  },
+  "protocol": {
+    "title": "Stream",
+    "description": "A desktop someone else is already publishing"
+  },
+  "settings": {
+    "host": {
+      "enable": {
+        "label": "Stream"
+      },
+      "url": {
+        "label": "Publisher address",
+        "description": "Where the stream is served from.",
+        "placeholder": "https://desktop.example.com"
+      },
+      "path": {
+        "label": "Path",
+        "description": "Added to the address. Leave empty unless the publisher serves from somewhere other than the root."
+      },
+      "mode": {
+        "label": "How to open it",
+        "description": "Embed shows the publisher's own page. WebRTC negotiates a peer connection through Termix and renders the video itself.",
+        "embed": "Embed the publisher's page",
+        "webrtc": "WebRTC through Termix"
+      },
+      "publisher": {
+        "label": "Publisher",
+        "description": "Which signaling protocol the far end speaks. Only read in WebRTC mode.",
+        "selkies": "Selkies",
+        "neko": "neko"
+      }
+    }
+  },
+  "status": {
+    "connecting": "Connecting to the stream...",
+    "failed": "Stream connection failed",
+    "noUrl": "This host has no publisher address. Set one in the host's Stream settings.",
+    "reconnect": "Reconnect"
+  },
+  "stream": {
+    "disconnected": "Stream closed",
+    "missingUrlDescription": "Set a base URL for this host to embed its desktop stream.",
+    "missingUrlTitle": "No stream URL configured",
+    "negotiationFailed": "Could not negotiate the stream",
+    "openInBrowser": "Open in browser",
+    "reconnect": "Reconnect",
+    "reload": "Reload stream"
+  }
+}

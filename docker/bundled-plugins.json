@@ -17,6 +17,10 @@
       "source": "workspace"
     },
     {
+      "id": "desktop-stream",
+      "source": "workspace"
+    },
+    {
       "id": "docker",
       "source": "workspace"
     },

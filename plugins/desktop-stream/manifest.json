@@ -1,0 +1,120 @@
+{
+  "id": "desktop-stream",
+  "name": "Desktop Stream",
+  "version": "1.0.0",
+  "description": "Open a WebRTC desktop stream (Selkies, neko) as a host. Termix relays the signaling; the video goes straight from the publisher to the browser.",
+  "author": {
+    "name": "Yusuf Ihsan Kilinc"
+  },
+  "license": "Apache-2.0",
+  "category": "Terminal",
+  "icon": "Cast",
+  "engine": {
+    "termix": ">=2.9.0",
+    "api": "1"
+  },
+  "capabilities": [
+    "hosts:read",
+    "credentials:read",
+    "credentials:use",
+    "network:outbound",
+    "network:serve",
+    "ui:surface"
+  ],
+  "contributes": {
+    "protocols": [
+      {
+        "id": "desktop-stream",
+        "defaultPort": 443,
+        "hostLoginFallback": [
+          "username",
+          "password"
+        ]
+      }
+    ],
+    "tabs": [
+      {
+        "id": "desktop-stream",
+        "titleKey": "tabs.stream",
+        "icon": "Cast",
+        "openFrom": [
+          "host-context-menu",
+          "palette"
+        ]
+      }
+    ],
+    "settings": {
+      "host": {
+        "fields": [
+          {
+            "key": "enableStream",
+            "type": "boolean",
+            "labelKey": "settings.host.enable.label",
+            "default": false,
+            "hidden": true,
+            "defaultable": false
+          },
+          {
+            "key": "url",
+            "type": "string",
+            "labelKey": "settings.host.url.label",
+            "descriptionKey": "settings.host.url.description",
+            "placeholderKey": "settings.host.url.placeholder",
+            "requires": "enableStream",
+            "default": ""
+          },
+          {
+            "key": "path",
+            "type": "string",
+            "labelKey": "settings.host.path.label",
+            "descriptionKey": "settings.host.path.description",
+            "requires": "enableStream",
+            "default": ""
+          },
+          {
+            "key": "mode",
+            "type": "select",
+            "labelKey": "settings.host.mode.label",
+            "descriptionKey": "settings.host.mode.description",
+            "requires": "enableStream",
+            "options": [
+              {
+                "value": "embed",
+                "labelKey": "settings.host.mode.embed"
+              },
+              {
+                "value": "webrtc",
+                "labelKey": "settings.host.mode.webrtc"
+              }
+            ],
+            "default": "embed"
+          },
+          {
+            "key": "publisher",
+            "type": "select",
+            "labelKey": "settings.host.publisher.label",
+            "descriptionKey": "settings.host.publisher.description",
+            "requires": "enableStream",
+            "options": [
+              {
+                "value": "selkies",
+                "labelKey": "settings.host.publisher.selkies"
+              },
+              {
+                "value": "neko",
+                "labelKey": "settings.host.publisher.neko"
+              }
+            ],
+            "default": "selkies"
+          }
+        ]
+      }
+    }
+  },
+  "locales": "locales",
+  "platforms": [
+    "linux",
+    "win32",
+    "darwin"
+  ]
+}

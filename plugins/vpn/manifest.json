@@ -33,10 +33,7 @@
         "name": "gateway",
         "titleKey": "permissions.gateway.title",
         "descriptionKey": "permissions.gateway.description",
-        "defaultRoles": [
-          "admin",
-          "user"
-        ]
+        "defaultRoles": ["admin", "user"]
       }
     ],
     "panels": [
@@ -55,19 +52,12 @@
             "labelKey": "settings.host.profileId.label",
             "hidden": true,
             "min": 1,
-            "defaultLevels": [
-              "user",
-              "folder"
-            ]
+            "defaultLevels": ["user", "folder"]
           }
         ]
       }
     }
   },
   "locales": "locales",
-  "platforms": [
-    "linux",
-    "win32",
-    "darwin"
-  ]
+  "platforms": ["linux", "win32", "darwin"]
 }

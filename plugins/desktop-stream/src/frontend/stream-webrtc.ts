@@ -1,4 +1,3 @@
-
 /**
  * Browser half of the WebRTC stream path.
  *

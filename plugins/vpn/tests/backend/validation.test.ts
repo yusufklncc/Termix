@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  findVpnProfileError,
-} from "../../src/backend/validation";
+import { findVpnProfileError } from "../../src/backend/validation";
 
 /** What a network needs now that Termix raises the tunnel itself. */
 const valid = {

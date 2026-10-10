@@ -1340,4 +1340,3 @@ export {
   type ActiveSessionInfo,
   type UserPreferences,
 } from "@/api/open-tabs-api";
-

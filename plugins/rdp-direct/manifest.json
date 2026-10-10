@@ -31,10 +31,7 @@
             "key": "domain"
           }
         ],
-        "hostLoginFallback": [
-          "username",
-          "password"
-        ]
+        "hostLoginFallback": ["username", "password"]
       }
     ],
     "tabs": [
@@ -42,10 +39,7 @@
         "id": "rdp-direct",
         "titleKey": "tabs.rdpDirect",
         "icon": "MonitorPlay",
-        "openFrom": [
-          "host-context-menu",
-          "palette"
-        ]
+        "openFrom": ["host-context-menu", "palette"]
       }
     ],
     "settings": {
@@ -92,9 +86,5 @@
     }
   },
   "locales": "locales",
-  "platforms": [
-    "linux",
-    "win32",
-    "darwin"
-  ]
+  "platforms": ["linux", "win32", "darwin"]
 }

@@ -94,9 +94,7 @@
       "indexes": [
         {
           "name": "idx_vpn_profiles_user",
-          "columns": [
-            "userId"
-          ]
+          "columns": ["userId"]
         }
       ],
       "adopts": "vpn_profiles"

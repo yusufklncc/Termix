@@ -436,4 +436,3 @@ export function stopSettingsCacheRefresh(): void {
   clearInterval(refreshTimer);
   refreshTimer = null;
 }
-

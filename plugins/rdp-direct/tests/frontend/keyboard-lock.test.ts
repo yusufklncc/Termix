@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { attachKeyboardLock, getKeyboardLockApi } from "../../src/frontend/keyboard-lock";
+import {
+  attachKeyboardLock,
+  getKeyboardLockApi,
+} from "../../src/frontend/keyboard-lock";
 
 function setFullscreen(element: Element | null) {
   Object.defineProperty(document, "fullscreenElement", {

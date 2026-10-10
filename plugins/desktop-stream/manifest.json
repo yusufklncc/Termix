@@ -26,10 +26,7 @@
       {
         "id": "desktop-stream",
         "defaultPort": 443,
-        "hostLoginFallback": [
-          "username",
-          "password"
-        ]
+        "hostLoginFallback": ["username", "password"]
       }
     ],
     "tabs": [
@@ -37,10 +34,7 @@
         "id": "desktop-stream",
         "titleKey": "tabs.stream",
         "icon": "Cast",
-        "openFrom": [
-          "host-context-menu",
-          "palette"
-        ]
+        "openFrom": ["host-context-menu", "palette"]
       }
     ],
     "settings": {
@@ -112,9 +106,5 @@
     }
   },
   "locales": "locales",
-  "platforms": [
-    "linux",
-    "win32",
-    "darwin"
-  ]
+  "platforms": ["linux", "win32", "darwin"]
 }

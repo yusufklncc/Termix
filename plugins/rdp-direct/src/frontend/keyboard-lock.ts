@@ -42,10 +42,7 @@ interface KeyboardLockApi {
  * `released`    - left fullscreen, so they belong to the browser again.
  */
 export type KeyboardLockState =
-  | "unsupported"
-  | "refused"
-  | "engaged"
-  | "released";
+  "unsupported" | "refused" | "engaged" | "released";
 
 export interface KeyboardLockHandle {
   release(): void;

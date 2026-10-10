@@ -1,7 +1,4 @@
-import {
-  attachKeyboardLock,
-  type KeyboardLockState,
-} from "./keyboard-lock.ts";
+import { attachKeyboardLock, type KeyboardLockState } from "./keyboard-lock.ts";
 // Built separately and imported as a URL: esbuild does not understand Vite's
 // new Worker(new URL(...)), and the decoder has to be off the main thread.
 import decoderWorkerUrl from "./generated/rdp-decoder.worker.js?url";

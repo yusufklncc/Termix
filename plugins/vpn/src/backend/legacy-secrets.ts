@@ -17,6 +17,18 @@
  * password, and that is a long way from the truth.
  */
 
+/**
+ * Thrown so a route can tell this apart from a gateway that is simply down.
+ * The operator has something to do about it, and a generic 500 would not say
+ * what.
+ */
+export class UnreadableCredentialsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnreadableCredentialsError";
+  }
+}
+
 /** One of core's field envelopes, rather than a password someone typed. */
 export function isLegacyEnvelope(value: unknown): boolean {
   if (typeof value !== "string" || !value.startsWith("{")) return false;
@@ -55,7 +67,7 @@ export function assertSecretsReadable(
   );
   if (stale.length === 0) return;
 
-  throw new Error(
+  throw new UnreadableCredentialsError(
     "This VPN's credentials were saved by an older version and can no longer be read. " +
       "Open the VPN, enter them again and save it.",
   );

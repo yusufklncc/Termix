@@ -8,7 +8,10 @@ import {
   raiseManagedNetwork,
   resolveNetManagerOptions,
 } from "./net-manager-client.js";
-import { assertSecretsReadable } from "./legacy-secrets.js";
+import {
+  assertSecretsReadable,
+  UnreadableCredentialsError,
+} from "./legacy-secrets.js";
 import type { VpnProfileRecord, VpnProfileRepository } from "./repository.js";
 import { findVpnProfileError } from "./validation.js";
 
@@ -156,6 +159,9 @@ export function registerVpnRoutes(
       res.status(201).json(toResponse(created));
     } catch (error) {
       ctx.log.error(`Failed to create a VPN profile: ${String(error)}`);
+      if (error instanceof UnreadableCredentialsError) {
+        return res.status(409).json({ error: error.message });
+      }
       res.status(500).json({ error: "Failed to create the network profile" });
     }
   });
@@ -201,6 +207,9 @@ export function registerVpnRoutes(
       res.json(toResponse(updated));
     } catch (error) {
       ctx.log.error(`Failed to update a VPN profile: ${String(error)}`);
+      if (error instanceof UnreadableCredentialsError) {
+        return res.status(409).json({ error: error.message });
+      }
       res.status(500).json({ error: "Failed to update the network profile" });
     }
   });
@@ -239,6 +248,9 @@ export function registerVpnRoutes(
       res.json(toResponse(updated));
     } catch (error) {
       ctx.log.error(`Failed to switch a VPN profile: ${String(error)}`);
+      if (error instanceof UnreadableCredentialsError) {
+        return res.status(409).json({ error: error.message });
+      }
       res.status(500).json({ error: "Failed to switch the network" });
     }
   });

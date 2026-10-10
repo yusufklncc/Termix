@@ -71,11 +71,23 @@ git push origin v2.9.2-rdp.12
    not a Node installation. The Publish stage runs on the agent itself and needs the Docker CLI and
    a daemon.
 
-5. **Webhook:** GitLab → Settings → Webhooks, URL
-   `https://jenkins.fatihk.tr/multibranch-webhook-trigger/invoke?token=<token>` (or the
-   GitLab plugin's endpoint, depending on which is installed), with _Push events_ and _Tag push
-   events_. The project's own GitLab CI/CD feature is disabled — Jenkins is the CI here — and that
-   setting does not affect webhooks.
+5. **Webhook:** GitLab → Settings → Webhooks, with _Push events_ and _Tag push events_, pointed at
+   `/multibranch-webhook-trigger/invoke?token=<token>` (or the GitLab plugin's endpoint, depending
+   on which is installed). The project's own GitLab CI/CD feature is disabled — Jenkins is the CI
+   here — and that setting does not affect webhooks.
+
+   **Jenkins sits behind Pangolin**, which authenticates every request: `jenkins.fatihk.tr` answers
+   401 even on `/login`. A webhook sent to that hostname hits the sign-in wall, not Jenkins, so one
+   of these has to be arranged:
+
+   - **Point the webhook past the proxy** — GitLab and Jenkins run on the same host, so GitLab can
+     reach Jenkins on the internal address they share (a container name, or the host's own port).
+     Jenkins' port is not published on the LAN address, so this depends on the two sharing a Docker
+     network. Preferred: the trigger never leaves the machine and is never exposed.
+   - **A Pangolin rule** that lets the webhook path through unauthenticated, ideally narrowed to
+     GitLab's address. The trigger token in the URL is then the only thing guarding it.
+   - **Polling** as a fallback: Jenkins checks GitLab on a schedule. No network arrangement, but
+     delayed builds and a steady trickle of pointless fetches.
 
 ## Not covered yet
 

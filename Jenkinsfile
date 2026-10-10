@@ -70,8 +70,18 @@ pipeline {
                 sh 'npx prettier --check .'
                 sh 'npm run type-check'
                 sh 'npm run build'
-                sh 'npm run test'
+                // A JUnit report as well as the console one. When a worker
+                // dies mid-run the console says only that one file of 442
+                // did not pass, without naming it; the XML names every test
+                // that did run, so the missing one can be found by what is
+                // absent from it.
+                sh 'npm run test -- --reporter=default --reporter=junit --outputFile.junit=reports/core.xml'
                 sh 'npm run test:plugins'
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'reports/*.xml', allowEmptyArchive: true, fingerprint: false
+                }
             }
         }
 

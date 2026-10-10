@@ -63,7 +63,13 @@ commit="$(git -C "$ROOT" rev-parse --short HEAD)"
 
 local_tag="termix-publish-$component:$tag"
 echo "==> building $component $tag from $commit"
-docker build -t "$local_tag" -f "$ROOT/$dockerfile" "$context"
+# --provenance/--sbom off on purpose. With them on, buildx wraps the image
+# in an OCI index alongside an attestation manifest, and `docker push`
+# writes the index before the manifest it points at -- which the GitLab
+# registry rejects with "blob unknown to registry", after uploading every
+# layer. One plain manifest pushes to both registries.
+docker build --provenance=false --sbom=false \
+  -t "$local_tag" -f "$ROOT/$dockerfile" "$context"
 
 if [ "$component" = "app" ]; then
   echo "==> testing the rendered nginx configs inside the image"

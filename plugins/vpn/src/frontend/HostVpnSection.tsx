@@ -45,14 +45,26 @@ export function createHostVpnSection(api: VpnApi) {
     const current = bag?.profileId;
     const value = current == null ? "" : String(current);
 
+    /*
+     * The name travels beside the id.
+     *
+     * An id means "the seventh profile belonging to this user", which is not
+     * something an export can carry: imported elsewhere it would point at
+     * whatever happens to be seventh there, and the host would quietly leave
+     * through the wrong network. The name is what survives the trip, and the
+     * gateway prefers it whenever the id does not agree with it.
+     */
     const setProfile = (profileId: number | null) =>
       updateForm((previous) => {
         const all =
           (previous.pluginSettings as PluginSettingsBag | undefined) ?? {};
+        const profileName =
+          profiles.find((profile) => Number(profile.id) === profileId)?.name ??
+          null;
         return {
           pluginSettings: {
             ...all,
-            [PLUGIN_ID]: { ...(all[PLUGIN_ID] ?? {}), profileId },
+            [PLUGIN_ID]: { ...(all[PLUGIN_ID] ?? {}), profileId, profileName },
           },
         };
       });

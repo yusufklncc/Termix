@@ -89,8 +89,43 @@ describe("the host's VPN section", () => {
     const patch = updateForm.mock.calls[0][0] as (
       form: Record<string, unknown>,
     ) => Record<string, unknown>;
+    // The name travels with the id: an exported host carries it, and the
+    // gateway trusts it over an id that means nothing in another account.
     expect(patch({ pluginSettings: { vpn: { profileId: 7 } } })).toEqual({
-      pluginSettings: { vpn: { profileId: 9 } },
+      pluginSettings: { vpn: { profileId: 9, profileName: "Beta" } },
+    });
+  });
+
+  it("clears the name along with the choice", async () => {
+    const Section = createHostVpnSection(api);
+    const updateForm = vi.fn();
+    const { container } = render(
+      <Section
+        form={{
+          pluginSettings: { vpn: { profileId: 7, profileName: "Acme" } },
+        }}
+        setField={vi.fn()}
+        updateForm={updateForm}
+        protocols={{}}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(container.querySelectorAll("option")).toHaveLength(3),
+    );
+    fireEvent.change(container.querySelector("select")!, {
+      target: { value: "" },
+    });
+
+    const patch = updateForm.mock.calls[0][0] as (
+      form: Record<string, unknown>,
+    ) => Record<string, unknown>;
+    // A stale name would send the host out through a network it was taken
+    // off, since the gateway prefers the name.
+    expect(
+      patch({ pluginSettings: { vpn: { profileId: 7, profileName: "Acme" } } }),
+    ).toEqual({
+      pluginSettings: { vpn: { profileId: null, profileName: null } },
     });
   });
 
@@ -121,7 +156,7 @@ describe("the host's VPN section", () => {
     ).toEqual({
       pluginSettings: {
         docker: { enableDocker: true },
-        vpn: { profileId: 7 },
+        vpn: { profileId: 7, profileName: "Acme" },
       },
     });
   });

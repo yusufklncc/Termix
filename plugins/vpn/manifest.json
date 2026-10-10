@@ -53,6 +53,13 @@
             "hidden": true,
             "min": 1,
             "defaultLevels": ["user", "folder"]
+          },
+          {
+            "key": "profileName",
+            "type": "string",
+            "labelKey": "settings.host.profileName.label",
+            "hidden": true,
+            "defaultLevels": ["user", "folder"]
           }
         ]
       }

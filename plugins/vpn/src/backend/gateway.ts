@@ -80,44 +80,79 @@ export function createGatewayService(
   ctx: PluginContext,
   repository: VpnProfileRepository,
 ) {
+  /**
+   * Which network this host leaves through.
+   *
+   * The host carries both the profile's id and its name. The id is the fast
+   * answer and the name is the true one: an id means "the nth profile of the
+   * account that wrote it", so a host imported from somewhere else would
+   * point at whatever is nth here. When the two disagree, or the id resolves
+   * to nothing, the name decides.
+   *
+   * Null means this plugin has nothing to say and core reads the host's own
+   * proxy fields. A host that names a network nobody here has is refused
+   * instead -- it was configured to avoid the server's own route, and
+   * connecting anyway would take exactly that route.
+   */
+  async function resolveProfile(host: {
+    id?: number | string;
+    userId?: string | null;
+  }): Promise<VpnProfileRecord | null> {
+    const hostId = Number(host.id);
+    if (!Number.isInteger(hostId)) return null;
+
+    const settings = await ctx.settings.getAll("host", hostId);
+    const profileId = Number(settings.profileId);
+    const profileName =
+      typeof settings.profileName === "string" && settings.profileName.trim()
+        ? settings.profileName.trim()
+        : null;
+    const hasId = Number.isInteger(profileId) && profileId > 0;
+    if (!hasId && !profileName) return null;
+
+    /*
+     * Whose profile this is has to be known, not assumed. Ids are small
+     * integers and a profile reaches a gateway with stored credentials, so
+     * resolving one without an owner would let a host carry someone else's
+     * id and leave through their network.
+     */
+    if (!host.userId) {
+      throw new Error(
+        "This host is assigned to a VPN, but its owner is unknown",
+      );
+    }
+
+    if (hasId) {
+      const byId = await repository.findById(profileId, host.userId);
+      // The name confirms the id belongs to the network that was meant.
+      if (byId && (!profileName || byId.name === profileName)) return byId;
+    }
+
+    if (profileName) {
+      const byName = await repository.findByName(profileName, host.userId);
+      if (byName) return byName;
+      throw new Error(
+        `This host is assigned to a VPN named "${profileName}", and there is no such VPN here`,
+      );
+    }
+
+    /*
+     * An id that resolves to nothing, with no name to fall back on. Deleting
+     * a profile in use is refused by the API, so reaching this means the row
+     * was detached some other way -- and connecting anyway would put the
+     * traffic on the server's own route, which is what the profile existed
+     * to prevent.
+     */
+    throw new Error("This host is assigned to a VPN that no longer exists");
+  }
+
   return {
     async forHost(host: {
       id?: number | string;
       userId?: string | null;
     }): Promise<Socks5Config | null> {
-      const hostId = Number(host.id);
-      if (!Number.isInteger(hostId)) return null;
-
-      const settings = await ctx.settings.getAll("host", hostId);
-      const profileId = Number(settings.profileId);
-      if (!Number.isInteger(profileId) || profileId <= 0) return null;
-
-      /*
-       * Whose profile this is has to be known, not assumed. Ids are small
-       * integers and a profile reaches a gateway with stored credentials, so
-       * resolving one without an owner would let a host carry someone else's
-       * id and leave through their network.
-       */
-      if (!host.userId) {
-        throw new Error(
-          "This host is assigned to a VPN, but its owner is unknown",
-        );
-      }
-
-      const profile = await repository.findById(profileId, host.userId);
-
-      /*
-       * Assigned to a network that no longer exists. Deleting a profile in
-       * use is refused by the API, so reaching this means the row was
-       * detached some other way -- and connecting anyway would put the
-       * traffic on the server's own route, which is what the profile existed
-       * to prevent.
-       */
-      if (!profile) {
-        throw new Error("This host is assigned to a VPN that no longer exists");
-      }
-
-      return profileToConfig(profile);
+      const profile = await resolveProfile(host);
+      return profile ? profileToConfig(profile) : null;
     },
 
     /**
@@ -137,14 +172,7 @@ export function createGatewayService(
         .trim();
       if (!bare || net.isIP(bare) !== 0) return null;
 
-      const hostId = Number(host.id);
-      if (!Number.isInteger(hostId) || !host.userId) return null;
-
-      const settings = await ctx.settings.getAll("host", hostId);
-      const profileId = Number(settings.profileId);
-      if (!Number.isInteger(profileId) || profileId <= 0) return null;
-
-      const profile = await repository.findById(profileId, host.userId);
+      const profile = await resolveProfile(host).catch(() => null);
       if (!profile || profile.kind !== "managed") return null;
 
       return resolveInManagedNetwork(profile.id, bare);

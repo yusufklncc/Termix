@@ -73,6 +73,28 @@ export class VpnProfileRepository {
     return rows[0] ?? null;
   }
 
+  /**
+   * By name, for a host that arrived from somewhere else.
+   *
+   * An exported host carries the profile's name, because its id means
+   * nothing outside the account it came from. Names are not unique in the
+   * table, so the oldest match wins -- arbitrary, but stable, which matters
+   * more than which one when a person has two networks of the same name.
+   */
+  async findByName(
+    name: string,
+    userId: string,
+  ): Promise<VpnProfileRecord | null> {
+    const { db, table } = await this.handles();
+    const rows = await db
+      .select()
+      .from(table)
+      .where(and(eq(table.userId, userId), eq(table.name, name)))
+      .orderBy(table.id)
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
   /** Every managed profile, across users, for the boot-time resync. */
   async listManaged(): Promise<VpnProfileRecord[]> {
     const { db, table } = await this.handles();

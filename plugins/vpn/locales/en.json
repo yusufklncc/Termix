@@ -6,6 +6,9 @@
     "host": {
       "profileId": {
         "label": "VPN"
+      },
+      "profileName": {
+        "label": "VPN name"
       }
     }
   },

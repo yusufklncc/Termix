@@ -42,7 +42,9 @@ Kapsam dışı: signaling, medya, transcode.
 - [x] `src/backend/utils/field-crypto.ts` — `streamPassword` → `ssh_data` şifreli alan Set'i
 - [x] `npm run schema:generate` → `schema.pg.ts`, `schema.mysql.ts`
 - [x] `npm run schema:migrations` → `drizzle/postgres/`, `drizzle/mysql/`
-- [ ] `npm run verify:dialect` — **çalıştırılamadı**, gerçek bir Postgres/MySQL `DATABASE_URL` istiyor.
+- [x] `npm run verify:dialect` — 2026-10-10'da gerçek Postgres 16 ve MySQL 8
+      konteynerlerine karşı koşturuldu, ikisi de geçti (5 sn / 57 sn). Depo
+      testleri de her iki motora karşı geçti: 36 dosya, 220 test.
       Migration SQL'leri üretildi ve gözden geçirildi; canlı DB'de doğrulama bekliyor.
 
 ### Backend
@@ -365,7 +367,7 @@ decode edilip piksel olarak gidiyor — 580 MB/dk'dan 41 MB/dk'ya indi.
       Guacamole iniyor. Upstream'in API'sine dokunmayı gerektirdiği için bilerek yapılmadı
 - [ ] Jump host tünelinin gerçek bir jump host'la doğrulanması
 - [ ] Uçtan uca gecikmenin fiziksel ölçümü
-- [ ] `npm run verify:dialect` (gerçek bir Postgres/MySQL `DATABASE_URL` gerekiyor)
+- [x] `npm run verify:dialect` — 2026-10-10, bkz. Faz 12
 - [ ] Electron standalone'un fiilen çalıştırılması
 - [ ] İmajlar yalnızca `linux/amd64`; ARM sunucu gerekirse çok mimarili derleme
 
@@ -417,6 +419,79 @@ Tasarım ve gerekçeler: [`docs/phase8-vpn-design.md`](docs/phase8-vpn-design.md
       tünel kapalıyken bağlanmıyor
 - [x] Kapı erişilemezken sebep kullanıcıya ulaşıyor (2026-09-27): tünel
       açılırken geçit yoklanıyor, iki çağıran da sebebi geçiriyor
+
+---
+
+## Faz 9 — Yönetilen ağlar (`termix-netmgr`)
+
+Tasarım: [`docs/phase9-managed-networks-design.md`](docs/phase9-managed-networks-design.md)
+
+- [x] Profil başına bir ağ ad alanı tutan yardımcı konteyner
+- [x] SOCKS5 kapısı profilin id'sinden türetiliyor, saklanmıyor — elle
+      düzenlenmiş bir satır başkasının kapısına trafik gönderemesin diye
+- [x] VPN parolası compose dosyasından Termix'in şifreli deposuna taşındı
+- [x] Gerçek FortiGate'e karşı doğrulandı (2026-09-28)
+- [x] Yalnızca çalıştırınca görülen beş arıza kapatıldı: `ip netns exec`'in
+      /sys'i yeniden bağlaması, IPv4 forwarding kapalılığı, openconnect 9.01'in
+      geçide yetmemesi, reddedilen parolanın dakikada dokuz kez denenip gerçek
+      bir hesabı kilitlemesi, ve iki depo metodunun çözme konusunda anlaşamaması
+
+## Faz 10 — Mesh sağlayıcılar (Tailscale, Netbird)
+
+Tasarım: [`docs/phase10-tailscale-design.md`](docs/phase10-tailscale-design.md)
+
+- [x] İkisi de hiçbir ayrıcalık istemiyor — NET_ADMIN yok, /dev/net/tun yok,
+      ad alanı yok; her biri kendi ağ yığınını kurup önüne SOCKS5 koyuyor
+- [x] Netbird gerçek self-hosted ağa karşı (2026-09-28)
+- [x] Tailscale gerçek tailnet'e karşı (2026-10-10)
+- [x] Mesh adları ağın kendi peer listesinden çözülüyor, DNS'ten değil
+- [x] Peer kimliği `STATE_ROOT` altında — konteyner yenilenince setup key
+      hakkı harcanmasın diye. Tailscale bilerek bunun dışında: `--state=mem:`
+      ile her bağlantıda yeni düğüm, bu yüzden anahtarı **reusable** olmalı
+- [ ] Mesh SOCKS'u exit node olmadan mesh dışı adreslere erişiyor mu
+- [ ] Ölü peer'lar zamanla birikiyor mu
+- [ ] Tünel düştüğünde oturum kendini yeniden bağlasın (karar verildi
+      2026-10-10, yapılmadı)
+
+## Faz 11 — Upstream 2.9.x ve eklenti mimarisi
+
+Notlar: [`docs/upstream-2.9-port-notes.md`](docs/upstream-2.9-port-notes.md)
+
+- [x] 2.9.0 / 2.9.1 / 2.9.2 birleştirildi
+- [x] VPN, Direct RDP ve stream çekirdekten çıkıp eklenti oldu
+      (`vpn`, `rdp-direct`, `desktop-stream`); çekirdekte tek genişletme
+      noktası kaldı: `host.gateway`
+- [x] Host'un profili `ssh_data` kolonundan eklenti ayarlarına taşındı,
+      açılışta çalışan bir migration ile
+- [x] Porttan önce kaydedilmiş VPN kimlik bilgileri okunamaz kaldı
+      (`field-crypto` kaydı eklentiyle birlikte gitti). Değer kurtarılamıyor;
+      tespit edilip ne yapılacağını söyleyen bir hata veriliyor (2026-10-10)
+- [x] Host dışa aktarımı profilin **adını** da taşıyor; id ile ad çeliştiğinde
+      ad kazanıyor, ad hiç karşılık bulmazsa bağlantı reddediliyor (2026-10-10)
+- [ ] Direct RDP kaydının oynatılması — `session-recording` biçime göre
+      oynatıcı seçiyor ve bunun bir genişletme noktası yok
+- [ ] Direct RDP gerçek bir Windows makinesinde (port sonrası hiç denenmedi)
+- [ ] Desktop Stream gerçek bir yayıncıya karşı (port sonrası hiç denenmedi)
+
+## Faz 12 — Depo ve CI
+
+Kurulum: [`docs/jenkins-ci.md`](docs/jenkins-ci.md)
+
+- [x] Ana depo kullanıcının kendi GitLab'ı; GitHub push mirror ile güncel
+      tutuluyor (57 ref birebir doğrulandı)
+- [x] İmajlar `registry.fatihk.tr`, registry yalnızca üyelere açık.
+      Docker Hub emekli: `2.9.2-rdp.11`'e kadarını tutuyor, sonrasını almıyor
+- [x] `scripts/publish-fork-images.sh` — kirli ağacı reddediyor, nginx
+      şablonlarını imajın içinde `nginx -t` ile deniyor, tek manifest derliyor
+- [x] Jenkins CI: her push'ta lint, prettier, type-check, build ve testler.
+      İlk iki koşusunda iki gerçek hata buldu — on iki biçimlenmemiş dosya ve
+      temiz bir klondan derlenemeyen bir yapı
+- [ ] Jenkins webhook'u yok; 2 dakikalık tarama var. Doğru yol GitLab Branch
+      Source eklentisi (kuruldu, yapılandırılmadı)
+- [ ] Dialect testleri CI'da değil — bilinçli karar (2026-10-10): şemaya
+      dokunulduğunda elle koşturulacak, komutlar Faz 12 notlarında
+- [ ] `npm ci` her koşuda sıfırdan 1198 paket kuruyor (~33 sn); önbellek
+      kalıcı bir volume'e bağlanabilir
 
 ---
 

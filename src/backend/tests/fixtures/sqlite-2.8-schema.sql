@@ -1245,3 +1245,32 @@ CREATE UNIQUE INDEX idx_vault_profiles_sync_id ON vault_profiles(sync_id);
 
 CREATE UNIQUE INDEX shared_host_auth_overrides_host_user_protocol_unique
     ON shared_host_auth_overrides (host_id, user_id, protocol);
+
+-- This fork's own, present in its 2.8: the networks hosts are reached through.
+CREATE TABLE vpn_profiles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  folder TEXT,
+  tags TEXT,
+  kind TEXT NOT NULL DEFAULT 'declared',
+  gateway_type TEXT NOT NULL DEFAULT 'socks5',
+  gateway_host TEXT NOT NULL,
+  gateway_port INTEGER NOT NULL,
+  gateway_username TEXT,
+  gateway_password TEXT,
+  provider TEXT,
+  server_host TEXT,
+  server_port INTEGER,
+  auth_username TEXT,
+  auth_password TEXT,
+  trusted_fingerprint TEXT,
+  extra_config TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_state TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);

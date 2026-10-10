@@ -3,18 +3,41 @@
   "name": "VPNs",
   "version": "1.0.0",
   "description": "Reach a host through a network Termix raises for it: a Fortinet gateway, a tailnet, a NetBird network.",
-  "author": { "name": "Yusuf Ihsan Kilinc" },
+  "author": {
+    "name": "Yusuf Ihsan Kilinc"
+  },
   "license": "Apache-2.0",
   "category": "Networking",
   "icon": "Waypoints",
-  "engine": { "termix": ">=2.9.0", "api": "1" },
+  "engine": {
+    "termix": ">=2.9.0",
+    "api": "1"
+  },
   "capabilities": [
     "db:own",
     "hosts:read",
     "network:outbound",
     "ui:surface"
   ],
+  "provides": [
+    {
+      "service": "host.gateway",
+      "version": "1.0.0",
+      "permission": "vpn.gateway"
+    }
+  ],
   "contributes": {
+    "permissions": [
+      {
+        "name": "gateway",
+        "titleKey": "permissions.gateway.title",
+        "descriptionKey": "permissions.gateway.description",
+        "defaultRoles": [
+          "admin",
+          "user"
+        ]
+      }
+    ],
     "settings": {
       "host": {
         "fields": [
@@ -24,12 +47,19 @@
             "labelKey": "settings.host.profileId.label",
             "hidden": true,
             "min": 1,
-            "defaultLevels": ["user", "folder"]
+            "defaultLevels": [
+              "user",
+              "folder"
+            ]
           }
         ]
       }
     }
   },
   "locales": "locales",
-  "platforms": ["linux", "win32", "darwin"]
+  "platforms": [
+    "linux",
+    "win32",
+    "darwin"
+  ]
 }

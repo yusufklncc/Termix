@@ -865,6 +865,24 @@ export const ROWS: Record<string, Row[]> = {
     },
   ],
 
+  /** This fork's own: the networks hosts are reached through. */
+  vpn_profiles: [
+    {
+      id: 1,
+      user_id: USERS.admin,
+      name: "d4-vpn",
+      kind: "managed",
+      gateway_type: "socks5",
+      gateway_host: "termix-netmgr",
+      gateway_port: 20001,
+      provider: "fortinet",
+      server_host: "vpn.d4.example",
+      server_port: 443,
+      auth_username: "d4-vpn-user",
+      enabled: 1,
+    },
+  ],
+
   settings: [
     ["tailscale_api_key", "tskey-d4"],
     ["tailscale_api_base_url", "https://headscale.d4.example"],

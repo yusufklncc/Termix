@@ -65,5 +65,11 @@
         "label": "VPN"
       }
     }
+  },
+  "permissions": {
+    "gateway": {
+      "title": "Reach hosts through a VPN",
+      "description": "Lets a session leave through the network its host is assigned to."
+    }
   }
 }

@@ -62,14 +62,35 @@ function hostOwnProxy(host: SshConnectHost): SOCKS5Config | null {
  * and "that profile is gone" are the reasons the field exists, and carrying
  * on would connect by exactly the route the host was configured to avoid.
  */
+export interface ResolvedGateway {
+  config: SOCKS5Config;
+  /** Words a failure to connect through it, for whoever reads the error. */
+  describeFailure(error: unknown): string;
+}
+
+function proxyFailure(error: unknown): string {
+  return `Proxy connection failed: ${
+    error instanceof Error ? error.message : String(error)
+  }`;
+}
+
 export async function resolveHostGateway(
   host: SshConnectHost,
-): Promise<SOCKS5Config | null> {
+): Promise<ResolvedGateway | null> {
   const provider = getServiceImplementation<HostGatewayService>(
     HOST_GATEWAY_SERVICE,
     HOST_GATEWAY_VERSION,
   );
 
   const fromProvider = provider ? await provider.forHost(host as never) : null;
-  return fromProvider ?? hostOwnProxy(host);
+  if (fromProvider) {
+    return {
+      config: fromProvider,
+      describeFailure: (error) =>
+        provider?.describeFailure?.(error) ?? proxyFailure(error),
+    };
+  }
+
+  const own = hostOwnProxy(host);
+  return own ? { config: own, describeFailure: proxyFailure } : null;
 }

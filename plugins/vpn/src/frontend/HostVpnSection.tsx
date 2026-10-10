@@ -1,0 +1,59 @@
+import { useEffect, useState } from "react";
+import {
+  useTranslation,
+  type HostEditorSectionProps,
+} from "@termix/plugin-sdk/frontend";
+import { SettingRow } from "@termix/plugin-sdk/ui";
+import type { VpnApi, VpnProfile } from "./api.js";
+
+/**
+ * Which network this host is reached through -- a choice among the ones that
+ * exist, and nothing more.
+ *
+ * A network is shared by every host on it, so making, switching and deleting
+ * them lives in the VPNs panel rather than in one host's form. Doing it here
+ * made a shared thing look like a per-host setting, and switching one off in
+ * one host silently changed every other host on the same network.
+ */
+export function createHostVpnSection(api: VpnApi) {
+  return function HostVpnSection({ form, setField }: HostEditorSectionProps) {
+    const { t } = useTranslation();
+    const [profiles, setProfiles] = useState<VpnProfile[]>([]);
+
+    useEffect(() => {
+      // A host can still be edited without them; the selector simply stays
+      // empty rather than blocking the form.
+      api
+        .list()
+        .then(setProfiles)
+        .catch(() => setProfiles([]));
+    }, []);
+
+    const value = form.profileId == null ? "" : String(form.profileId);
+
+    return (
+      <SettingRow
+        label={t("hosts.vpn.profile")}
+        description={t("hosts.vpn.profileDesc")}
+      >
+        <select
+          className="h-8 min-w-48 border border-border bg-background px-2 text-xs"
+          value={value}
+          onChange={(event) =>
+            setField(
+              "profileId",
+              event.target.value ? Number(event.target.value) : null,
+            )
+          }
+        >
+          <option value="">{t("hosts.vpn.direct")}</option>
+          {profiles.map((profile) => (
+            <option key={profile.id} value={profile.id}>
+              {profile.name}
+            </option>
+          ))}
+        </select>
+      </SettingRow>
+    );
+  };
+}

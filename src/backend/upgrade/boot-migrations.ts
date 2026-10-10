@@ -26,6 +26,7 @@ import { runSessionRecordingSettingsMigration } from "./session-recording-settin
 import { runRemoteDesktopSettingsMigration } from "./remote-desktop-settings-migration.js";
 import { runHostMetricsSettingsMigration } from "./host-metrics-settings-migration.js";
 import { runDockerSettingsMigration } from "./docker-settings-migration.js";
+import { runVpnSettingsMigration } from "./vpn-settings-migration.js";
 import { runAiSettingsMigration } from "./ai-settings-migration.js";
 import { runWakeOnLanSettingsMigration } from "./wake-on-lan-settings-migration.js";
 import { runWarpgateSettingsMigration } from "./warpgate-settings-migration.js";
@@ -59,6 +60,7 @@ const MIGRATIONS: Array<[string, () => Promise<unknown>]> = [
   ["runRemoteDesktopSettingsMigration", runRemoteDesktopSettingsMigration],
   ["runHostMetricsSettingsMigration", runHostMetricsSettingsMigration],
   ["runDockerSettingsMigration", runDockerSettingsMigration],
+  ["runVpnSettingsMigration", runVpnSettingsMigration],
   ["runAiSettingsMigration", runAiSettingsMigration],
   ["runWakeOnLanSettingsMigration", runWakeOnLanSettingsMigration],
   ["runWarpgateSettingsMigration", runWarpgateSettingsMigration],

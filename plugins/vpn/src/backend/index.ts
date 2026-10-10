@@ -4,6 +4,7 @@ import { createGatewayService } from "./gateway.js";
 import { setNetManagerLogger } from "./net-manager-client.js";
 import { VpnProfileRepository } from "./repository.js";
 import { registerVpnRoutes } from "./routes.js";
+import { startManagedNetworkSync, stopManagedNetworkSync } from "./sync.js";
 
 /**
  * The networks hosts are reached through.
@@ -31,6 +32,14 @@ export async function activate(ctx: PluginContext) {
   ctx.services.provide("host.gateway", createGatewayService(ctx, repository));
 
   registerVpnRoutes(ctx.http.router<Router>(), ctx, repository);
+
+  /*
+   * Puts the managed tunnels back after a restart -- of Termix or of the
+   * manager, which holds its networks in memory. Does nothing where no
+   * manager is configured.
+   */
+  startManagedNetworkSync(repository, ctx.log);
+  ctx.disposables.add(() => stopManagedNetworkSync());
 
   ctx.log.info("VPNs mounted at /plugin-api/vpn");
 }

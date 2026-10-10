@@ -1,7 +1,9 @@
+import type { Router } from "express";
 import type { PluginContext } from "@termix/plugin-sdk/backend";
 import { createGatewayService } from "./gateway.js";
 import { setNetManagerLogger } from "./net-manager-client.js";
 import { VpnProfileRepository } from "./repository.js";
+import { registerVpnRoutes } from "./routes.js";
 
 /**
  * The networks hosts are reached through.
@@ -28,7 +30,9 @@ export async function activate(ctx: PluginContext) {
    */
   ctx.services.provide("host.gateway", createGatewayService(ctx, repository));
 
-  ctx.log.info("VPNs loaded");
+  registerVpnRoutes(ctx.http.router<Router>(), ctx, repository);
+
+  ctx.log.info("VPNs mounted at /plugin-api/vpn");
 }
 
 export async function deactivate() {

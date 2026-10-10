@@ -17,7 +17,8 @@
     "db:own",
     "hosts:read",
     "network:outbound",
-    "ui:surface"
+    "ui:surface",
+    "network:serve"
   ],
   "provides": [
     {
@@ -36,6 +37,13 @@
           "admin",
           "user"
         ]
+      }
+    ],
+    "panels": [
+      {
+        "id": "vpn",
+        "titleKey": "nav.vpns",
+        "icon": "Waypoints"
       }
     ],
     "settings": {

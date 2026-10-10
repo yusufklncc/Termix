@@ -35,6 +35,8 @@ const NETBIRD_SOCKS_BASE = Number(
  * use of the setup key. A single-use key is spent the first time that
  * happens, and the network stops coming up with "setup key is invalid".
  */
+/** How long a freshly raised mesh is given to learn its peers. */
+const PEER_SETTLE_MS = Number(process.env.NET_MANAGER_PEER_SETTLE_MS ?? 8000);
 const STATE_ROOT =
   process.env.NET_MANAGER_STATE_ROOT ?? "/var/lib/termix-netmgr";
 
@@ -762,6 +764,32 @@ async function waitForNetbird(
   } finally {
     refusal.stop();
   }
+
+  /*
+   * Signing in is not being ready.
+   *
+   * `up` returns once the control server accepted the peer, and the SOCKS
+   * port accepts a moment later -- but the mesh does not know its peers yet,
+   * so the first connection is answered "host unreachable" and the second,
+   * seconds later, works. Netbird draws that line itself, so it is asked
+   * rather than guessed at.
+   */
+  for (;;) {
+    try {
+      await run("netbird", ["status", "--check", "ready"], {
+        env: environment,
+      });
+      return;
+    } catch {
+      if (Date.now() > deadline) {
+        // Up, but not ready in time. Better to hand over a tunnel that may
+        // still be settling than to refuse one that signed in fine.
+        log("netbird signed in but was not ready in time; handing it over");
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
 }
 
 /**
@@ -862,12 +890,31 @@ function firstIPv4(addresses) {
 async function resolveInNetwork(id, name) {
   const entry = networks.get(id);
   if (!entry) throw new Error("this VPN is not registered");
+  const wasUp = !!entry.tunnel;
   await raiseTunnel(id);
   const resolve = networks.get(id)?.tunnel?.resolve;
   // A gateway without a list of its own leaves the name to the far side,
   // which is what happened before any of this existed.
   if (!resolve) return null;
-  return resolve(name);
+
+  const found = await resolve(name);
+  // Already up, so the list is as complete as it is going to get: a name
+  // missing from it is a name the network does not have.
+  if (found || wasUp) return found;
+
+  /*
+   * Raised just now, and a mesh learns its peers a moment after it is ready.
+   * The alternative to waiting is handing back nothing, which reaches the
+   * gateway as a name it cannot place and comes back "host unreachable" --
+   * the failure that goes away when you try again.
+   */
+  const deadline = Date.now() + PEER_SETTLE_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 400));
+    const again = await resolve(name);
+    if (again) return again;
+  }
+  return null;
 }
 
 async function raiseTunnel(id) {

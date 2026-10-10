@@ -59,15 +59,16 @@ git push origin v2.9.2-rdp.12
    | ID                       | Username               | Password                                                   |
    | ------------------------ | ---------------------- | ---------------------------------------------------------- |
    | `termix-gitlab-registry` | `oauth2`               | a GitLab token with `write_registry` — used to push images |
-   | `termix-dockerhub`       | the Docker Hub account | a Docker Hub access token                                  |
+   | `termix-dockerhub`       | the Docker Hub account | only if `PUBLISH_DOCKER_HUB` is turned on — it is off      |
 
    There is deliberately no credential for cloning: the GitLab project is public, so the job's
    Branch Source leaves Credentials on `- none -` and no token has to be minted, stored or renewed
    for it. Making the project private later breaks the job, and this is the line to come back to.
 
    The registry one needs write access; a deploy token scoped to `read_registry`, which is what the
-   server uses, cannot push. Drop `termix-dockerhub` and set the `PUBLISH_DOCKER_HUB` parameter to
-   false once the server pulls from GitLab and Docker Hub is retired.
+   server uses, cannot push. `PUBLISH_DOCKER_HUB` defaults to false: GitLab is the registry now, and
+   Docker Hub was only the fallback while the server was being moved onto it. Turning the parameter
+   on for a build requires `termix-dockerhub` to exist first, or the build fails looking for it.
 
 4. **Agents:** the Checks stage runs inside a `node:24` container (the version in `.nvmrc`, which is
    what upstream's CI validates against), so the agent needs Docker and the Docker Pipeline plugin,

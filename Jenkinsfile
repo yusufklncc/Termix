@@ -17,8 +17,8 @@
 //
 // Jenkins credentials this expects:
 //   termix-gitlab-registry  username/password for registry.fatihk.tr
-//   termix-dockerhub        username/password for Docker Hub, while the move
-//                           to GitLab is still in progress
+//   termix-dockerhub        only when PUBLISH_DOCKER_HUB is turned on, which
+//                           it is not by default
 
 pipeline {
     agent none
@@ -35,8 +35,8 @@ pipeline {
     parameters {
         booleanParam(
             name: 'PUBLISH_DOCKER_HUB',
-            defaultValue: true,
-            description: 'Also push to Docker Hub. Turn this off once the server pulls from GitLab and Docker Hub is retired.'
+            defaultValue: false,
+            description: 'Also push to Docker Hub. Off: the registry is GitLab now, and Docker Hub was only the fallback while the server was moved onto it. Turning this on needs the termix-dockerhub credential to exist, or the build fails looking for it.'
         )
     }
 

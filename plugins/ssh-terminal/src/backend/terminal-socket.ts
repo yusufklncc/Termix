@@ -26,6 +26,7 @@ import {
   isWindowsSftpPath,
   MemoryAgent,
   parseWsMessage,
+  addressIsInsideNetwork,
   resolveHostForSshConnect,
   resolveServerHostId,
   resolveServerJumpHosts,
@@ -68,6 +69,12 @@ interface ConnectToHostData {
     userId?: string;
     forceKeyboardInteractive?: boolean;
     jumpHosts?: Array<{ hostId: number }>;
+    /**
+     * Reached through a network Termix raises. Carried here only so this
+     * side knows not to resolve the address locally; the gateway itself is
+     * worked out by core, from the host row.
+     */
+    vpnProfileId?: number | null;
     useSocks5?: boolean;
     socks5Host?: string;
     socks5Port?: number;
@@ -1524,6 +1531,10 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
               );
             }
 
+            if (resolvedHostData.vpnProfileId != null) {
+              hostConfig.vpnProfileId = Number(resolvedHostData.vpnProfileId);
+            }
+
             if (resolvedHostData.useSocks5) {
               hostConfig.useSocks5 = resolvedHostData.useSocks5;
               hostConfig.socks5Host = resolvedHostData.socks5Host;
@@ -1659,13 +1670,18 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
       );
 
       let connectHost = ip;
-      if (connectsViaJumpHosts) {
-        // The target is only reachable through the jump host's network (e.g. a
-        // VPN-only address), so DNS must be resolved there, not on this host.
+      // A mesh name, or any address that exists only on the far side of a
+      // tunnel, is the network's to resolve. This machine's resolver has
+      // never heard of it, so looking it up here fails before the tunnel
+      // that would have answered is built -- and this step is a diagnostic,
+      // not the connection, so failing it refuses a host that works.
+      if (connectsViaJumpHosts || addressIsInsideNetwork(hostConfig)) {
         sendLog(
           "dns",
           "info",
-          `Skipping local address resolution of ${ip} (resolved by jump host)`,
+          `Skipping local address resolution of ${ip} (resolved by ${
+            connectsViaJumpHosts ? "jump host" : "the host's network"
+          })`,
         );
       } else {
         sendLog("dns", "info", `Starting address resolution of ${ip}`);

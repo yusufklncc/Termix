@@ -293,3 +293,24 @@ export class MemoryAgent extends BaseAgent {
     }
   }
 }
+
+/**
+ * Is this host's address only meaningful inside the network it is reached
+ * through?
+ *
+ * A host on a VPN or behind a proxy is named in that network's terms -- a
+ * mesh name, or an address that exists only on the far side. Looking it up
+ * here asks a resolver that has never heard of it, and the lookup fails
+ * before the tunnel that would have answered is built. The name travels to
+ * the gateway instead, which is what a SOCKS5 CONNECT carries a hostname for.
+ *
+ * The same reasoning the jump-host branch already follows. Written down
+ * because it has been lost twice: it reads as a safe simplification, and
+ * nothing fails until someone addresses a host by name.
+ */
+export function addressIsInsideNetwork(host: {
+  vpnProfileId?: number | null;
+  useSocks5?: boolean | null;
+}): boolean {
+  return host.vpnProfileId != null || !!host.useSocks5;
+}

@@ -73,6 +73,15 @@ Termix is free and open source. If you find it useful, consider [donating](https
 
 ## How this fork differs from upstream
 
+|                               | Upstream                                                              | This fork adds                                                                                |
+| ----------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| RDP rendering                 | guacd decodes the desktop and re-encodes image tiles                  | a per-host _Direct H.264_ engine: 47 fps against 26–30, on 3.7% server CPU instead of 86%     |
+| Desktops that stream already  | —                                                                     | a `desktop-stream` host type for machines publishing their own WebRTC desktop (Selkies, neko) |
+| Reaching a host through a VPN | a host's own SOCKS5 proxy fields, if something else raised the tunnel | VPN profiles Termix raises itself — Fortinet, Tailscale, NetBird — assigned per host          |
+| Where it lives                | 34 bundled plugins                                                    | three more: `rdp-direct`, `desktop-stream`, `vpn`, plus one core extension point              |
+
+Everything else is upstream's.
+
 ### Added: a direct H.264 render engine for RDP
 
 Upstream renders RDP, VNC and Telnet through guacd, which decodes what the server sends and
@@ -137,14 +146,48 @@ RDP and VNC carry poorly: accelerated 3D, smooth video and sessions with several
 Stream hosts work with folders, tags, favourites, permissions and split screen like any other
 host. Session sharing is not supported for them.
 
+### Added: hosts reached through a VPN
+
+Upstream can send a host's traffic through a SOCKS5 proxy, but something else has to have raised
+that tunnel. This fork gives a host a **VPN profile** and raises the network itself:
+
+- **Fortinet** SSL VPN gateways, through openconnect, with the server certificate pinned
+- **Tailscale** and **NetBird** mesh networks, joined with an auth or setup key, self-hosted
+  control planes included
+
+Each profile is raised inside the `termix-netmgr` sidecar, in a network namespace of its own, and
+answers on a SOCKS5 port derived from the profile's id — worked out rather than stored, so a row
+edited by hand cannot send one network's traffic through another's doorway. A name that exists
+only inside a mesh is resolved by asking the network rather than DNS, so an address like
+`machine.netbird.selfhosted` works.
+
+This covers everything that connects over SSH — terminal, file manager, tunnels, metrics, Docker —
+including the first jump hop, and Direct RDP, which reaches its target through an SSH tunnel.
+Guacamole's RDP, VNC and Telnet talk to guacd and do not use it.
+
+Design decisions:
+
+- A profile that is switched off, or that no longer exists, refuses the connection. It does not
+  fall back to the server's own route, which is the route the profile existed to avoid.
+- Credentials go through the same field-level encryption as every other secret, and a key or
+  password is redacted out of any error that reaches the screen or the database.
+- The sidecar needs a volume at `/var/lib/termix-netmgr`, or every pull throws away each mesh
+  peer's identity and spends another use of its setup key.
+
+Fortinet and NetBird have been used against real gateways. Tailscale is built the same way but has
+not been run against a real tailnet.
+
 ### Changed
 
 - The Guacamole path is unchanged apart from a passive frame-rate report used for the comparison
   above.
-- The database gains columns on `ssh_data` for stream hosts, the render engine and printing, with
-  migrations for SQLite, PostgreSQL and MySQL.
+- All of the above ships as plugins, so each declares its own protocol, tables and host settings
+  instead of patching core. Core gains one extension point, `host.gateway`, which answers where a
+  host's traffic leaves, what a name means inside that network, and how to word a failure.
+- The `vpn_profiles` table is new, with migrations for SQLite, PostgreSQL and MySQL.
 - `docker-compose.yml` includes the `rdp-bridge` service, and the image exposes ports 30013
-  (WebRTC signaling) and 30014 (direct RDP).
+  (WebRTC signaling) and 30014 (direct RDP). Reaching hosts through a VPN also needs the
+  `termix-netmgr` container.
 
 ### Running this fork
 

@@ -148,9 +148,17 @@ host. Session sharing is not supported for them.
 
 ### Running this fork
 
-Upstream's published image does not contain these changes. This fork publishes its own images on
-Docker Hub, [`yusufklncc/termix`](https://hub.docker.com/r/yusufklncc/termix) and
-[`yusufklncc/termix-rdp-bridge`](https://hub.docker.com/r/yusufklncc/termix-rdp-bridge):
+Upstream's published image does not contain these changes. This fork publishes its own images to
+the GitLab registry at `registry.fatihk.tr/yusufihsankilinc/termix` (the application at the project
+root, `/netmgr` and `/rdp-bridge` beside it). The project is private, so pulling needs a login:
+
+```bash
+docker login registry.fatihk.tr
+```
+
+The same images also go to Docker Hub — [`yusufklncc/termix`](https://hub.docker.com/r/yusufklncc/termix)
+and [`yusufklncc/termix-rdp-bridge`](https://hub.docker.com/r/yusufklncc/termix-rdp-bridge) — while
+the move to GitLab finishes. `compose-fork.yml` names the GitLab images:
 
 ```bash
 cd docker

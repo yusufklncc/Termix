@@ -7,6 +7,11 @@
 #
 #   docker compose -f docker-compose.yml -f compose-fork.yml up -d
 #
+# The project is private, so `docker login registry.fatihk.tr` is needed
+# first -- on a server, with a GitLab deploy token that has read_registry
+# and nothing else. Docker Hub still carries the same images
+# (yusufklncc/termix) while the move to GitLab finishes.
+#
 # To build from a checkout rather than pull, drop this overlay and use
 # compose-dev.yml, which builds both the application and the bridge.
 #
@@ -15,4 +20,4 @@
 # either way.
 services:
   termix:
-    image: yusufklncc/termix:latest
+    image: registry.fatihk.tr/yusufihsankilinc/termix:latest

@@ -22,7 +22,7 @@ in.
 ```yaml
 services:
   termix-netmgr:
-    image: yusufklncc/termix-netmgr:latest
+    image: registry.fatihk.tr/yusufihsankilinc/termix/netmgr:latest
     cap_add: [NET_ADMIN, SYS_ADMIN]
     devices:
       - /dev/net/tun:/dev/net/tun

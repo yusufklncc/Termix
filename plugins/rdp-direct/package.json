@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "termix-plugin build",
+    "build": "node build-worker.mjs && termix-plugin build",
     "test": "termix-plugin test",
     "typecheck": "tsc -p .",
     "validate": "termix-plugin validate"
@@ -20,7 +20,8 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "jsdom": "^30.0.1",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "esbuild": "^0.27.0"
   },
   "peerDependencies": {
     "@termix/plugin-sdk": "^1.0.0",

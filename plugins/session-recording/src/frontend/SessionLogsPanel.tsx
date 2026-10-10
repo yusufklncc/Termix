@@ -134,7 +134,10 @@ async function extractPlainText(
   log: SessionLogRecord,
   blob: Blob,
 ): Promise<string | null> {
-  if (log.format === "guacamole") return null;
+  // Named rather than excluded: a format this does not know is as likely to
+  // be bytes as text, and reading a video recording as an asciicast produces
+  // nonsense instead of nothing.
+  if (log.format !== "text" && log.format !== "asciicast") return null;
   const source = await blob.text();
   if (log.format === "text") return source;
   return asciicastToPlainText(parseAsciicast(source));

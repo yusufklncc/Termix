@@ -3,6 +3,11 @@ import type { PluginContext, PluginSshHost } from "@termix/plugin-sdk/backend";
 import { resolveRdpBridgeOptions } from "./bridge-config.js";
 import { resolveDisplaySize } from "./display-size.js";
 import { readHostSettings } from "./host-settings.js";
+import {
+  startRecording,
+  type RdpRecorder,
+  type RecordingsWriter,
+} from "./recording.js";
 import { needsTunnel, openBridgeTunnel, type BridgeTunnel } from "./tunnel.js";
 
 /** Wire frame: 4-byte ASCII magic, u32 little-endian length, payload. */
@@ -44,6 +49,7 @@ export async function runSession({
 }): Promise<void> {
   let bridge: net.Socket | null = null;
   let tunnel: BridgeTunnel | null = null;
+  let recorder: RdpRecorder | null = null;
 
   const fail = (code: number, message: string) => {
     try {
@@ -126,6 +132,29 @@ export async function runSession({
     }
   }
 
+  /*
+   * Recording is the same bytes written down, not a second description of
+   * the session assembled here: what the bridge sends is already complete
+   * and ordered, and playback hands it to the same decoder.
+   *
+   * Optional, in both senses -- without the session-recording plugin there
+   * is no writer, and a host can have it switched off.
+   */
+  const writer =
+    ctx.services.get<Partial<RecordingsWriter>>("recordings.writer");
+  if (
+    typeof writer.enabledFor === "function" &&
+    typeof writer.createFinished === "function" &&
+    (await writer.enabledFor(hostId))
+  ) {
+    recorder = startRecording({
+      ctx,
+      recordings: writer as RecordingsWriter,
+      hostId,
+      userId,
+    });
+  }
+
   bridge = net.createConnection({ host: bridgeHost, port: bridgePort });
   bridge.setNoDelay(true);
 
@@ -136,6 +165,7 @@ export async function runSession({
   });
 
   bridge.on("data", (chunk: Buffer) => {
+    recorder?.write(chunk);
     if (ws.readyState === OPEN) ws.send(chunk);
   });
 
@@ -149,6 +179,8 @@ export async function runSession({
     bridge = null;
     tunnel?.close();
     tunnel = null;
+    void recorder?.close();
+    recorder = null;
   };
 
   bridge.on("close", () => {

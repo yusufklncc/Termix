@@ -21,6 +21,9 @@ export function activate(app: TermixApp): void {
     id: PLUGIN_ID,
     icon: Waypoints,
     titleKey: "nav.vpns",
+    // Where it sat before it moved here, rather than at the end of the rail,
+    // which is where a plugin item goes by default.
+    after: "credentials",
     /*
      * Kept in the Simple preset, which otherwise hides every plugin item.
      *

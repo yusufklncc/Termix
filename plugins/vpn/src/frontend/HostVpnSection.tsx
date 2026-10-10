@@ -15,8 +15,12 @@ import type { VpnApi, VpnProfile } from "./api.js";
  * made a shared thing look like a per-host setting, and switching one off in
  * one host silently changed every other host on the same network.
  */
+type PluginSettingsBag = Record<string, Record<string, unknown>>;
+
+const PLUGIN_ID = "vpn";
+
 export function createHostVpnSection(api: VpnApi) {
-  return function HostVpnSection({ form, setField }: HostEditorSectionProps) {
+  return function HostVpnSection({ form, updateForm }: HostEditorSectionProps) {
     const { t } = useTranslation();
     const [profiles, setProfiles] = useState<VpnProfile[]>([]);
 
@@ -29,7 +33,29 @@ export function createHostVpnSection(api: VpnApi) {
         .catch(() => setProfiles([]));
     }, []);
 
-    const value = form.profileId == null ? "" : String(form.profileId);
+    /*
+     * This plugin's host settings travel on form.pluginSettings under its own
+     * id, not on the form itself. Reading the wrong one is quiet: the field
+     * is simply always empty, so the editor says "direct" for a host that has
+     * a network -- and saving from that form writes the emptiness back.
+     */
+    const bag = (form.pluginSettings as PluginSettingsBag | undefined)?.[
+      PLUGIN_ID
+    ];
+    const current = bag?.profileId;
+    const value = current == null ? "" : String(current);
+
+    const setProfile = (profileId: number | null) =>
+      updateForm((previous) => {
+        const all =
+          (previous.pluginSettings as PluginSettingsBag | undefined) ?? {};
+        return {
+          pluginSettings: {
+            ...all,
+            [PLUGIN_ID]: { ...(all[PLUGIN_ID] ?? {}), profileId },
+          },
+        };
+      });
 
     return (
       <SettingRow
@@ -40,10 +66,7 @@ export function createHostVpnSection(api: VpnApi) {
           className="h-8 min-w-48 border border-border bg-background px-2 text-xs"
           value={value}
           onChange={(event) =>
-            setField(
-              "profileId",
-              event.target.value ? Number(event.target.value) : null,
-            )
+            setProfile(event.target.value ? Number(event.target.value) : null)
           }
         >
           <option value="">{t("hosts.vpn.direct")}</option>

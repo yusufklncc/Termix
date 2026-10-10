@@ -26,7 +26,6 @@ import {
   isWindowsSftpPath,
   MemoryAgent,
   parseWsMessage,
-  addressIsInsideNetwork,
   resolveHostForSshConnect,
   resolveServerHostId,
   resolveServerJumpHosts,
@@ -69,12 +68,6 @@ interface ConnectToHostData {
     userId?: string;
     forceKeyboardInteractive?: boolean;
     jumpHosts?: Array<{ hostId: number }>;
-    /**
-     * Reached through a network Termix raises. Carried here only so this
-     * side knows not to resolve the address locally; the gateway itself is
-     * worked out by core, from the host row.
-     */
-    vpnProfileId?: number | null;
     useSocks5?: boolean;
     socks5Host?: string;
     socks5Port?: number;
@@ -1531,10 +1524,6 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
               );
             }
 
-            if (resolvedHostData.vpnProfileId != null) {
-              hostConfig.vpnProfileId = Number(resolvedHostData.vpnProfileId);
-            }
-
             if (resolvedHostData.useSocks5) {
               hostConfig.useSocks5 = resolvedHostData.useSocks5;
               hostConfig.socks5Host = resolvedHostData.socks5Host;
@@ -1670,18 +1659,26 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
       );
 
       let connectHost = ip;
-      // A mesh name, or any address that exists only on the far side of a
-      // tunnel, is the network's to resolve. This machine's resolver has
-      // never heard of it, so looking it up here fails before the tunnel
-      // that would have answered is built -- and this step is a diagnostic,
-      // not the connection, so failing it refuses a host that works.
-      if (connectsViaJumpHosts || addressIsInsideNetwork(hostConfig)) {
+      /*
+       * Looking the address up here is a diagnostic, not the connection.
+       *
+       * An address can be one this machine cannot resolve and still be
+       * perfectly good: a mesh name, or anything that exists only on the far
+       * side of a tunnel, is the network's to resolve, and the tunnel is not
+       * built yet. So a failure is reported and the connection goes ahead:
+       * either the host's network places the name when its tunnel opens, or
+       * the connection itself fails with the real reason. The retries that
+       * matter for a transient failure already happened here.
+       *
+       * It refused the connection twice before, each time because it decided
+       * from a field that said whether a host was reached directly, and each
+       * time that field moved.
+       */
+      if (connectsViaJumpHosts) {
         sendLog(
           "dns",
           "info",
-          `Skipping local address resolution of ${ip} (resolved by ${
-            connectsViaJumpHosts ? "jump host" : "the host's network"
-          })`,
+          `Skipping local address resolution of ${ip} (resolved by jump host)`,
         );
       } else {
         sendLog("dns", "info", `Starting address resolution of ${ip}`);
@@ -1705,21 +1702,13 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
             port,
             transient: isRetriableDnsError(error),
           });
+          // Said, not acted on: the name may be one only the host's own
+          // network can place.
           sendLog(
             "dns",
-            "error",
-            `DNS resolution failed for ${ip}: ${message}`,
+            "info",
+            `Could not resolve ${ip} here (${message}); leaving it to the connection`,
           );
-          ws.send(
-            JSON.stringify({
-              type: "error",
-              message: isRetriableDnsError(error)
-                ? "SSH error: DNS lookup temporarily failed. Check the Docker/container DNS configuration or try again."
-                : "SSH error: Could not resolve hostname from the Termix server container.",
-            }),
-          );
-          cleanupAuthState(connectionTimeout);
-          return;
         }
       }
       sendLog("tcp", "info", `Connecting to ${ip} port ${port}`);
@@ -2753,7 +2742,8 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
         log: (level, message) => sendLog("auth", level, message),
       });
       const connectConfig = built.config;
-      // DNS was resolved above, and skipped when jump hosts do it instead.
+      // What resolution above produced, or the address unchanged. Ignored
+      // once a gateway or a jump host hands the transport a socket.
       connectConfig.host = connectHost;
       prepared = built;
 

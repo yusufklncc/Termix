@@ -8,6 +8,7 @@ import {
   raiseManagedNetwork,
   resolveNetManagerOptions,
 } from "./net-manager-client.js";
+import { assertSecretsReadable } from "./legacy-secrets.js";
 import type { VpnProfileRecord, VpnProfileRepository } from "./repository.js";
 import { findVpnProfileError } from "./validation.js";
 
@@ -56,6 +57,10 @@ export function registerVpnRoutes(
   async function raiseAndRecord(
     profile: VpnProfileRecord,
   ): Promise<VpnProfileRecord> {
+    // A credential nothing can read is not worth an attempt the gateway
+    // counts. The refusal says what to do instead.
+    assertSecretsReadable(profile);
+
     const result = await raiseManagedNetwork(
       {
         id: profile.id,

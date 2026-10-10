@@ -5,6 +5,7 @@ import {
   resolveInManagedNetwork,
   resolveNetManagerOptions,
 } from "./net-manager-client.js";
+import { assertSecretsReadable } from "./legacy-secrets.js";
 import type { VpnProfileRecord, VpnProfileRepository } from "./repository.js";
 
 export interface Socks5Config {
@@ -26,6 +27,9 @@ export interface Socks5Config {
  * traffic to another customer's doorway.
  */
 export function profileToConfig(profile: VpnProfileRecord): Socks5Config {
+  // Before anything is dialled with them.
+  assertSecretsReadable(profile);
+
   if (profile.kind === "managed") {
     /*
      * Disabled on purpose.

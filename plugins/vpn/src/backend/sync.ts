@@ -1,4 +1,5 @@
 import type { PluginContext } from "@termix/plugin-sdk/backend";
+import { isLegacyEnvelope } from "./legacy-secrets.js";
 import type { VpnProfileRecord, VpnProfileRepository } from "./repository.js";
 import {
   listManagedNetworks,
@@ -36,6 +37,18 @@ function getErrorMessage(error: unknown): string {
 function worthRaising(profile: VpnProfileRecord): boolean {
   // Switched off by the operator is not a state to recover from.
   if (profile.enabled === false) return false;
+  /*
+   * Nor is a credential nothing can read. Raising it would spend a setup key
+   * use, or an authentication attempt a gateway counts, on a password that
+   * cannot be right. The operator is told when they try to connect.
+   */
+  if (
+    isLegacyEnvelope(profile.authPassword) ||
+    isLegacyEnvelope(profile.extraConfig) ||
+    isLegacyEnvelope(profile.gatewayPassword)
+  ) {
+    return false;
+  }
   return profile.lastState !== "refused";
 }
 

@@ -174,8 +174,7 @@ Design decisions:
 - The sidecar needs a volume at `/var/lib/termix-netmgr`, or every pull throws away each mesh
   peer's identity and spends another use of its setup key.
 
-Fortinet and NetBird have been used against real gateways. Tailscale is built the same way but has
-not been run against a real tailnet.
+All three have been used against real gateways and networks.
 
 ### Changed
 

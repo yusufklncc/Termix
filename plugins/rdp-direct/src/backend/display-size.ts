@@ -11,8 +11,12 @@
  */
 
 export interface DisplaySizeSources {
-  /** The host's stored display settings, JSON text or an object. */
-  hostConfig: unknown;
+  /**
+   * The host's stored display settings, JSON text or an object. Optional:
+   * pinning a size is the remote-desktop plugin's setting, and a host that
+   * has none simply gets what the browser asked for.
+   */
+  hostConfig?: unknown;
   /** What the browser asked for, from the query string. */
   requestedWidth: string | null;
   requestedHeight: string | null;

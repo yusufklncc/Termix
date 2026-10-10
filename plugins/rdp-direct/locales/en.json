@@ -1,12 +1,24 @@
 {
-  "tabs": { "rdpDirect": "RDP Direct" },
+  "tabs": {
+    "rdpDirect": "RDP Direct"
+  },
   "settings": {
+    "admin": {
+      "bridgeUrl": {
+        "label": "Bridge address",
+        "description": "Where the FreeRDP bridge container listens. Empty uses RDP_BRIDGE_URL, or termix-rdp-bridge:30020.",
+        "placeholder": "tcp://termix-rdp-bridge:30020"
+      }
+    },
     "host": {
       "enable": {
         "label": "Direct RDP",
         "description": "Pass the server's own H.264 frames to the browser instead of going through guacd. Needs the bridge container, and the page must be served over HTTPS."
       },
-      "port": { "label": "RDP port", "description": "The port the host listens on for RDP." },
+      "port": {
+        "label": "RDP port",
+        "description": "The port the host listens on for RDP."
+      },
       "enablePrinting": {
         "label": "Printing",
         "description": "Offer a printer to the session. Off by default: it has only been tried on a few Windows versions."

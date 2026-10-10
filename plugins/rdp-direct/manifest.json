@@ -49,6 +49,16 @@
       }
     ],
     "settings": {
+      "admin": [
+        {
+          "key": "bridgeUrl",
+          "type": "string",
+          "labelKey": "settings.admin.bridgeUrl.label",
+          "descriptionKey": "settings.admin.bridgeUrl.description",
+          "placeholderKey": "settings.admin.bridgeUrl.placeholder",
+          "default": ""
+        }
+      ],
       "host": {
         "enableKey": "enableRdpDirect",
         "enableLabelKey": "settings.host.enable.label",

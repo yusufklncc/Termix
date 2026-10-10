@@ -58,9 +58,12 @@ git push origin v2.9.2-rdp.12
 
    | ID                       | Username               | Password                                                   |
    | ------------------------ | ---------------------- | ---------------------------------------------------------- |
-   | `termix-gitlab`          | `oauth2`               | a GitLab token with `read_repository` — used to clone      |
    | `termix-gitlab-registry` | `oauth2`               | a GitLab token with `write_registry` — used to push images |
    | `termix-dockerhub`       | the Docker Hub account | a Docker Hub access token                                  |
+
+   There is deliberately no credential for cloning: the GitLab project is public, so the job's
+   Branch Source leaves Credentials on `- none -` and no token has to be minted, stored or renewed
+   for it. Making the project private later breaks the job, and this is the line to come back to.
 
    The registry one needs write access; a deploy token scoped to `read_registry`, which is what the
    server uses, cannot push. Drop `termix-dockerhub` and set the `PUBLISH_DOCKER_HUB` parameter to
@@ -71,6 +74,14 @@ git push origin v2.9.2-rdp.12
    not a Node installation. The Publish stage runs on the agent itself and needs the Docker CLI and
    a daemon.
 
+   Checked on the live setup (2026-10-10): the `jenkins-agent` container has the Docker CLI and
+   `/var/run/docker.sock`, and its `jenkins` user (uid 1000) is in the socket's group 991, so it can
+   actually use it — a container that has the CLI but not the group looks fine until the first
+   build. It has no Node, which is why the checks run in a container rather than on the agent.
+   Jenkins itself publishes no port to the host; it is reachable only on the Docker network
+   (`http://jenkins:8080`, or by address), and the Jenkinsfile was validated there through
+   `/pipeline-model-converter/validate`.
+
 5. **Webhook:** GitLab → Settings → Webhooks, with _Push events_ and _Tag push events_, pointed at
    `/multibranch-webhook-trigger/invoke?token=<token>` (or the GitLab plugin's endpoint, depending
    on which is installed). The project's own GitLab CI/CD feature is disabled — Jenkins is the CI
@@ -80,10 +91,10 @@ git push origin v2.9.2-rdp.12
    401 even on `/login`. A webhook sent to that hostname hits the sign-in wall, not Jenkins, so one
    of these has to be arranged:
 
-   - **Point the webhook past the proxy** — GitLab and Jenkins run on the same host, so GitLab can
-     reach Jenkins on the internal address they share (a container name, or the host's own port).
-     Jenkins' port is not published on the LAN address, so this depends on the two sharing a Docker
-     network. Preferred: the trigger never leaves the machine and is never exposed.
+   - **Point the webhook past the proxy** — `gitlab`, `jenkins` and `jenkins-agent` are all on the
+     same Docker network (`devsecops`), so GitLab reaches Jenkins directly at `http://jenkins:8080`
+     and Pangolin never sees the request. This is the arrangement to use: the trigger never leaves
+     the machine and is never exposed.
    - **A Pangolin rule** that lets the webhook path through unauthenticated, ideally narrowed to
      GitLab's address. The trigger token in the URL is then the only thing guarding it.
    - **Polling** as a fallback: Jenkins checks GitLab on a schedule. No network arrangement, but

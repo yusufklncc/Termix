@@ -57,7 +57,6 @@ export type Host = {
   sshOptions?: HostSshOptions;
 
   useSocks5?: boolean;
-  vpnProfileId?: number | null;
   socks5Host?: string;
   socks5Port?: number;
   connectionOrigin?: "local" | "remote" | null;

@@ -1341,12 +1341,3 @@ export {
   type UserPreferences,
 } from "@/api/open-tabs-api";
 
-export {
-  getVpnProfiles,
-  createVpnProfile,
-  updateVpnProfile,
-  deleteVpnProfile,
-  setVpnProfileEnabled,
-  disconnectVpnProfile,
-  type VpnProfilePayload,
-} from "@/api/vpn-profiles-api";

@@ -8,7 +8,7 @@ import {
   type RdpRecorder,
   type RecordingsWriter,
 } from "./recording.js";
-import { needsTunnel, openBridgeTunnel, type BridgeTunnel } from "./tunnel.js";
+import { openBridgeTunnel, type BridgeTunnel } from "./tunnel.js";
 
 /** Wire frame: 4-byte ASCII magic, u32 little-endian length, payload. */
 export function encodeFrame(magic: string, payload: Buffer): Buffer {
@@ -111,25 +111,23 @@ export async function runSession({
     userId: target.host.ownerUserId,
   } as unknown as PluginSshHost;
 
-  if (needsTunnel(host)) {
-    try {
-      tunnel = await openBridgeTunnel({
-        ctx,
-        host,
-        target: { host: connectRequest.host, port: connectRequest.port },
-        bridgeHost,
-      });
-      connectRequest.host = tunnel.host;
-      connectRequest.port = tunnel.port;
-    } catch (error) {
-      fail(
-        1011,
-        `Failed to reach the host the way it is configured to be reached: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return;
-    }
+  try {
+    tunnel = await openBridgeTunnel({
+      ctx,
+      host,
+      target: { host: connectRequest.host, port: connectRequest.port },
+      bridgeHost,
+    });
+    connectRequest.host = tunnel.host;
+    connectRequest.port = tunnel.port;
+  } catch (error) {
+    fail(
+      1011,
+      `Failed to reach the host the way it is configured to be reached: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return;
   }
 
   /*

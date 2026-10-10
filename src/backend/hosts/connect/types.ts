@@ -39,8 +39,6 @@ export interface SshConnectHost {
   sshOptions?: HostSshOptions | null;
   jumpHosts?: Array<{ hostId: number }> | null;
   useSocks5?: boolean | null;
-  /** Reach this host through a network Termix raises; see host-network.ts. */
-  vpnProfileId?: number | null;
   socks5Host?: string | null;
   socks5Port?: number | null;
   socks5Username?: string | null;

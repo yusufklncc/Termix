@@ -139,8 +139,14 @@ export async function openSshTransport(
 
   if (gateway && via === "direct") {
     try {
+      /*
+       * A name that only exists inside the network is resolved by the
+       * network. Left alone when nothing answers, which is what the gateway
+       * would then be asked to place itself.
+       */
+      const address = (await gateway.resolveName(host.ip)) ?? host.ip;
       const proxySocket = await createSocks5Connection(
-        host.ip,
+        address,
         host.port || 22,
         gateway.config,
       );

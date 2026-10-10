@@ -135,7 +135,6 @@ export function createHostEditorForm(host: Host | null) {
     notes: host?.notes ?? "",
     pin: host?.pin ?? false,
     useSocks5: host?.useSocks5 ?? false,
-    vpnProfileId: host?.vpnProfileId != null ? String(host.vpnProfileId) : "",
     socks5Host: host?.socks5Host ?? "",
     socks5Port: host?.socks5Port ?? 1080,
     socks5Username: host?.socks5Username ?? "",
@@ -265,7 +264,6 @@ export function buildHostEditorPayload(
     overrideCredentialUsername: form.overrideCredentialUsername,
     notes: form.notes,
     useSocks5: form.useSocks5,
-    vpnProfileId: form.vpnProfileId ? Number(form.vpnProfileId) : null,
     socks5Host:
       form.socks5ProxyMode === "single" ? form.socks5Host || null : null,
     socks5Port:

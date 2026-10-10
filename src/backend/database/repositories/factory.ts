@@ -23,7 +23,6 @@ import { UserAuthRepository } from "./user-auth-repository.js";
 import { RbacAccessRepository } from "./rbac-access-repository.js";
 import { RbacPermissionRepository } from "./rbac-permission-repository.js";
 import { RecentActivityRepository } from "./recent-activity-repository.js";
-import { VpnProfileRepository } from "./vpn-profile-repository.js";
 import { RoleRepository } from "./role-repository.js";
 import { SessionRepository } from "./session-repository.js";
 import { CredentialAccessRepository } from "./credential-access-repository.js";
@@ -438,9 +437,3 @@ export function stopSettingsCacheRefresh(): void {
   refreshTimer = null;
 }
 
-export function createCurrentVpnProfileRepository(): VpnProfileRepository {
-  return new VpnProfileRepository(
-    createCurrentRepositoryContext(),
-    createCurrentRepositoryWriteHook("vpn_profile_repository_write"),
-  );
-}

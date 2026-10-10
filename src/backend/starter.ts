@@ -213,18 +213,6 @@ async function provisionLocalDesktopUserIfNeeded(): Promise<void> {
       await import("./hosts/status/host-status-service.js");
     hostStatusService.start();
 
-    // Puts the managed tunnels back after a restart -- of Termix or of the
-    // manager, which holds its networks in memory. Does nothing where no
-    // manager is configured.
-    import("./hosts/managed-network-sync.js")
-      .then(({ startManagedNetworkSync }) => startManagedNetworkSync())
-      .catch((error) => {
-        systemLogger.warn("Failed to start the managed network sync", {
-          operation: "managed_network_sync_skip",
-          error: error instanceof Error ? error.message : "Unknown error",
-        });
-      });
-
     if (process.env.ELECTRON_EMBEDDED === "true") {
       await provisionLocalDesktopUserIfNeeded();
     }

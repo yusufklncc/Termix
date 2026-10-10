@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   findVpnProfileError,
-  vpnProfileAssignmentError,
-} from "../../../database/routes/vpn-validation.js";
+} from "../../src/backend/validation";
 
 /** What a network needs now that Termix raises the tunnel itself. */
 const valid = {
@@ -111,73 +110,6 @@ describe("findVpnProfileError, for a tailnet", () => {
     ).toBeNull();
     expect(
       findVpnProfileError({ ...tailnet, serverHost: "headscale.example.com" }),
-    ).toMatch(/URL/i);
-  });
-});
-
-describe("vpnProfileAssignmentError", () => {
-  const found = async () => ({ id: 1 });
-  const missing = async () => null;
-
-  it("allows a host with no network", async () => {
-    expect(await vpnProfileAssignmentError(undefined, "u", missing)).toBeNull();
-    expect(await vpnProfileAssignmentError(null, "u", missing)).toBeNull();
-  });
-
-  it("allows a profile the owner has", async () => {
-    expect(await vpnProfileAssignmentError(3, "u", found)).toBeNull();
-  });
-
-  it("refuses a profile the owner does not have", async () => {
-    expect(await vpnProfileAssignmentError(3, "u", missing)).toMatch(
-      /not found/i,
-    );
-  });
-
-  it("asks under the owner, not whoever is saving", async () => {
-    const asked: Array<[number, string]> = [];
-    await vpnProfileAssignmentError(5, "owner-2", async (id, userId) => {
-      asked.push([id, userId]);
-      return { id };
-    });
-    expect(asked).toEqual([[5, "owner-2"]]);
-  });
-
-  it("refuses something that is not an id", async () => {
-    expect(await vpnProfileAssignmentError("abc", "u", found)).toMatch(
-      /invalid/i,
-    );
-  });
-});
-
-/** Netbird signs in the same way a tailnet does, in its own words. */
-describe("findVpnProfileError, for a netbird network", () => {
-  const netbird = {
-    name: "NetBird",
-    kind: "managed",
-    provider: "netbird",
-    authPassword: "A1B2C3D4-0000-0000-0000-000000000001",
-  };
-
-  it("accepts a profile with only a setup key", () => {
-    expect(findVpnProfileError(netbird)).toBeNull();
-  });
-
-  it("requires a setup key", () => {
-    expect(findVpnProfileError({ ...netbird, authPassword: "" })).toMatch(
-      /setup key/i,
-    );
-  });
-
-  it("takes a self-hosted management server, as a URL", () => {
-    expect(
-      findVpnProfileError({
-        ...netbird,
-        serverHost: "https://netbird.example.com",
-      }),
-    ).toBeNull();
-    expect(
-      findVpnProfileError({ ...netbird, serverHost: "netbird.example.com" }),
     ).toMatch(/URL/i);
   });
 });

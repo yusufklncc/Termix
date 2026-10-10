@@ -1,6 +1,8 @@
+import net from "node:net";
 import type { PluginContext } from "@termix/plugin-sdk/backend";
 import {
   managedDoorPort,
+  resolveInManagedNetwork,
   resolveNetManagerOptions,
 } from "./net-manager-client.js";
 import type { VpnProfileRecord, VpnProfileRepository } from "./repository.js";
@@ -112,6 +114,36 @@ export function createGatewayService(
       }
 
       return profileToConfig(profile);
+    },
+
+    /**
+     * What a name means inside this host's network.
+     *
+     * A mesh names its members in terms that exist nowhere else, so the
+     * network is asked rather than DNS. Null leaves the name alone, which is
+     * right for an address that is already an IP and for a gateway that
+     * keeps no list.
+     */
+    async resolveName(
+      host: { id?: number | string; userId?: string | null },
+      name: string,
+    ): Promise<string | null> {
+      const bare = String(name)
+        .replace(/^\[|\]$/g, "")
+        .trim();
+      if (!bare || net.isIP(bare) !== 0) return null;
+
+      const hostId = Number(host.id);
+      if (!Number.isInteger(hostId) || !host.userId) return null;
+
+      const settings = await ctx.settings.getAll("host", hostId);
+      const profileId = Number(settings.profileId);
+      if (!Number.isInteger(profileId) || profileId <= 0) return null;
+
+      const profile = await repository.findById(profileId, host.userId);
+      if (!profile || profile.kind !== "managed") return null;
+
+      return resolveInManagedNetwork(profile.id, bare);
     },
 
     /**

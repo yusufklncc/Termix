@@ -25,6 +25,18 @@ export interface HostGatewayService {
     [key: string]: unknown;
   }): Promise<SOCKS5Config | null>;
   /**
+   * What a name means inside the network forHost answered with.
+   *
+   * A mesh names its members in terms that exist nowhere else, so neither
+   * this container's resolver nor the gateway's own can answer for them --
+   * asked for one, a SOCKS5 server replies that the host is unreachable.
+   * Null leaves the name alone, which is what happened before any of this.
+   */
+  resolveName?(
+    host: { id?: number | string; userId?: string | null },
+    name: string,
+  ): Promise<string | null>;
+  /**
    * How to word a failure to reach the host through what forHost returned.
    *
    * Core no longer knows what kind of thing that is, and "Proxy connection
@@ -64,6 +76,8 @@ function hostOwnProxy(host: SshConnectHost): SOCKS5Config | null {
  */
 export interface ResolvedGateway {
   config: SOCKS5Config;
+  /** What a name means inside it, where the network keeps its own list. */
+  resolveName(name: string): Promise<string | null>;
   /** Words a failure to connect through it, for whoever reads the error. */
   describeFailure(error: unknown): string;
 }
@@ -86,11 +100,20 @@ export async function resolveHostGateway(
   if (fromProvider) {
     return {
       config: fromProvider,
+      resolveName: (name) =>
+        provider?.resolveName?.(host as never, name) ?? Promise.resolve(null),
       describeFailure: (error) =>
         provider?.describeFailure?.(error) ?? proxyFailure(error),
     };
   }
 
   const own = hostOwnProxy(host);
-  return own ? { config: own, describeFailure: proxyFailure } : null;
+  return own
+    ? {
+        config: own,
+        // A proxy someone else runs keeps no list of names for us to read.
+        resolveName: async () => null,
+        describeFailure: proxyFailure,
+      }
+    : null;
 }

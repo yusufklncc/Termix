@@ -53,13 +53,14 @@ describe.each(CONFIGS)("%s", (file) => {
   });
 
   /**
-   * The VPN routes are this fork's, so nothing upstream would notice them
-   * going missing -- and a prefix nginx does not proxy answers with the SPA's
-   * HTML, which resolves rather than throws and took the whole editor down
-   * the first time.
+   * Every plugin's API and sockets ride on these two prefixes, this fork's
+   * three included. A prefix nginx does not proxy answers with the SPA's
+   * HTML, which resolves rather than throws and took a whole editor down the
+   * first time it happened.
    */
-  it("proxies this fork's own API prefix, once", () => {
-    expect(text).toContain("location ~ ^/vpn(/.*)?$");
-    expect(text.match(/location ~ \^\/vpn\(/g)).toHaveLength(1);
+  it("proxies what every plugin is reached through", () => {
+    expect(text).toContain("location ^~ /plugin-api/");
+    expect(text).toContain("location ^~ /plugin-ws/");
+    expect(text).toContain("location ^~ /plugin-assets/");
   });
 });

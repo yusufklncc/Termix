@@ -8,7 +8,6 @@ import express, { type Request, type Response } from "express";
 import multer from "multer";
 import { sshLogger, databaseLogger } from "../../utils/logger.js";
 import { pluginEvents, TOPICS } from "../../plugins/events.js";
-import { vpnProfileAssignmentError } from "./vpn-validation.js";
 import { AuthManager } from "../../utils/auth-manager.js";
 import { PermissionManager } from "../../utils/permission-manager.js";
 import { DataCrypto } from "../../utils/data-crypto.js";
@@ -234,7 +233,6 @@ router.post(
       forceKeyboardInteractive,
       notes,
       useSocks5,
-      vpnProfileId,
       socks5Host,
       socks5Port,
       socks5Username,
@@ -298,22 +296,6 @@ router.post(
       username || firstProtocolUsername(protocolAuthPatch);
     const effectiveName =
       name || (effectiveUsername ? `${effectiveUsername}@${ip}` : String(ip));
-    /*
-     * A host may only be put on a network its owner has.
-     *
-     * Ids are small integers and a profile reaches a gateway with stored
-     * credentials, so without this a host could name someone else's network
-     * and leave through it. The resolver refuses such a profile at connect
-     * time too; this is so the refusal arrives while the host is being saved.
-     */
-    const vpnAssignmentError = await vpnProfileAssignmentError(
-      vpnProfileId,
-      userId,
-    );
-    if (vpnAssignmentError) {
-      return res.status(400).json({ error: vpnAssignmentError });
-    }
-
     const sshDataObj: Record<string, unknown> = {
       userId: userId,
       connectionType: effectiveConnectionType,
@@ -344,7 +326,6 @@ router.post(
       notes: notes || null,
       sudoPassword: sudoPassword || null,
       useSocks5: useSocks5 ? 1 : 0,
-      vpnProfileId: vpnProfileId ?? null,
       socks5Host: socks5Host || null,
       socks5Port: socks5Port || null,
       socks5Username: socks5Username || null,
@@ -824,7 +805,6 @@ router.put(
       forceKeyboardInteractive,
       notes,
       useSocks5,
-      vpnProfileId,
       socks5Host,
       socks5Port,
       socks5Username,
@@ -890,22 +870,6 @@ router.put(
       username || firstProtocolUsername(protocolAuthPatch);
     const effectiveName =
       name || (effectiveUsername ? `${effectiveUsername}@${ip}` : String(ip));
-    /*
-     * A host may only be put on a network its owner has.
-     *
-     * Ids are small integers and a profile reaches a gateway with stored
-     * credentials, so without this a host could name someone else's network
-     * and leave through it. The resolver refuses such a profile at connect
-     * time too; this is so the refusal arrives while the host is being saved.
-     */
-    const vpnAssignmentError = await vpnProfileAssignmentError(
-      vpnProfileId,
-      userId,
-    );
-    if (vpnAssignmentError) {
-      return res.status(400).json({ error: vpnAssignmentError });
-    }
-
     const sshDataObj: Record<string, unknown> = {
       connectionType: connectionType || "ssh",
       name: effectiveName,
@@ -933,7 +897,6 @@ router.put(
       forceKeyboardInteractive: forceKeyboardInteractive ? "true" : "false",
       notes: notes || null,
       useSocks5: useSocks5 ? 1 : 0,
-      vpnProfileId: vpnProfileId ?? null,
       socks5Host: socks5Host || null,
       socks5Port: socks5Port || null,
       socks5Username: socks5Username || null,

@@ -1,13 +1,12 @@
 import React from "react";
 import { getHostTags } from "@/api/host-tags-api";
-import { getVpnProfiles } from "@/main-axios";
 import type { ProxyNode } from "@/types/index";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/button";
 import { Input } from "@/components/input";
 import { PasswordInput } from "@/components/password-input";
 import { FakeSwitch, SectionCard, SettingRow } from "@/components/section-card";
-import type { Host, VpnProfile } from "@/types/ui-types";
+import type { Host } from "@/types/ui-types";
 import { Activity, Globe, Plus, Tag, Terminal, Trash2, X } from "lucide-react";
 import { FolderPathPicker } from "./FolderPathPicker";
 import { HostParentPicker } from "./HostParentPicker";
@@ -49,22 +48,6 @@ export function HostEditorGeneralTab({
   const { t } = useTranslation();
   const syncLinked = !!useSyncStatus()?.linked;
   const pluginProtocols = useHostProtocols();
-  const [vpnProfiles, setVpnProfiles] = React.useState<VpnProfile[]>([]);
-
-  React.useEffect(() => {
-    getVpnProfiles()
-      // A path the server does not route falls through to the SPA and answers
-      // 200 with HTML, which resolves rather than throws. Trusting it to be a
-      // list took the whole editor down instead of the one selector.
-      .then((rows) =>
-        setVpnProfiles(
-          Array.isArray(rows) ? (rows as unknown as VpnProfile[]) : [],
-        ),
-      )
-      // A host can still be edited without them; the selector simply stays
-      // empty rather than blocking the form.
-      .catch(() => setVpnProfiles([]));
-  }, []);
 
   const [predefinedTags, setPredefinedTags] = React.useState<string[]>([]);
   React.useEffect(() => {
@@ -522,34 +505,6 @@ export function HostEditorGeneralTab({
           </div>
         </div>
         <div className="flex flex-col gap-4 border-t border-border pt-4 pb-2">
-          {/* Which network this host is reached through -- a choice among the
-              ones that exist, and nothing more. A network is shared by every
-              host on it, so making, switching and deleting them lives in the
-              VPNs panel rather than in one host's form. */}
-          <SettingRow
-            label={t("hosts.vpn.profile")}
-            description={t("hosts.vpn.profileDesc")}
-          >
-            <select
-              className="h-8 min-w-48 border border-border bg-background px-2 text-xs"
-              value={form.vpnProfileId}
-              onChange={(e) => setField("vpnProfileId", e.target.value)}
-            >
-              <option value="">{t("hosts.vpn.direct")}</option>
-              {vpnProfiles.map((profile) => (
-                <option key={profile.id} value={profile.id}>
-                  {profile.name}
-                </option>
-              ))}
-            </select>
-          </SettingRow>
-
-          {form.vpnProfileId && form.useSocks5 && (
-            <p className="text-[10px] text-muted-foreground">
-              {t("hosts.vpn.overridesProxy")}
-            </p>
-          )}
-
           <SettingRow
             label={t("hosts.useSocks5Proxy")}
             description={t("hosts.useSocks5ProxyDesc")}

@@ -55,7 +55,6 @@ function toSummary(host: {
   tags: string | null;
   folder: string | null;
   authType: string;
-  vpnProfileId?: number | null;
 }): PluginHostSummary {
   return {
     id: host.id,
@@ -67,9 +66,6 @@ function toSummary(host: {
     tags: host.tags,
     folder: host.folder,
     authType: host.authType,
-    // Not a secret, and a plugin that dials the host itself has no other way
-    // to learn the address is only meaningful inside a network.
-    vpnProfileId: host.vpnProfileId ?? null,
   };
 }
 

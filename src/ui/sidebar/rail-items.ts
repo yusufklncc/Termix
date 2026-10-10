@@ -5,7 +5,6 @@ import {
   Server,
   Settings,
   User,
-  Waypoints,
   Zap,
   type LucideIcon,
 } from "lucide-react";
@@ -79,19 +78,6 @@ export const RAIL_ITEMS: RailItemDef[] = [
     id: "credentials",
     icon: KeyRound,
     labelKey: "nav.credentials",
-    separatorAfter: true,
-  },
-  /*
-   * The networks hosts are reached through.
-   *
-   * Its own destination rather than a corner of the host editor: a VPN is
-   * shared by many hosts, and editing it from inside one of them hides that
-   * switching it off takes every host that uses it with it.
-   */
-  {
-    id: "networks",
-    icon: Waypoints,
-    labelKey: "nav.networks",
     separatorAfter: true,
   },
   {

@@ -178,7 +178,6 @@ export type NormalizedImportedHost = Record<string, unknown> & {
   forceKeyboardInteractive?: unknown;
   notes?: unknown;
   useSocks5?: unknown;
-  vpnProfileId?: unknown;
   socks5Host?: unknown;
   socks5Port?: unknown;
   socks5Username?: unknown;
@@ -319,9 +318,6 @@ const CONNECT_LEVEL_FIELDS = new Set([
   "sshPort",
   "protocolAuth",
   "jumpHosts",
-  // Reached through the owner's network: the recipient needs to know there is
-  // one, and resolving it still uses the owner's profile, never theirs.
-  "vpnProfileId",
   "createdAt",
   "updatedAt",
 ]);
@@ -480,7 +476,6 @@ export function transformHostResponse(
         : null,
     ...hostTerminalExport(host),
     forceKeyboardInteractive: host.forceKeyboardInteractive === "true",
-    vpnProfileId: host.vpnProfileId ?? undefined,
     socks5ProxyChain: host.socks5ProxyChain
       ? JSON.parse(host.socks5ProxyChain as string)
       : [],

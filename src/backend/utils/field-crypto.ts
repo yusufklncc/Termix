@@ -23,10 +23,6 @@ class FieldCrypto {
       "sudoPassword",
       "socks5Password",
     ]),
-    // A gateway password and a managed profile's auth secret: an auth key, a
-    // setup key, or a password. All are presented to a gateway rather than
-    // verified, so they are encrypted and not hashed.
-    vpn_profiles: new Set(["gatewayPassword", "authPassword", "extraConfig"]),
     ssh_credentials: new Set([
       "password",
       "privateKey",

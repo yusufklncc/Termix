@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { resolveTunnelEndpoint } from "../../src/backend/tunnel-endpoint";
-import { needsTunnel } from "../../src/backend/tunnel";
 
 /**
  * Where the tunnel may listen depends on who has to reach it.
@@ -33,24 +32,5 @@ describe("resolveTunnelEndpoint", () => {
       bindHost: "0.0.0.0",
       advertisedHost: "termix-app",
     });
-  });
-});
-
-/**
- * A tunnel only where one is needed. Opening a listener for a host that is
- * simply dialled would put a hop in the path that nobody asked for.
- */
-describe("needsTunnel", () => {
-  it("says so for a host behind jump hosts", () => {
-    expect(needsTunnel({ jumpHosts: [{ hostId: 2 }] })).toBe(true);
-  });
-
-  it("says so for a host on a VPN", () => {
-    expect(needsTunnel({ vpnProfileId: 3 })).toBe(true);
-  });
-
-  it("says nothing of the kind for a host reached directly", () => {
-    expect(needsTunnel({})).toBe(false);
-    expect(needsTunnel({ jumpHosts: [], vpnProfileId: null })).toBe(false);
   });
 });

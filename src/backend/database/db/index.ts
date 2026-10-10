@@ -1190,10 +1190,6 @@ const migrateSchema = () => {
     { column: "ssh_port", sql: "ALTER TABLE ssh_data ADD COLUMN ssh_port INTEGER DEFAULT 22" },
     { column: "connection_origin", sql: "ALTER TABLE ssh_data ADD COLUMN connection_origin TEXT" },
     { column: "parent_host_id", sql: "ALTER TABLE ssh_data ADD COLUMN parent_host_id INTEGER REFERENCES ssh_data(id) ON DELETE SET NULL" },
-    {
-      column: "vpn_profile_id",
-      sql: "ALTER TABLE ssh_data ADD COLUMN vpn_profile_id INTEGER REFERENCES vpn_profiles(id) ON DELETE SET NULL",
-    },
   ];
 
   for (const migration of sshDataMigrations) {
@@ -1282,59 +1278,6 @@ const migrateSchema = () => {
 
   addColumnIfNotExists("shared_host_secrets", "encrypted_fields", "TEXT");
 
-  try {
-    sqlite.prepare("SELECT id FROM vpn_profiles LIMIT 1").get();
-  } catch {
-    try {
-      sqlite.exec(`
-        CREATE TABLE IF NOT EXISTS vpn_profiles (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          user_id TEXT NOT NULL,
-          name TEXT NOT NULL,
-          description TEXT,
-          folder TEXT,
-          tags TEXT,
-          kind TEXT NOT NULL DEFAULT 'declared',
-          gateway_type TEXT NOT NULL DEFAULT 'socks5',
-          gateway_host TEXT NOT NULL,
-          gateway_port INTEGER NOT NULL,
-          gateway_username TEXT,
-          gateway_password TEXT,
-          provider TEXT,
-          server_host TEXT,
-          server_port INTEGER,
-          auth_username TEXT,
-          auth_password TEXT,
-          trusted_fingerprint TEXT,
-          extra_config TEXT,
-          enabled INTEGER NOT NULL DEFAULT 1,
-          last_state TEXT,
-          last_error TEXT,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-        );
-      `);
-    } catch (createError) {
-      databaseLogger.warn("Failed to create vpn_profiles table", {
-        operation: "schema_migration",
-        error: createError,
-      });
-    }
-  }
-
-  // Columns added after the table first shipped. The helper is idempotent, so
-  // a database created with the full table above skips every one of them.
-  addColumnIfNotExists("vpn_profiles", "provider", "TEXT");
-  addColumnIfNotExists("vpn_profiles", "server_host", "TEXT");
-  addColumnIfNotExists("vpn_profiles", "server_port", "INTEGER");
-  addColumnIfNotExists("vpn_profiles", "auth_username", "TEXT");
-  addColumnIfNotExists("vpn_profiles", "auth_password", "TEXT");
-  addColumnIfNotExists("vpn_profiles", "trusted_fingerprint", "TEXT");
-  addColumnIfNotExists("vpn_profiles", "extra_config", "TEXT");
-  addColumnIfNotExists("vpn_profiles", "enabled", "INTEGER NOT NULL DEFAULT 1");
-  addColumnIfNotExists("vpn_profiles", "last_state", "TEXT");
-  addColumnIfNotExists("vpn_profiles", "last_error", "TEXT");
 
   try {
     sqlite.exec(`

@@ -11,19 +11,6 @@ export interface BridgeTunnel {
 }
 
 /**
- * Does reaching this host take more than dialling it?
- *
- * Jump hosts and a VPN are the two answers core knows about, and the bridge
- * can act on neither: it takes a host and a port and opens a plain TCP
- * connection. So when either is set the connection is made here instead.
- */
-export function needsTunnel(host: Record<string, unknown>): boolean {
-  const jumpHosts = host.jumpHosts;
-  const hops = Array.isArray(jumpHosts) ? jumpHosts.length : 0;
-  return hops > 0 || host.vpnProfileId != null;
-}
-
-/**
  * A local address that comes out wherever the host actually is.
  *
  * Each connection to the listener asks core for a transport to the host and
@@ -32,9 +19,17 @@ export function needsTunnel(host: Record<string, unknown>): boolean {
  * here rather than one per kind of detour, and a path this plugin never
  * learned about still works.
  *
- * A host that needs a detour and cannot get one fails the session. Dialling
- * the target directly instead would ignore the very thing it was configured
- * to require.
+ * Always opened, rather than only where a detour is known to be needed.
+ * Whether one is -- a jump chain, a VPN a plugin raises -- is core's to
+ * answer and it answers per connection, so asking up front would mean
+ * guessing, and guessing wrong means the bridge dialling an address that
+ * only exists on the far side of a tunnel. A host with nothing in the way
+ * costs one hop inside this process, which against an H.264 stream is
+ * nothing.
+ *
+ * A host that needs a detour and cannot get one fails that connection.
+ * Dialling the target directly instead would ignore the very thing it was
+ * configured to require.
  */
 export async function openBridgeTunnel({
   ctx,

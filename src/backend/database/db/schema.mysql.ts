@@ -206,17 +206,6 @@ export const hosts = mysqlTable(
 
     sshPort: int("ssh_port").default(22),
 
-    /**
-     * Reach this host through a network Termix knows how to raise.
-     *
-     * Null is a direct connection. Set, it names a vpn_profiles row, and the
-     * resolver turns that into the gateway a session leaves through; it never
-     * falls back to a direct route, because the point of the field is that
-     * the direct route is wrong.
-     */
-    vpnProfileId: int("vpn_profile_id").references(() => vpnProfiles.id, {
-      onDelete: "set null",
-    }),
 
     useSocks5: boolean("use_socks5"),
     socks5Host: text("socks5_host"),
@@ -1264,47 +1253,3 @@ export const rbacAppliedDefaults = mysqlTable(
 );
 
 // --- rbac plugin permissions end ---
-
-// --- vpn (fork) ---
-
-export const vpnProfiles = mysqlTable("vpn_profiles", {
-  id: int("id").autoincrement().primaryKey(),
-  userId: varchar("user_id", { length: 255 })
-    .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
-  name: text("name").notNull(),
-  description: text("description"),
-  folder: text("folder"),
-  tags: text("tags"),
-  // "declared" is the operator-run tunnel. Managed kinds (wireguard, openvpn)
-  // come with phase 8 A1 and add their own columns.
-  kind: text("kind").notNull().default("declared"),
-  gatewayType: text("gateway_type").notNull().default("socks5"),
-  gatewayHost: text("gateway_host").notNull(),
-  gatewayPort: int("gateway_port").notNull(),
-  gatewayUsername: text("gateway_username"),
-  gatewayPassword: text("gateway_password"),
-  // Managed kinds only: what the manager needs to raise the tunnel. A
-  // declared profile leaves every one of these null -- the operator raised
-  // its tunnel themselves and Termix only knows the address.
-  provider: text("provider"),
-  serverHost: text("server_host"),
-  serverPort: int("server_port"),
-  authUsername: text("auth_username"),
-  authPassword: text("auth_password"),
-  trustedFingerprint: text("trusted_fingerprint"),
-  extraConfig: text("extra_config"),
-  /**
-   * Switched off by the operator, rather than failed.
-   *
-   * A tunnel that is up is a live path from this server into someone else's
-   * network, whether anyone is using it or not. Taking one down should not
-   * mean deleting the profile and its credentials.
-   */
-  enabled: boolean("enabled").notNull().default(true),
-  // Last word from the manager, so the editor can say more than "saved".
-  lastState: text("last_state"),
-  lastError: text("last_error"),
-  createdAt: text("created_at").notNull().default("CURRENT_TIMESTAMP"),
-  updatedAt: text("updated_at").notNull().default("CURRENT_TIMESTAMP"),
-});

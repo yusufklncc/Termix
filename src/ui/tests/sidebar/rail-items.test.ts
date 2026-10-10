@@ -60,9 +60,6 @@ describe("RAIL_ITEMS", () => {
     expect(RAIL_ITEMS.map((item) => item.id)).toEqual([
       "hosts",
       "credentials",
-      // This fork's: the networks hosts are reached through. Core patch for
-      // now, a plugin of its own later.
-      "networks",
       "connections",
       "quick-connect",
       "sync",

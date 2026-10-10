@@ -53,6 +53,10 @@
       "source": "workspace"
     },
     {
+      "id": "rdp-direct",
+      "source": "workspace"
+    },
+    {
       "id": "remote-desktop",
       "source": "workspace"
     },

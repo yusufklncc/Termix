@@ -1,0 +1,23 @@
+{
+  "tabs": { "rdpDirect": "RDP Direct" },
+  "settings": {
+    "host": {
+      "enable": {
+        "label": "Direct RDP",
+        "description": "Pass the server's own H.264 frames to the browser instead of going through guacd. Needs the bridge container, and the page must be served over HTTPS."
+      },
+      "port": { "label": "RDP port", "description": "The port the host listens on for RDP." },
+      "enablePrinting": {
+        "label": "Printing",
+        "description": "Offer a printer to the session. Off by default: it has only been tried on a few Windows versions."
+      }
+    }
+  },
+  "status": {
+    "connecting": "Connecting",
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "noSecureContext": "Direct RDP needs a secure context. Open Termix over HTTPS and try again.",
+    "noDecoder": "This browser cannot decode H.264 in a worker (WebCodecs is missing)."
+  }
+}

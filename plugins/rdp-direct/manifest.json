@@ -1,0 +1,85 @@
+{
+  "id": "rdp-direct",
+  "name": "Direct RDP",
+  "version": "1.0.0",
+  "description": "Reach an RDP host without guacd: the server's own H.264 frames are passed to the browser and decoded there.",
+  "author": {
+    "name": "Yusuf Ihsan Kilinc"
+  },
+  "license": "Apache-2.0",
+  "category": "Terminal",
+  "icon": "MonitorPlay",
+  "engine": {
+    "termix": ">=2.9.0",
+    "api": "1"
+  },
+  "capabilities": [
+    "hosts:read",
+    "credentials:read",
+    "credentials:use",
+    "network:outbound",
+    "network:serve",
+    "ui:surface"
+  ],
+  "contributes": {
+    "protocols": [
+      {
+        "id": "rdp-direct",
+        "defaultPort": 3389,
+        "credentialFields": [
+          {
+            "key": "domain"
+          }
+        ],
+        "hostLoginFallback": [
+          "username",
+          "password"
+        ]
+      }
+    ],
+    "tabs": [
+      {
+        "id": "rdp-direct",
+        "titleKey": "tabs.rdpDirect",
+        "icon": "MonitorPlay",
+        "openFrom": [
+          "host-context-menu",
+          "palette"
+        ]
+      }
+    ],
+    "settings": {
+      "host": {
+        "enableKey": "enableRdpDirect",
+        "enableLabelKey": "settings.host.enable.label",
+        "enableDescriptionKey": "settings.host.enable.description",
+        "fields": [
+          {
+            "key": "port",
+            "type": "number",
+            "labelKey": "settings.host.port.label",
+            "descriptionKey": "settings.host.port.description",
+            "requires": "enableRdpDirect",
+            "min": 1,
+            "max": 65535,
+            "default": 3389
+          },
+          {
+            "key": "enablePrinting",
+            "type": "boolean",
+            "labelKey": "settings.host.enablePrinting.label",
+            "descriptionKey": "settings.host.enablePrinting.description",
+            "requires": "enableRdpDirect",
+            "default": false
+          }
+        ]
+      }
+    }
+  },
+  "locales": "locales",
+  "platforms": [
+    "linux",
+    "win32",
+    "darwin"
+  ]
+}

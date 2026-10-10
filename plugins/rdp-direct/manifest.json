@@ -60,10 +60,15 @@
         }
       ],
       "host": {
-        "enableKey": "enableRdpDirect",
-        "enableLabelKey": "settings.host.enable.label",
-        "enableDescriptionKey": "settings.host.enable.description",
         "fields": [
+          {
+            "key": "enableRdpDirect",
+            "type": "boolean",
+            "labelKey": "settings.host.enable.label",
+            "default": false,
+            "hidden": true,
+            "defaultable": false
+          },
           {
             "key": "port",
             "type": "number",

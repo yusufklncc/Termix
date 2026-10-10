@@ -1,0 +1,69 @@
+{
+  "nav": {
+    "vpns": "VPNs"
+  },
+  "vpn": {
+    "profile": "VPN",
+    "profileDesc": "Reach this host through a VPN the Termix server is not otherwise on. Termix raises the tunnel; the host goes in through it.",
+    "direct": "Direct connection",
+    "manage": "Manage VPNs",
+    "managerHint": "Termix raises each VPN itself and keeps it in a network of its own, so two with overlapping addresses do not collide. The credentials are stored encrypted.",
+    "none": "No VPNs yet.",
+    "add": "Add VPN",
+    "name": "Name",
+    "gatewayHost": "Gateway address",
+    "gatewayPort": "Gateway port",
+    "gatewayUsername": "Gateway username",
+    "gatewayPassword": "Gateway password",
+    "passwordUnchanged": "Leave blank to keep the stored password",
+    "saved": "Network profile saved",
+    "saveFailed": "Could not save the network profile",
+    "deleted": "Network profile deleted",
+    "deleteFailed": "Could not delete the network profile",
+    "overridesProxy": "This host has both a network and its own proxy. The network is used; the proxy settings below are ignored.",
+    "kind": "Who runs the tunnel",
+    "kindDeclared": "You do (a sidecar you run)",
+    "kindManaged": "Termix does",
+    "kindLocked": "This cannot be changed after a profile is made.",
+    "provider": "VPN type",
+    "providerFortinet": "Fortinet SSL-VPN",
+    "providerTailscale": "Tailscale / Headscale",
+    "providerNetbird": "NetBird",
+    "authKey": "Auth key",
+    "loginServer": "Control server",
+    "loginServerHint": "Leave empty for Tailscale's own",
+    "authKeyNote": "Must be reusable: a new node registers each time the tunnel comes up.",
+    "setupKey": "Setup key",
+    "managementServer": "Management server",
+    "managementServerHint": "Leave empty for NetBird's own",
+    "setupKeyNote": "Use a reusable key, so the peer can register again if the manager is rebuilt.",
+    "serverHost": "VPN gateway address",
+    "serverPort": "VPN gateway port",
+    "authUsername": "VPN username",
+    "authPassword": "VPN password",
+    "trustedFingerprint": "Gateway key pin",
+    "trustedFingerprintHint": "The gateway's public key digest. Leave empty unless its certificate is not publicly trusted.",
+    "managedHint": "Termix raises this tunnel itself through the VPN manager. The credentials are stored encrypted.",
+    "noManager": "No VPN manager is configured, so Termix cannot raise a tunnel itself.",
+    "stateUp": "Connected",
+    "stateConnecting": "Connecting",
+    "stateDown": "Not connected",
+    "stateError": "Failed",
+    "stateRefused": "Rejected · fix and save",
+    "switchOn": "Enable",
+    "switchOff": "Disable",
+    "stateOff": "Disabled",
+    "switchFailed": "Could not enable or disable the VPN",
+    "kindDeclaredLegacy": "This VPN's tunnel is run outside Termix. New ones are raised by Termix; this one is kept as it is.",
+    "stateIdle": "Ready · not connected",
+    "disconnectNow": "Disconnect now",
+    "disconnectFailed": "Could not take the VPN down"
+  },
+  "settings": {
+    "host": {
+      "profileId": {
+        "label": "VPN"
+      }
+    }
+  }
+}

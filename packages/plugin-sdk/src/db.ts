@@ -237,6 +237,7 @@ export const LEGACY_TABLE_OWNERS: Readonly<Record<string, string>> = {
   collab_rooms: "session-sharing",
   collab_room_members: "session-sharing",
   session_recordings: "session-recording",
+  vpn_profiles: "vpn",
   host_metrics_preferences: "host-metrics",
   host_health_checks: "host-metrics",
   host_health_history: "host-metrics",

@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "tables": {
+    "vpn_profiles": {
+      "columns": {
+        "id": {
+          "type": "id",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "userId": {
+          "type": "refUser",
+          "length": 255,
+          "notNull": true
+        },
+        "name": {
+          "type": "text",
+          "notNull": true
+        },
+        "description": {
+          "type": "text"
+        },
+        "folder": {
+          "type": "text"
+        },
+        "tags": {
+          "type": "text"
+        },
+        "kind": {
+          "type": "text",
+          "notNull": true,
+          "defaultValue": "declared"
+        },
+        "gatewayType": {
+          "type": "text",
+          "notNull": true,
+          "defaultValue": "socks5"
+        },
+        "gatewayHost": {
+          "type": "text",
+          "notNull": true
+        },
+        "gatewayPort": {
+          "type": "integer",
+          "notNull": true
+        },
+        "gatewayUsername": {
+          "type": "text"
+        },
+        "gatewayPassword": {
+          "type": "encryptedText"
+        },
+        "provider": {
+          "type": "text"
+        },
+        "serverHost": {
+          "type": "text"
+        },
+        "serverPort": {
+          "type": "integer"
+        },
+        "authUsername": {
+          "type": "text"
+        },
+        "authPassword": {
+          "type": "encryptedText"
+        },
+        "trustedFingerprint": {
+          "type": "text"
+        },
+        "extraConfig": {
+          "type": "encryptedText"
+        },
+        "enabled": {
+          "type": "boolean",
+          "notNull": true,
+          "defaultValue": true
+        },
+        "lastState": {
+          "type": "text"
+        },
+        "lastError": {
+          "type": "text"
+        },
+        "createdAt": {
+          "type": "timestamp",
+          "defaultNow": true
+        },
+        "updatedAt": {
+          "type": "timestamp",
+          "defaultNow": true
+        }
+      },
+      "indexes": [
+        {
+          "name": "idx_vpn_profiles_user",
+          "columns": [
+            "userId"
+          ]
+        }
+      ],
+      "adopts": "vpn_profiles"
+    }
+  }
+}

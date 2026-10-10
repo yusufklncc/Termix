@@ -481,7 +481,7 @@ export function VpnProfileManager({
                   {field(
                     t("hosts.vpn.serverHost"),
                     "serverHost",
-                    "vpn.company.com",
+                    "vpn.company.com", // plugin-id-ok: an example gateway address, not the vpn plugin
                   )}
                   {field(
                     t("hosts.vpn.serverPort"),

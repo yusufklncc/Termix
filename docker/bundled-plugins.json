@@ -125,6 +125,10 @@
       "source": "workspace"
     },
     {
+      "id": "vpn",
+      "source": "workspace"
+    },
+    {
       "id": "wake-on-lan",
       "source": "workspace"
     },

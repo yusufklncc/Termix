@@ -13,11 +13,7 @@
 import type { Client } from "ssh2";
 import { logger } from "../../utils/logger.js";
 import { createSocks5Connection } from "../../utils/socks5-helper.js";
-import {
-  gatewayFailureMessage,
-  hostNetworkFields,
-  resolveHostGateway,
-} from "../host-network.js";
+import { resolveHostGateway } from "./host-gateway.js";
 import { createJumpHostChain } from "../jump-host-chain.js";
 import { resolveSshConnectConfigHost } from "../ssh-dns.js";
 import { performPortKnocking } from "../terminal-auth-helpers.js";
@@ -130,31 +126,30 @@ export async function openSshTransport(
    * than stepped over -- carrying on would connect by exactly the route the
    * host was configured to avoid.
    */
-  let proxyConfig;
+  let gateway;
   try {
-    proxyConfig = await resolveHostGateway({
-      ...hostNetworkFields(host),
-      userId: host.userId ?? null,
-    });
+    gateway = await resolveHostGateway(host);
   } catch (error) {
-    throw new SshTransportError(gatewayFailureMessage(host, error), "proxy", {
-      cause: error,
-    });
+    throw new SshTransportError(
+      error instanceof Error ? error.message : String(error),
+      "proxy",
+      { cause: error },
+    );
   }
 
-  if (proxyConfig && via === "direct") {
+  if (gateway && via === "direct") {
     try {
       const proxySocket = await createSocks5Connection(
         host.ip,
         host.port || 22,
-        proxyConfig,
+        gateway.config,
       );
       if (proxySocket) {
         config.sock = proxySocket;
         via = "proxy";
       }
     } catch (error) {
-      throw new SshTransportError(gatewayFailureMessage(host, error), "proxy", {
+      throw new SshTransportError(gateway.describeFailure(error), "proxy", {
         cause: error,
       });
     }

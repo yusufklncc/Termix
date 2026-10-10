@@ -22,8 +22,8 @@ const source = path.join(root, "plugins");
 const destination = path.join(root, "dist", "plugins");
 const cli = path.join(root, "packages", "plugin-sdk", "cli", "index.mjs");
 
-/** What a plugin declares when its build is nothing but the CLI call. */
-const PLAIN_BUILD = "termix-plugin build";
+/** A plugin's own step, run before the CLI builds it. */
+const PREPARE_SCRIPT = "build:prepare";
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 
 // Same list as a .tmxplug, see packages/plugin-sdk/cli/lib/tmxplug.mjs.
@@ -38,32 +38,42 @@ const SHIPPED = [
 ];
 
 /**
- * How to build one workspace plugin.
+ * The step a plugin needs before the CLI can build it, if it declares one.
  *
- * A plugin that declares a build of its own gets its own build run. Nearly
- * all of them declare exactly the CLI call, which is invoked directly to save
- * an npm start-up each. rdp-direct declares a step before it -- esbuild
- * writing its decoder worker -- and that worker is gitignored. Calling the
- * CLI straight past the declaration therefore built fine on a machine that
- * happened to have the file lying about from an earlier run, and failed on a
- * clean checkout, which is where CI found it.
+ * rdp-direct writes its decoder worker with esbuild, and that file is
+ * gitignored, so skipping the step built fine on a machine that still had the
+ * worker from an earlier run and failed on a clean checkout.
+ *
+ * It is a script of its own rather than something parsed out of `build`, and
+ * the CLI below is still invoked by path. Running `npm run build` instead
+ * looked tidier and broke the image: that resolves `termix-plugin` through
+ * node_modules/.bin, which does not exist in the Docker stage that installs
+ * dependencies before the SDK's sources are copied in.
  */
-function pluginBuildCommand(pluginDir) {
+function pluginPrepareCommand(pluginDir) {
   const packageJson = path.join(pluginDir, "package.json");
-  const declared = fs.existsSync(packageJson)
-    ? (JSON.parse(fs.readFileSync(packageJson, "utf8")).scripts ?? {}).build
-    : undefined;
-
-  return declared && declared !== PLAIN_BUILD
-    ? { command: npm, args: ["run", "build"] }
-    : { command: process.execPath, args: [cli, "build"] };
+  if (!fs.existsSync(packageJson)) return null;
+  const scripts =
+    JSON.parse(fs.readFileSync(packageJson, "utf8")).scripts ?? {};
+  if (!scripts[PREPARE_SCRIPT]) return null;
+  return { command: npm, args: ["run", PREPARE_SCRIPT] };
 }
 
 function stageWorkspace(id) {
   const pluginDir = path.join(source, id);
 
-  const { command, args } = pluginBuildCommand(pluginDir);
-  execFileSync(command, args, { cwd: pluginDir, stdio: "inherit" });
+  const prepare = pluginPrepareCommand(pluginDir);
+  if (prepare) {
+    execFileSync(prepare.command, prepare.args, {
+      cwd: pluginDir,
+      stdio: "inherit",
+    });
+  }
+
+  execFileSync(process.execPath, [cli, "build"], {
+    cwd: pluginDir,
+    stdio: "inherit",
+  });
 
   if (!fs.existsSync(path.join(pluginDir, "dist", "backend.js"))) {
     throw new Error(`${id} produced no dist/backend.js`);
@@ -109,4 +119,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { pluginBuildCommand, PLAIN_BUILD };
+module.exports = { pluginPrepareCommand, PREPARE_SCRIPT };

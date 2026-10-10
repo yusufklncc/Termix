@@ -601,6 +601,16 @@ export interface PluginHostSummary {
   tags: string | null;
   folder: string | null;
   authType: string;
+  /**
+   * The network this host is reached through, or null for a direct
+   * connection. Carried so a plugin that opens its own connection -- a
+   * protocol core does not speak -- can hand the host back to
+   * ctx.ssh.openTransport and get a socket that comes out inside that
+   * network, rather than dialling an address that only exists on the far
+   * side of it. Optional only so a test fixture need not name it; core
+   * always sets it.
+   */
+  vpnProfileId?: number | null;
 }
 
 /**

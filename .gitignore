@@ -47,3 +47,7 @@ electron/build-info.cjs
 /scripts/auto-fix-state.json
 /scripts/auto-fix-report-*.json
 reports/
+
+# Jenkins keeps npm's download cache here, in the workspace that outlives
+# the build container.
+.npm-cache/

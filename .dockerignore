@@ -90,3 +90,5 @@ jspm_packages/
 .dynamodb/
 
 .tern-port
+
+.npm-cache

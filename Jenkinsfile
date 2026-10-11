@@ -53,13 +53,23 @@ pipeline {
                     // against. The release image pins its own node in
                     // docker/Dockerfile and is not affected by this.
                     image 'node:24'
-                    // npm's cache and node-gyp both want a writable home, and
-                    // the container runs as the agent's uid, not root.
-                    args '-e HOME=/tmp -e npm_config_cache=/tmp/.npm'
+                    // node-gyp wants a writable home, and the container runs
+                    // as the agent's uid, not root. The npm cache is set per
+                    // step instead, because it has to outlive the container.
+                    args '-e HOME=/tmp'
                 }
             }
             steps {
-                sh 'npm ci'
+                /*
+                 * The cache lives in the workspace, which survives between
+                 * builds -- the container does not, so a cache inside it was
+                 * thrown away every time and all 1198 packages came down the
+                 * wire again. $WORKSPACE rather than a named volume: Docker
+                 * creates a named volume owned by root and this container
+                 * runs as the agent's uid, which would leave npm unable to
+                 * write to the cache it was given.
+                 */
+                sh 'npm ci --cache "$WORKSPACE/.npm-cache"'
                 // Nothing below compiles without this: the SDK's built output
                 // is what the plugins and the core type-check against.
                 sh 'npm run build:sdk'

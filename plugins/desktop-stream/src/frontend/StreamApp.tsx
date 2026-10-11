@@ -203,8 +203,7 @@ const StreamWebRTCView = React.forwardRef<
     <div
       ref={surfaceRef}
       tabIndex={0}
-      className="relative w-full h-full outline-none"
-      style={{ backgroundColor: "var(--bg-base)" }}
+      className="relative w-full h-full outline-none bg-background"
     >
       <video
         ref={videoRef}
@@ -215,10 +214,7 @@ const StreamWebRTCView = React.forwardRef<
       />
 
       {state !== "connected" && (
-        <div
-          className="absolute inset-0 flex flex-col items-center justify-center gap-4"
-          style={{ backgroundColor: "var(--bg-base)" }}
-        >
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-background">
           {failed ? (
             <>
               <AlertCircle
@@ -232,10 +228,7 @@ const StreamWebRTCView = React.forwardRef<
                 {t("stream.negotiationFailed")}
               </p>
               {detail && (
-                <p
-                  className="text-xs max-w-xs text-center"
-                  style={{ color: "var(--foreground-secondary)" }}
-                >
+                <p className="text-xs max-w-xs text-center text-muted-foreground">
                   {detail}
                 </p>
               )}
@@ -287,10 +280,7 @@ const StreamAppInner = React.forwardRef<StreamAppHandle, StreamAppInnerProps>(
 
     if (!streamUrl) {
       return (
-        <div
-          className="flex flex-col items-center justify-center h-full gap-4"
-          style={{ backgroundColor: "var(--bg-base)" }}
-        >
+        <div className="flex flex-col items-center justify-center h-full gap-4 bg-background">
           <AlertCircle
             className="size-10"
             style={{ color: "var(--foreground)" }}
@@ -301,10 +291,7 @@ const StreamAppInner = React.forwardRef<StreamAppHandle, StreamAppInnerProps>(
           >
             {t("stream.missingUrlTitle")}
           </p>
-          <p
-            className="text-xs max-w-xs text-center"
-            style={{ color: "var(--foreground-secondary)" }}
-          >
+          <p className="text-xs max-w-xs text-center text-muted-foreground">
             {t("stream.missingUrlDescription")}
           </p>
         </div>
@@ -313,10 +300,7 @@ const StreamAppInner = React.forwardRef<StreamAppHandle, StreamAppInnerProps>(
 
     if (disconnected) {
       return (
-        <div
-          className="flex flex-col items-center justify-center h-full gap-4"
-          style={{ backgroundColor: "var(--bg-base)" }}
-        >
+        <div className="flex flex-col items-center justify-center h-full gap-4 bg-background">
           <p
             className="text-sm font-semibold"
             style={{ color: "var(--foreground)" }}
@@ -332,10 +316,7 @@ const StreamAppInner = React.forwardRef<StreamAppHandle, StreamAppInnerProps>(
     }
 
     return (
-      <div
-        className="relative w-full h-full"
-        style={{ backgroundColor: "var(--bg-base)" }}
-      >
+      <div className="relative w-full h-full bg-background">
         <iframe
           key={`${streamUrl}-${reloadCount}`}
           ref={frameRef}

@@ -40,6 +40,36 @@ describe("ConnectionScreen", () => {
     );
   });
 
+  it("does not say connecting and disconnected at once", () => {
+    // The terminal passes a standing "connecting" message and a retry
+    // handler, so both lines rendered on the same screen: one claiming the
+    // connection was being made, the other that it was lost.
+    render(
+      <ConnectionScreen
+        status="disconnected"
+        message="terminal.connecting"
+        disconnectedMessage="terminal.connectionLost"
+        onManualRetry={() => {}}
+      />,
+    );
+
+    expect(screen.queryByText("terminal.connecting")).toBeNull();
+    expect(screen.getByText("terminal.connectionLost")).toBeTruthy();
+  });
+
+  it("keeps the message when a disconnected screen has no retry", () => {
+    // Then it is the only thing saying what happened -- remote-desktop uses
+    // it for a host that is not there.
+    render(
+      <ConnectionScreen
+        status="disconnected"
+        message="remoteDesktop.hostNotFound"
+      />,
+    );
+
+    expect(screen.getByText("remoteDesktop.hostNotFound")).toBeTruthy();
+  });
+
   it("still shows the connection log when a provider is present", () => {
     render(
       <ConnectionLogProvider>

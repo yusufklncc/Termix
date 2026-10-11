@@ -69,7 +69,12 @@ export function ConnectionScreen({
                 aria-hidden="true"
               />
             )}
-            {message && (
+            {/* Not when the retry block is showing one of its own. A caller
+                passes a standing "connecting" message and the block says the
+                connection was lost, and both appeared at once. A disconnected
+                screen with no retry still shows this, because there it is the
+                only thing saying what happened. */}
+            {message && !showRetryButton && (
               <p className="text-sm text-foreground-secondary font-medium">
                 {message}
               </p>

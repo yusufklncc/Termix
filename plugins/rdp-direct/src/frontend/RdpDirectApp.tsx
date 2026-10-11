@@ -267,8 +267,7 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
       <div
         ref={surfaceRef}
         tabIndex={0}
-        className="relative w-full h-full outline-none"
-        style={{ backgroundColor: "var(--bg-base)" }}
+        className="relative w-full h-full outline-none bg-background"
       >
         {/* Conditions the session survives. Both are dismissed by the viewer
             rather than on a timer: each explains something that already
@@ -310,10 +309,7 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
         )}
 
         {state !== "connected" && (
-          <div
-            className="absolute inset-0 flex flex-col items-center justify-center gap-4"
-            style={{ backgroundColor: "var(--bg-base)" }}
-          >
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-background">
             {failed ? (
               <>
                 <AlertCircle
@@ -327,10 +323,7 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
                   {t("rdpDirect.connectionFailed")}
                 </p>
                 {detail && (
-                  <p
-                    className="text-xs max-w-md text-center"
-                    style={{ color: "var(--foreground-secondary)" }}
-                  >
+                  <p className="text-xs max-w-md text-center text-muted-foreground">
                     {CAN_DECODE ? detail : t("rdpDirect.insecureContext")}
                   </p>
                 )}

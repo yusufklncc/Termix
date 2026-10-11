@@ -335,11 +335,11 @@ decode edilip piksel olarak gidiyor — 580 MB/dk'dan 41 MB/dk'ya indi.
 
 ### Bulunan, düzeltilmeyen
 
-- [ ] `--bg-base`, `--bg-elevated`, `--foreground-secondary` bu projede hiçbir
-      yerde tanımlı değil, ama `GuacamoleApp`, `FullScreenAppWrapper`,
-      `SimpleLoader` ve `GuacamoleDisplay` bunları kullanıyor. Direct yolun
-      bildirim kutusunda okunmazlığa sebep oldu ve orada gerçek token'larla
-      düzeltildi; diğerleri koyu zemin üstünde fark edilmiyor. Ayrı iş
+- [x] `--bg-base` ve `--foreground-secondary` bu fork'un eklentilerinden
+      kaldırıldı (2026-10-11): yerlerine gerçekten tanımlı Tailwind sınıfları
+      (`bg-background`, `text-muted-foreground`) kullanılıyor. Upstream'in
+      kendi kullanımlarına dokunulmadı — core'da tanımlamak beş bileşeninin
+      görünümünü değiştirirdi
 
 ---
 
@@ -363,8 +363,9 @@ decode edilip piksel olarak gidiyor — 580 MB/dk'dan 41 MB/dk'ya indi.
 ### Açık kalanlar
 
 - [ ] Yazıcının birden fazla Windows sürümünde denenmesi. Varsayılanın kapalı olma sebebi bu
-- [ ] Direct RDP sekmesi ön yüklenmiyor: sekme tipi `rdp` olduğu için üstüne gelince
-      Guacamole iniyor. Upstream'in API'sine dokunmayı gerektirdiği için bilerek yapılmadı
+- [x] Direct RDP sekmesi ön yükleniyor. 2.9 portunda eklenti kendi sekme tipini
+      aldığı için kendiliğinden çözülmüş; `preload` beyanı ve sekme kimliği
+      2026-10-11'de teste bağlandı (`desktop-stream` için de)
 - [ ] Jump host tünelinin gerçek bir jump host'la doğrulanması
 - [ ] Uçtan uca gecikmenin fiziksel ölçümü
 - [x] `npm run verify:dialect` — 2026-10-10, bkz. Faz 12
@@ -450,8 +451,11 @@ Tasarım: [`docs/phase10-tailscale-design.md`](docs/phase10-tailscale-design.md)
       ile her bağlantıda yeni düğüm, bu yüzden anahtarı **reusable** olmalı
 - [ ] Mesh SOCKS'u exit node olmadan mesh dışı adreslere erişiyor mu
 - [ ] Ölü peer'lar zamanla birikiyor mu
-- [ ] Tünel düştüğünde oturum kendini yeniden bağlasın (karar verildi
-      2026-10-10, yapılmadı)
+- [x] Tünel düştüğünde oturum kendini yeniden bağlıyor. Yeni kod gerekmedi:
+      mekanizma `ssh-terminal`'da zaten vardı (8 deneme, 2→8 sn geri çekilme,
+      scrollback korunuyor), yalnızca **Auto Reconnect** ayarı kapalıydı.
+      Host Defaults'tan açıldı ve 2026-10-11'de gerçek bir Netbird tüneli
+      kapatılıp açılarak doğrulandı
 
 ## Faz 11 — Upstream 2.9.x ve eklenti mimarisi
 

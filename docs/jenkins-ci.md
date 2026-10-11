@@ -46,13 +46,37 @@ git push origin v2.9.2-rdp.12
 
 ## Setting it up
 
-1. **Job type:** Multibranch Pipeline, pointed at
-   `https://gitlab.fatihk.tr/yusufihsankilinc/termix.git`.
+1. **Job type:** Multibranch Pipeline with a **GitLab Project** branch source, which also reports
+   each build's result back to the commit in GitLab. The GitLab server is configured once under
+   Manage Jenkins → System → _GitLab Servers_ (the Branch Source plugin's own section — not
+   _GitLab connections_, which belongs to the older GitLab plugin and may be in use by other jobs
+   on this shared Jenkins).
+
+   Its **Server URL must be `http://gitlab`**, the container name on the shared Docker network.
+   Jenkins cannot reach `gitlab.fatihk.tr`; the first indexing attempt failed on exactly that. Its
+   credential is a GitLab personal access token with `api`, which the plugin uses for metadata and
+   for build status.
+
+   **Checkout Credentials: `- anonymous -`.** The project is public, so cloning needs no token at
+   all — one fewer secret to mint, store and renew. Making the project private later breaks the
+   clone, and this is the line to come back to.
 
 2. **Branch sources:** add _Discover branches_ and _Discover tags_. Give the tag discovery a name
    filter of `v*`, `netmgr-v*`, `bridge-v*` — without one, the first scan queues a build for each
    of upstream's 48 tags. They would all pass (the Publish stage skips them), but the queue is an
    hour of nothing.
+
+   **The clone URL is GitLab's to choose, not Jenkins'.** The API answers with `http_url_to_repo`,
+   built from GitLab's own `external_url`, so the checkout goes to `https://gitlab.fatihk.tr`
+   however the server is addressed in Jenkins — and fails, because the agent cannot reach it.
+   Indexing succeeds while checkout fails, which reads like a credentials problem and is not. The
+   fix is to make that name resolvable from the containers rather than to fight the URL:
+
+   ```yaml
+   # jenkins and jenkins-agent services
+   extra_hosts:
+     - "gitlab.fatihk.tr:10.77.21.21"
+   ```
 
 3. **Credentials** (Jenkins → Credentials, kind _Username with password_):
 
@@ -83,23 +107,24 @@ git push origin v2.9.2-rdp.12
    (`http://jenkins:8080`, or by address), and the Jenkinsfile was validated there through
    `/pipeline-model-converter/validate`.
 
-5. **Webhook:** GitLab → Settings → Webhooks, with _Push events_ and _Tag push events_, pointed at
-   `/multibranch-webhook-trigger/invoke?token=<token>` (or the GitLab plugin's endpoint, depending
-   on which is installed). The project's own GitLab CI/CD feature is disabled — Jenkins is the CI
-   here — and that setting does not affect webhooks.
+5. **Webhook:** GitLab → Settings → Webhooks → `http://jenkins:8080/gitlab-webhook/post`, with
+   _Push events_ and _Tag push events_. Added by hand, with the server's _Manage Web Hooks_ left
+   off: the plugin would register one built from Jenkins' own root URL, and that points at
+   `jenkins.fatihk.tr`.
 
    **Jenkins sits behind Pangolin**, which authenticates every request: `jenkins.fatihk.tr` answers
-   401 even on `/login`. A webhook sent to that hostname hits the sign-in wall, not Jenkins, so one
-   of these has to be arranged:
+   401 even on `/login`, so a webhook sent there reaches a sign-in wall rather than Jenkins.
+   `gitlab`, `jenkins` and `jenkins-agent` share the `devsecops` Docker network, so the internal
+   address skips the proxy entirely and the trigger never leaves the machine.
 
-   - **Point the webhook past the proxy** — `gitlab`, `jenkins` and `jenkins-agent` are all on the
-     same Docker network (`devsecops`), so GitLab reaches Jenkins directly at `http://jenkins:8080`
-     and Pangolin never sees the request. This is the arrangement to use: the trigger never leaves
-     the machine and is never exposed.
-   - **A Pangolin rule** that lets the webhook path through unauthenticated, ideally narrowed to
-     GitLab's address. The trigger token in the URL is then the only thing guarding it.
-   - **Polling** as a fallback: Jenkins checks GitLab on a schedule. No network arrangement, but
-     delayed builds and a steady trickle of pointless fetches.
+   This endpoint takes an unauthenticated POST. The git plugin's `/git/notifyCommit` does not —
+   since the fix for CVE-2022-36883 it answers 401 even with valid credentials, which is why it
+   was not used. Jenkins' own root URL is left alone; other jobs on this shared instance depend on
+   it.
+
+   Keep the periodic scan as a long fallback (an hour is plenty) so a missed hook costs a delay
+   rather than a build. The project's own GitLab CI/CD feature is disabled — Jenkins is the CI here
+   — and that setting does not affect webhooks.
 
 ## Not covered yet
 

@@ -17,6 +17,7 @@
     "hosts:read",
     "credentials:read",
     "credentials:use",
+    "ssh:connect",
     "network:outbound",
     "network:serve",
     "ui:surface"

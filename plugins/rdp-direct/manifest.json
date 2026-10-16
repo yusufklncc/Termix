@@ -21,6 +21,16 @@
     "network:serve",
     "ui:surface"
   ],
+  "optionalDependencies": {
+    "session-recording": "^1.0.0"
+  },
+  "requires": [
+    {
+      "service": "recordings.writer",
+      "versionRange": "^1.1.0",
+      "optional": true
+    }
+  ],
   "contributes": {
     "protocols": [
       {

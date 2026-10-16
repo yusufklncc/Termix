@@ -92,6 +92,11 @@ if [ "$component" = "app" ]; then
 fi
 
 targets=("$image:$tag" "$image:latest")
+# More tags for the same image in our registry, space-separated. The
+# pipeline uses it to mark which source an image was built from.
+for extra in ${EXTRA_TAGS:-}; do
+  targets+=("$image:$extra")
+done
 if [ "$DOCKER_HUB" != "0" ]; then
   targets+=("$hub_image:$tag" "$hub_image:latest")
 fi
@@ -110,3 +115,8 @@ echo "published $component $tag from $commit:"
 for target in "${targets[@]}"; do
   echo "  $target"
 done
+
+# Every push to main is a release now, so the builder would otherwise keep
+# a full copy of each one. The registry has them; the build cache keeps the
+# layers the next build reuses.
+docker image rm "$local_tag" "${targets[@]}" >/dev/null

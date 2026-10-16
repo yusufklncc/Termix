@@ -11,38 +11,42 @@ lint, the type-check or the ~3,900 tests between a commit and a published image 
 hand, and a release went out on the strength of someone remembering to.
 
 The [`Jenkinsfile`](../Jenkinsfile) at the repository root runs that same job, in that same order,
-on every push, and publishes images when a release tag appears.
+on every push, and publishes images when a push to `main` passes it.
 
 ## What it does
 
-| Stage   | When                 | What                                                                                                      |
-| ------- | -------------------- | --------------------------------------------------------------------------------------------------------- |
-| Checks  | every branch and tag | `npm ci`, `build:sdk`, `lint`, `prettier --check`, `type-check`, `build`, `test`, `test:plugins`          |
-| Publish | release tags only    | builds the image, validates nginx inside it, pushes to Harbor (and Docker Hub while that is still wanted) |
+| Stage   | When                                | What                                                                                                                          |
+| ------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Checks  | every branch, merge request and tag | `npm ci`, `build:sdk`, `lint`, `prettier --check`, `type-check`, `build`, `test`, `test:plugins`                              |
+| Publish | `main` only, after Checks           | builds the images, validates nginx inside the application image, pushes to Harbor (and Docker Hub while that is still wanted) |
 
 The order in Checks is not arbitrary: `build:sdk` has to come before anything else, because the
 core and every plugin type-check against the SDK's built output. `npm run lint` rather than
 `npx eslint`, because the script also checks that the generated dialect schemas still match
 `schema.ts`.
 
-## Release tags
+## Releases
 
-Publishing hangs off a tag, never a branch, so a push to `main` can fail its checks without moving
-an image that someone is running.
+A push to `main` that passes Checks is a release, the way the other pipelines on this Jenkins
+publish; one that fails them publishes nothing. There is nothing to tag: the version is
+`<upstream>-rdp.<build>`, upstream's version from `package.json` followed by the `main` job's build
+number, and every image of a release carries it.
 
-| Tag                   | Publishes             |
-| --------------------- | --------------------- |
-| `v2.9.2-rdp.12`       | the application image |
-| `netmgr-v2.9.2-rdp.5` | the VPN manager       |
-| `bridge-v2.8.0-rdp.2` | the FreeRDP bridge    |
+| Image                                     | Published                             |
+| ----------------------------------------- | ------------------------------------- |
+| `harbor.fatihk.tr/flab/termix`            | on every release                      |
+| `harbor.fatihk.tr/flab/termix/netmgr`     | when `docker/net-manager/` changed    |
+| `harbor.fatihk.tr/flab/termix/rdp-bridge` | when `docker/freerdp-bridge/` changed |
 
-Anything else — including upstream's own 48 `release-*-tag` tags, which this repository carries —
-skips the Publish stage rather than failing it.
+The VPN manager and the bridge change rarely, and the bridge builds FreeRDP from source, so they
+are not rebuilt for nothing. Each of their images is also tagged `src-<tree hash of its
+directory>`; the pipeline looks that tag up in Harbor and builds only when it is missing. A first
+build, or one after a failed release, finds no tag and publishes.
 
-```bash
-git tag v2.9.2-rdp.12
-git push origin v2.9.2-rdp.12
-```
+Until 2026-10-16 publishing hung off `v*`, `netmgr-v*` and `bridge-v*` tags. Jenkins does not build
+the tags a multibranch job discovers unless a build-strategy plugin says so (Branch API's default is
+"build everything except tags"), so each release waited for someone to press Build. A tag no longer
+publishes anything.
 
 ## Setting it up
 
@@ -61,10 +65,9 @@ git push origin v2.9.2-rdp.12
    all — one fewer secret to mint, store and renew. Making the project private later breaks the
    clone, and this is the line to come back to.
 
-2. **Branch sources:** add _Discover branches_ and _Discover tags_. Give the tag discovery a name
-   filter of `v*`, `netmgr-v*`, `bridge-v*` — without one, the first scan queues a build for each
-   of upstream's 48 tags. They would all pass (the Publish stage skips them), but the queue is an
-   hour of nothing.
+2. **Branch sources:** add _Discover branches_. Releases no longer need _Discover tags_; the job
+   still has it, with a name filter of `v*`, `netmgr-v*`, `bridge-v*` from when they did, and
+   without a build-strategy plugin Jenkins only lists the tags it finds.
 
    **The clone URL is GitLab's to choose, not Jenkins'.** The API answers with `http_url_to_repo`,
    built from GitLab's own `external_url`, so the checkout goes to `https://gitlab.fatihk.tr`

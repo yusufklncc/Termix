@@ -15,10 +15,10 @@ on every push, and publishes images when a release tag appears.
 
 ## What it does
 
-| Stage   | When                 | What                                                                                                                   |
-| ------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Checks  | every branch and tag | `npm ci`, `build:sdk`, `lint`, `prettier --check`, `type-check`, `build`, `test`, `test:plugins`                       |
-| Publish | release tags only    | builds the image, validates nginx inside it, pushes to the GitLab registry (and Docker Hub while that is still wanted) |
+| Stage   | When                 | What                                                                                                      |
+| ------- | -------------------- | --------------------------------------------------------------------------------------------------------- |
+| Checks  | every branch and tag | `npm ci`, `build:sdk`, `lint`, `prettier --check`, `type-check`, `build`, `test`, `test:plugins`          |
+| Publish | release tags only    | builds the image, validates nginx inside it, pushes to Harbor (and Docker Hub while that is still wanted) |
 
 The order in Checks is not arbitrary: `build:sdk` has to come before anything else, because the
 core and every plugin type-check against the SDK's built output. `npm run lint` rather than
@@ -80,17 +80,19 @@ git push origin v2.9.2-rdp.12
 
 3. **Credentials** (Jenkins → Credentials, kind _Username with password_):
 
-   | ID                       | Username               | Password                                                   |
-   | ------------------------ | ---------------------- | ---------------------------------------------------------- |
-   | `termix-gitlab-registry` | `oauth2`               | a GitLab token with `write_registry` — used to push images |
-   | `termix-dockerhub`       | the Docker Hub account | only if `PUBLISH_DOCKER_HUB` is turned on — it is off      |
+   | ID                 | Username               | Password                                                                                              |
+   | ------------------ | ---------------------- | ----------------------------------------------------------------------------------------------------- |
+   | `harbor-flab-push` | `robot$flab-jenkins`   | the push robot of Harbor's `flab` project — used to push images; shared with the other fork pipelines |
+   | `termix-dockerhub` | the Docker Hub account | only if `PUBLISH_DOCKER_HUB` is turned on — it is off                                                 |
 
    There is deliberately no credential for cloning: the GitLab project is public, so the job's
    Branch Source leaves Credentials on `- none -` and no token has to be minted, stored or renewed
    for it. Making the project private later breaks the job, and this is the line to come back to.
 
-   The registry one needs write access; a deploy token scoped to `read_registry`, which is what the
-   server uses, cannot push. `PUBLISH_DOCKER_HUB` defaults to false: GitLab is the registry now, and
+   The registry one needs push access to the `flab` project; the project is public, so the server
+   pulls without any login. Until 2026-10-16 the images went to the GitLab registry with a
+   `termix-gitlab-registry` credential (a GitLab token with `write_registry`); that credential is
+   no longer used. `PUBLISH_DOCKER_HUB` defaults to false: Harbor is the registry now, and
    Docker Hub was only the fallback while the server was being moved onto it. Turning the parameter
    on for a build requires `termix-dockerhub` to exist first, or the build fails looking for it.
 

@@ -44,7 +44,7 @@ services:
   rdp-bridge:
     # Pulled rather than built: building means building FreeRDP from source.
     # compose-dev.yml builds it from this checkout instead.
-    image: registry.fatihk.tr/yusufihsankilinc/termix/rdp-bridge:latest
+    image: harbor.fatihk.tr/flab/termix/rdp-bridge:latest
     container_name: termix-rdp-bridge
     restart: unless-stopped
     networks:

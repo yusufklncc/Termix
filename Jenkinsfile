@@ -16,7 +16,9 @@
 //   bridge-v2.8.0-rdp.2   -> the FreeRDP bridge
 //
 // Jenkins credentials this expects:
-//   termix-gitlab-registry  username/password for registry.fatihk.tr
+//   harbor-flab-push        username/password for harbor.fatihk.tr, the push
+//                           robot of the flab project; the other fork
+//                           pipelines push with the same one
 //   termix-dockerhub        only when PUBLISH_DOCKER_HUB is turned on, which
 //                           it is not by default
 
@@ -36,7 +38,7 @@ pipeline {
         booleanParam(
             name: 'PUBLISH_DOCKER_HUB',
             defaultValue: false,
-            description: 'Also push to Docker Hub. Off: the registry is GitLab now, and Docker Hub was only the fallback while the server was moved onto it. Turning this on needs the termix-dockerhub credential to exist, or the build fails looking for it.'
+            description: 'Also push to Docker Hub. Off: the registry is Harbor now, and Docker Hub was only the fallback while the server was moved onto it. Turning this on needs the termix-dockerhub credential to exist, or the build fails looking for it.'
         )
     }
 
@@ -132,11 +134,11 @@ pipeline {
                 }
 
                 withCredentials([usernamePassword(
-                    credentialsId: 'termix-gitlab-registry',
-                    usernameVariable: 'GL_REGISTRY_USER',
-                    passwordVariable: 'GL_REGISTRY_PASS'
+                    credentialsId: 'harbor-flab-push',
+                    usernameVariable: 'REGISTRY_USER',
+                    passwordVariable: 'REGISTRY_PASS'
                 )]) {
-                    sh 'echo "$GL_REGISTRY_PASS" | docker login registry.fatihk.tr -u "$GL_REGISTRY_USER" --password-stdin'
+                    sh 'echo "$REGISTRY_PASS" | docker login harbor.fatihk.tr -u "$REGISTRY_USER" --password-stdin'
                 }
 
                 script {
@@ -153,7 +155,8 @@ pipeline {
 
                 // The script does the rest: it refuses an uncommitted tree,
                 // builds one manifest rather than an OCI index (GitLab's
-                // registry rejects the index), renders both nginx templates
+                // registry rejected the index, and Harbor cannot scan the
+                // build attestation an index carries), renders both nginx templates
                 // inside the built image and runs nginx -t on them, and only
                 // then pushes.
                 sh '''
@@ -163,7 +166,7 @@ pipeline {
             }
             post {
                 always {
-                    sh 'docker logout registry.fatihk.tr || true'
+                    sh 'docker logout harbor.fatihk.tr || true'
                     sh 'docker logout || true'
                 }
             }

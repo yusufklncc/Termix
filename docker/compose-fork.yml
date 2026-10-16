@@ -7,8 +7,9 @@
 #
 #   docker compose -f docker-compose.yml -f compose-fork.yml up -d
 #
-# The GitLab project is public, so this pulls without a login. Docker Hub
-# holds the same images up to 2.9.2-rdp.11 and nothing after it.
+# The Harbor project is public, so this pulls without a login. The GitLab
+# registry (registry.fatihk.tr/yusufihsankilinc/termix) holds the same images
+# up to 2.9.2-rdp.13, Docker Hub up to 2.9.2-rdp.11, and nothing after it.
 #
 # To build from a checkout rather than pull, drop this overlay and use
 # compose-dev.yml, which builds both the application and the bridge.
@@ -18,4 +19,4 @@
 # either way.
 services:
   termix:
-    image: registry.fatihk.tr/yusufihsankilinc/termix:latest
+    image: harbor.fatihk.tr/flab/termix:latest

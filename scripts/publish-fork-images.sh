@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds and publishes this fork's images to the GitLab registry.
+# Builds and publishes this fork's images to Harbor (the flab project).
 #
 # The nginx config is rendered from a template at container start, so a
 # config that does not parse only shows up as a restart loop on the server.
@@ -13,10 +13,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-GITLAB_REGISTRY="${GITLAB_REGISTRY:-registry.fatihk.tr/yusufihsankilinc/termix}"
+# The GitLab registry (registry.fatihk.tr/yusufihsankilinc/termix) held the
+# images until 2026-10-16 and still has everything up to 2.9.2-rdp.13.
+REGISTRY="${REGISTRY:-harbor.fatihk.tr/flab/termix}"
 DOCKER_HUB_NS="${DOCKER_HUB_NS:-yusufklncc}"
-# Off since 2026-10-10: the server pulls from GitLab, which is what Docker
-# Hub was kept alongside for. Set to 1 to publish there as well.
+# Off since 2026-10-10: the server pulls from our own registry, which is what
+# Docker Hub was kept alongside for. Set to 1 to publish there as well.
 DOCKER_HUB="${DOCKER_HUB:-0}"
 
 component="${1:-}"
@@ -30,19 +32,19 @@ case "$component" in
   app)
     dockerfile="docker/Dockerfile"
     context="$ROOT"
-    gitlab_image="$GITLAB_REGISTRY"
+    image="$REGISTRY"
     hub_image="$DOCKER_HUB_NS/termix"
     ;;
   netmgr)
     dockerfile="docker/net-manager/Dockerfile"
     context="$ROOT/docker/net-manager"
-    gitlab_image="$GITLAB_REGISTRY/netmgr"
+    image="$REGISTRY/netmgr"
     hub_image="$DOCKER_HUB_NS/termix-netmgr"
     ;;
   bridge)
     dockerfile="docker/freerdp-bridge/Dockerfile"
     context="$ROOT/docker/freerdp-bridge"
-    gitlab_image="$GITLAB_REGISTRY/rdp-bridge"
+    image="$REGISTRY/rdp-bridge"
     hub_image="$DOCKER_HUB_NS/termix-rdp-bridge"
     ;;
   *)
@@ -66,8 +68,9 @@ echo "==> building $component $tag from $commit"
 # --provenance/--sbom off on purpose. With them on, buildx wraps the image
 # in an OCI index alongside an attestation manifest, and `docker push`
 # writes the index before the manifest it points at -- which the GitLab
-# registry rejects with "blob unknown to registry", after uploading every
-# layer. One plain manifest pushes to both registries.
+# registry rejected with "blob unknown to registry", after uploading every
+# layer, and Harbor cannot scan the attestation. One plain manifest pushes
+# to every registry and scans.
 docker build --provenance=false --sbom=false \
   -t "$local_tag" -f "$ROOT/$dockerfile" "$context"
 
@@ -88,7 +91,7 @@ if [ "$component" = "app" ]; then
     done'
 fi
 
-targets=("$gitlab_image:$tag" "$gitlab_image:latest")
+targets=("$image:$tag" "$image:latest")
 if [ "$DOCKER_HUB" != "0" ]; then
   targets+=("$hub_image:$tag" "$hub_image:latest")
 fi

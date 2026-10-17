@@ -171,8 +171,13 @@ CLAUDE.md'nin **Faz 3** tarifine denk düşüyor. Selkies adapter'ı hangi moda 
       **fiziksel gecikme ölçülmedi**. LAN/WAN yok, her şey tek makinede loopback.
 - [x] Sunucu CPU — **Termix backend %0.30**, akış sürerken (neko aynı anda ~%240).
       Medyanın Termix'ten geçmediği hem CPU'yla hem ICE candidate pair'le doğrulandı.
-- [ ] Guacamole yolu ile karşılaştırma — **yapılmadı**. Bu fazın kazancını rakamla
-      söyleyebilmek için şart; Faz 4'e kaldı.
+- [x] ~~Guacamole yolu ile karşılaştırma~~ — **yapılamaz, Faz 4'te gerekçelendirildi.**
+      Stream yolu bir Windows RDP host'una bağlanamaz; harici bir WebRTC yayıncısı
+      (neko, Selkies) ister. Aynı hedefte iki yolu birden ölçmek mümkün değil, o
+      yüzden bu yolun kendi ölçümü ayrı duruyor
+      ([`stream-webrtc-measurement.md`](docs/stream-webrtc-measurement.md)).
+      Guacamole ↔ Direct H.264 karşılaştırması ise **yapıldı**, bkz.
+      [`phase4-comparison.md`](docs/phase4-comparison.md).
 
 **Çıktı:** ölçüldü → [`docs/stream-webrtc-measurement.md`](docs/stream-webrtc-measurement.md)
 Kod tarafı bitti. Açık kalanlar: fiziksel gecikme, gerçek LAN/WAN, Guacamole karşılaştırması,

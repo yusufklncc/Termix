@@ -13,7 +13,8 @@ db
 old_db
 ssl
 uploads
-plugins
+# Not ignored here: upstream ships every plugin as a pinned artifact, but
+# this fork builds five from plugins/ and the backend stage needs them.
 .env
 .env.*
 .mcp.json

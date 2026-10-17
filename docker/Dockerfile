@@ -1,3 +1,13 @@
+# Stage 0: every plugin's package.json and manifest.json and nothing else.
+# npm ci needs each workspace package.json in place or it silently skips it,
+# and a glob COPY flattens paths, so the tree is trimmed here instead. The
+# deps layer below stays cached until one of these files changes. Upstream
+# has no plugins in the tree and dropped this stage; this fork builds five.
+FROM node:24-slim AS workspace-manifests
+WORKDIR /src
+COPY plugins ./plugins
+RUN find plugins -mindepth 2 -maxdepth 2 ! -name package.json ! -name manifest.json -exec rm -rf {} +
+
 # Stage 1: Install dependencies
 # The builders only produce JS, so they run on the build machine's own arch
 # once instead of under QEMU per target. Rolldown hangs under arm64 emulation.
@@ -8,6 +18,7 @@ RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt
 
 COPY package*.json ./
 COPY packages/plugin-sdk/package.json ./packages/plugin-sdk/package.json
+COPY --from=workspace-manifests /src/plugins ./plugins
 COPY .npmrc ./
 COPY vendor ./vendor
 

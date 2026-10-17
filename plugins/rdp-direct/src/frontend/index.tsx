@@ -4,7 +4,7 @@ import type {
   TermixApp,
   TabProps,
   PluginHostRecord,
-} from "@termix/plugin-sdk/frontend";
+} from "@termix-ssh/plugin-sdk/frontend";
 import RdpDirectApp, { type RdpDirectAppHandle } from "./RdpDirectApp.js";
 
 const PLUGIN_ID = "rdp-direct";

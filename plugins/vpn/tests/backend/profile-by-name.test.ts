@@ -15,7 +15,7 @@ import type {
   VpnProfileRecord,
   VpnProfileRepository,
 } from "../../src/backend/repository";
-import type { PluginContext } from "@termix/plugin-sdk/backend";
+import type { PluginContext } from "@termix-ssh/plugin-sdk/backend";
 
 const profile = (over: Partial<VpnProfileRecord> = {}): VpnProfileRecord =>
   ({

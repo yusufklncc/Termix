@@ -1,6 +1,9 @@
 import net from "node:net";
 import type { Duplex } from "node:stream";
-import type { PluginContext, PluginSshHost } from "@termix/plugin-sdk/backend";
+import type {
+  PluginContext,
+  PluginSshHost,
+} from "@termix-ssh/plugin-sdk/backend";
 import { resolveTunnelEndpoint } from "./tunnel-endpoint.js";
 
 export interface BridgeTunnel {

@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   importedHostUsername,
+  notifyImportedHosts,
   parseSSHConfig,
 } from "../../../database/routes/host-bulk-routes.js";
+import { pluginEvents, TOPICS } from "../../../plugins/events.js";
 
 describe("parseSSHConfig", () => {
   it("parses a basic Host block", () => {
@@ -90,6 +92,13 @@ Host alias-only
     expect(result).toHaveLength(0);
   });
 
+  it("accepts tabs and = between keywords and values", () => {
+    const config = "Host\tweb\n\tHostName=10.0.0.5\n\tUser = deploy\n";
+    expect(parseSSHConfig(config)).toEqual([
+      { name: "web", hostname: "10.0.0.5", user: "deploy" },
+    ]);
+  });
+
   it("defaults port to undefined when not specified", () => {
     const config = `
 Host server
@@ -124,5 +133,23 @@ describe("importedHostUsername", () => {
     expect(importedHostUsername("ssh", "credential", "guest-admin")).toBe(
       "guest-admin",
     );
+  });
+});
+
+describe("notifyImportedHosts", () => {
+  it("sends a host update for every imported host", () => {
+    const seen: unknown[] = [];
+    const off = pluginEvents.on(TOPICS.hostUpdated, (payload) => {
+      seen.push(payload);
+    });
+    try {
+      notifyImportedHosts("user-1", [4, 7]);
+    } finally {
+      off();
+    }
+    expect(seen).toEqual([
+      { hostId: 4, userId: "user-1" },
+      { hostId: 7, userId: "user-1" },
+    ]);
   });
 });

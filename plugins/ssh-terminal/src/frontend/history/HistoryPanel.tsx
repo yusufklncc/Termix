@@ -1,11 +1,11 @@
 import { useState, useEffect } from "react";
 import { Copy, Search, Terminal, Trash2 } from "lucide-react";
-import { copyToClipboard, Button, Input } from "@termix/plugin-sdk/ui";
+import { copyToClipboard, Button, Input } from "@termix-ssh/plugin-sdk/ui";
 import {
   usePluginApi,
   useTranslation,
   type PanelProps,
-} from "@termix/plugin-sdk/frontend";
+} from "@termix-ssh/plugin-sdk/frontend";
 import {
   clearCommandHistory,
   deleteCommandFromHistory,

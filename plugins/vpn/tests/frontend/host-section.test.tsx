@@ -3,11 +3,11 @@ import { render, fireEvent, waitFor } from "@testing-library/react";
 import { createHostVpnSection } from "../../src/frontend/HostVpnSection";
 import type { VpnApi, VpnProfile } from "../../src/frontend/api";
 
-vi.mock("@termix/plugin-sdk/frontend", () => ({
+vi.mock("@termix-ssh/plugin-sdk/frontend", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-vi.mock("@termix/plugin-sdk/ui", () => ({
+vi.mock("@termix-ssh/plugin-sdk/ui", () => ({
   SettingRow: ({ children }: { children: React.ReactNode }) => (
     <div>{children}</div>
   ),

@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import type { PluginContext } from "@termix/plugin-sdk/backend";
+import type { PluginContext } from "@termix-ssh/plugin-sdk/backend";
 import { vpnProfiles } from "./tables.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */

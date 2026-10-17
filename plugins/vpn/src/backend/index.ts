@@ -1,5 +1,5 @@
 import type { Router } from "express";
-import type { PluginContext } from "@termix/plugin-sdk/backend";
+import type { PluginContext } from "@termix-ssh/plugin-sdk/backend";
 import { createGatewayService } from "./gateway.js";
 import { setNetManagerLogger } from "./net-manager-client.js";
 import { VpnProfileRepository } from "./repository.js";

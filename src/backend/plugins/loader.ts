@@ -20,7 +20,7 @@ import * as tar from "tar";
 import { pluginLogger } from "../utils/logger.js";
 import { isTermixCompatible, parseManifest } from "./manifest.js";
 import { getLocalVersion } from "../utils/app-version.js";
-import type { PluginManifest } from "@termix/plugin-sdk/manifest";
+import type { PluginManifest } from "@termix-ssh/plugin-sdk/manifest";
 import {
   getBundledPluginsDir,
   getPluginBackendEntry,
@@ -28,7 +28,12 @@ import {
   getPluginsDir,
   getUnpackedPluginsDir,
 } from "./paths.js";
-import { requireSignedPlugins, verifyPluginArtifact } from "./trust.js";
+import {
+  requireSignedPlugins,
+  verifyAnyTrusted,
+  type KeyTier,
+} from "./trust.js";
+import { moveWithRetry } from "./fs-retry.js";
 import {
   createPluginContext,
   createPluginHandle,
@@ -39,7 +44,8 @@ import {
 import { resolveRequirements } from "./service-registry.js";
 import { resolveSecretRequirements } from "./secret-registry.js";
 import { recordConflict } from "./conflicts.js";
-import { tablePrefix } from "@termix/plugin-sdk/db";
+import { installHostModuleFallback } from "./host-modules.js";
+import { tablePrefix } from "@termix-ssh/plugin-sdk/db";
 
 export type PluginState =
   | "loaded"
@@ -75,6 +81,8 @@ export interface LoadedPlugin {
   artifact?: string;
   /** Key id that signed the artifact, when a trusted key signed it. */
   signedBy?: string;
+  /** Which set of keys that key belongs to. */
+  signedTier?: KeyTier;
 }
 
 export interface PluginLoaderOptions {
@@ -90,6 +98,14 @@ export class PluginLoader {
   private readonly bundledVersions = new Map<string, string>();
   /** Activation order, so shutdown can run it backwards. */
   private activationOrder: string[] = [];
+  /**
+   * Bundled plugins an admin uninstalled. The shipped copy is ignored as if
+   * it were not there, so a reinstall from the registry loads as a normal
+   * download and a recreated image cannot bring the old copy back.
+   */
+  private uninstalled = new Set<string>();
+  /** Versions an admin pinned, which may sit below the bundled copy. */
+  private pinned = new Map<string, string>();
 
   constructor(private readonly options: PluginLoaderOptions = {}) {}
 
@@ -109,6 +125,33 @@ export class PluginLoader {
         .filter((plugin) => plugin.source === "bundled")
         .map((plugin) => plugin.id),
     ]);
+  }
+
+  setUninstalled(ids: Iterable<string>): void {
+    this.uninstalled = new Set(ids);
+    for (const id of this.uninstalled) this.bundledVersions.delete(id);
+  }
+
+  setPinned(pins: Map<string, string>): void {
+    this.pinned = new Map(pins);
+  }
+
+  /** Version of the copy that ships in the image, loaded or not. */
+  bundledVersion(pluginId: string): string | undefined {
+    return this.bundledVersions.get(pluginId);
+  }
+
+  /** Loads the shipped copy of a bundled plugin, e.g. after a reinstall. */
+  async loadBundled(pluginId: string): Promise<LoadedPlugin> {
+    if (!PLUGIN_ID_PATTERN.test(pluginId)) {
+      throw new Error(`invalid plugin id "${pluginId}"`);
+    }
+    const plugin = await this.load(
+      path.join(getBundledPluginsDir(), pluginId),
+      "bundled",
+    );
+    this.bundledVersions.set(plugin.id, plugin.manifest.version);
+    return plugin;
   }
 
   /** Drops a stopped plugin from the list, so a new copy can load in its place. */
@@ -215,6 +258,7 @@ export class PluginLoader {
   async loadAll(): Promise<LoadedPlugin[]> {
     this.plugins.clear();
     this.bundledVersions.clear();
+    await removeStaleStaging();
     const loaded: LoadedPlugin[] = [];
     // Every bundled folder name, loaded or not: a bundled plugin that fails
     // to load must not leave its id free for a user plugin to take.
@@ -231,7 +275,10 @@ export class PluginLoader {
       const entries = await fs.promises.readdir(root, { withFileTypes: true });
       if (source === "bundled") {
         for (const entry of entries) {
-          if (entry.isDirectory()) bundledIds.add(entry.name);
+          if (!entry.isDirectory() || this.uninstalled.has(entry.name)) {
+            continue;
+          }
+          bundledIds.add(entry.name);
         }
       }
 
@@ -244,6 +291,7 @@ export class PluginLoader {
         if (entry.isDirectory() && entry.name.startsWith(".")) continue;
 
         const dir = path.join(root, entry.name);
+        if (source === "bundled" && this.uninstalled.has(entry.name)) continue;
         try {
           if (isArtifact) {
             const plugin = await this.loadArtifact(dir, bundledIds);
@@ -303,10 +351,11 @@ export class PluginLoader {
     const buffer = await fs.promises.readFile(file);
     const sigFile = `${file}.sig`;
     let signedBy: string | undefined;
+    let signedTier: KeyTier | undefined;
 
     if (fs.existsSync(sigFile)) {
       const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
-      const result = verifyPluginArtifact(
+      const result = verifyAnyTrusted(
         buffer,
         sha256,
         await fs.promises.readFile(sigFile, "utf8"),
@@ -315,9 +364,17 @@ export class PluginLoader {
         throw new Error(`signature check failed: ${result.reason}`);
       }
       signedBy = result.keyId;
+      signedTier = result.tier;
     } else if (requireSignedPlugins()) {
       throw new Error(
         `TERMIX_REQUIRE_SIGNED_PLUGINS is on and ${path.basename(file)} has no .sig next to it`,
+      );
+    }
+
+    const unsafe = await unsafeArchivePath(file);
+    if (unsafe) {
+      throw new Error(
+        `${path.basename(file)} has a file outside the plugin folder: ${unsafe}`,
       );
     }
 
@@ -353,8 +410,9 @@ export class PluginLoader {
         assertBundledUpdate(
           id,
           raw?.version,
-          signedBy,
+          signedTier === "official" ? signedBy : undefined,
           this.bundledVersions.get(id) ?? replaced?.manifest.version,
+          this.pinned.get(id),
         );
       } else if (this.plugins.has(id)) {
         throw new Error(`another plugin already uses the id "${id}"`);
@@ -364,8 +422,12 @@ export class PluginLoader {
       }
 
       const target = path.join(unpackedRoot, id);
-      await fs.promises.rm(target, { recursive: true, force: true });
-      await fs.promises.rename(staging, target);
+      await fs.promises.rm(target, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+      });
+      await moveWithRetry(staging, target);
 
       if (replaced) this.plugins.delete(id);
       try {
@@ -373,6 +435,7 @@ export class PluginLoader {
         const plugin = await this.load(target, isUpdate ? "bundled" : "user");
         plugin.artifact = file;
         plugin.signedBy = signedBy;
+        plugin.signedTier = signedTier;
         if (replaced) {
           pluginLogger.info(
             `Plugin ${id} updated from ${replaced.manifest.version} to ${plugin.manifest.version}`,
@@ -385,7 +448,15 @@ export class PluginLoader {
         throw error;
       }
     } finally {
-      await fs.promises.rm(staging, { recursive: true, force: true });
+      // Never let a failed cleanup hide the error that got us here.
+      await fs.promises
+        .rm(staging, { recursive: true, force: true, maxRetries: 5 })
+        .catch((error) =>
+          pluginLogger.warn(`Could not remove ${staging}`, {
+            operation: "plugin_load",
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
     }
   }
 
@@ -437,7 +508,11 @@ export class PluginLoader {
           state.set(id, "done");
           return false;
         }
-        if (!semver.satisfies(dependency.manifest.version, range)) {
+        if (
+          !semver.satisfies(dependency.manifest.version, range, {
+            includePrerelease: true,
+          })
+        ) {
           blocked.set(
             id,
             `requires "${dependencyId}" ${range}, but ${dependency.manifest.version} is installed`,
@@ -502,6 +577,7 @@ export class PluginLoader {
     )}`;
 
     try {
+      installHostModuleFallback();
       const imported = (await import(entry)) as {
         activate?: PluginModule["activate"];
         deactivate?: PluginModule["deactivate"];
@@ -547,8 +623,11 @@ export class PluginLoader {
       // than leave it half-running against a schema that is not there. A
       // throw here lands in the catch below, which fails this plugin only.
       const { migratePlugin } = await import("./data.js");
+      // A release signed by a trusted key is official whether it shipped in
+      // the image or was downloaded, so it may adopt its 2.8 tables too.
       const applied = await migratePlugin(plugin.id, plugin.dir, {
-        bundled: plugin.source === "bundled",
+        bundled:
+          plugin.source === "bundled" || plugin.signedTier === "official",
       });
       // A new table may be where core data is waiting to move.
       if (applied.length > 0) {
@@ -776,15 +855,18 @@ export function assertBundledUpdate(
   version: unknown,
   signedBy: string | undefined,
   bundledVersion: string | undefined,
+  pinnedVersion?: string,
 ): void {
   if (!signedBy) {
     throw new Error(
-      `a bundled plugin already uses the id "${id}"; only a signed update can replace it`,
+      `a bundled plugin already uses the id "${id}"; only an official signed update can replace it`,
     );
   }
   if (typeof version !== "string" || !semver.valid(version)) {
     throw new Error(`update for "${id}" has no valid version`);
   }
+  // An admin pinning an exact older release is the one allowed downgrade.
+  if (pinnedVersion && pinnedVersion === version) return;
   if (bundledVersion && !semver.gt(version, bundledVersion)) {
     throw new Error(
       `update for "${id}" is ${version}, which is not newer than the bundled ${bundledVersion}`,
@@ -828,5 +910,46 @@ export function isRealPathInside(root: string, target: string): boolean {
     );
   } catch {
     return false;
+  }
+}
+
+/**
+ * The first entry that would land outside the folder it is unpacked into,
+ * or null. tar skips these on its own, but its stream keeps writing after
+ * it rejects, so they are refused before anything is unpacked.
+ */
+export async function unsafeArchivePath(file: string): Promise<string | null> {
+  let unsafe: string | null = null;
+  await tar.t({
+    file,
+    onReadEntry: (entry) => {
+      const name = entry.path.replace(/\\/g, "/");
+      if (
+        !unsafe &&
+        (name.startsWith("/") ||
+          /^[a-zA-Z]:/.test(name) ||
+          name.split("/").includes(".."))
+      ) {
+        unsafe = entry.path;
+      }
+    },
+  });
+  return unsafe;
+}
+
+/** Clears unpack folders an install left behind when the process died. */
+export async function removeStaleStaging(): Promise<void> {
+  const root = getUnpackedPluginsDir();
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.promises.readdir(root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(".staging-")) continue;
+    await fs.promises
+      .rm(path.join(root, entry.name), { recursive: true, force: true })
+      .catch(() => {});
   }
 }

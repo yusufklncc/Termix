@@ -1,5 +1,8 @@
 import net from "node:net";
-import type { PluginContext, PluginSshHost } from "@termix/plugin-sdk/backend";
+import type {
+  PluginContext,
+  PluginSshHost,
+} from "@termix-ssh/plugin-sdk/backend";
 import { resolveRdpBridgeOptions } from "./bridge-config.js";
 import { resolveDisplaySize } from "./display-size.js";
 import { readHostSettings } from "./host-settings.js";

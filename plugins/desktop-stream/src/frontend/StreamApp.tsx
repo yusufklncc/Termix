@@ -5,9 +5,9 @@ import React, {
   useCallback,
   useImperativeHandle,
 } from "react";
-import { useTranslation } from "@termix/plugin-sdk/frontend";
+import { useTranslation } from "@termix-ssh/plugin-sdk/frontend";
 import { AlertCircle, RefreshCw, ExternalLink } from "lucide-react";
-import { Button } from "@termix/plugin-sdk/ui";
+import { Button } from "@termix-ssh/plugin-sdk/ui";
 import { buildStreamUrl } from "./stream-url.js";
 import { attachNekoInput, attachSelkiesInput } from "./stream-input.js";
 import {

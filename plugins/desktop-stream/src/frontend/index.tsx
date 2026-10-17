@@ -4,7 +4,7 @@ import type {
   TermixApp,
   TabProps,
   PluginHostRecord,
-} from "@termix/plugin-sdk/frontend";
+} from "@termix-ssh/plugin-sdk/frontend";
 import StreamApp, {
   type StreamAppHandle,
   type StreamSettings,

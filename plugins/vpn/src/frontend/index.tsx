@@ -1,5 +1,5 @@
 import { Waypoints } from "lucide-react";
-import type { TermixApp, PanelProps } from "@termix/plugin-sdk/frontend";
+import type { TermixApp, PanelProps } from "@termix-ssh/plugin-sdk/frontend";
 import { createVpnApi } from "./api.js";
 import { createHostVpnSection } from "./HostVpnSection.js";
 import { VpnsPanel } from "./VpnsPanel.js";

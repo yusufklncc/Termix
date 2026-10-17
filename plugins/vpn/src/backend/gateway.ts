@@ -1,5 +1,5 @@
 import net from "node:net";
-import type { PluginContext } from "@termix/plugin-sdk/backend";
+import type { PluginContext } from "@termix-ssh/plugin-sdk/backend";
 import {
   managedDoorPort,
   resolveInManagedNetwork,

@@ -1,4 +1,4 @@
-import type { PluginContext } from "@termix/plugin-sdk/backend";
+import type { PluginContext } from "@termix-ssh/plugin-sdk/backend";
 import { readHostSettings } from "./host-settings.js";
 import { NekoAdapter } from "./neko-adapter.js";
 import { SelkiesAdapter } from "./selkies-adapter.js";

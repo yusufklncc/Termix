@@ -24,6 +24,8 @@ const ALLOWED = [
   /^src\/backend\/tests\//,
   /^src\/ui\/tests\//,
   /^scripts\//,
+  // This fork keeps plugins in the tree -- three of its own and two of
+  // upstream's that it patches -- and each one's tests live beside it.
   /^plugins\/[^/]+\/tests\//,
 ];
 
@@ -50,7 +52,7 @@ function main() {
   const found = misplaced();
   if (found.length === 0) return;
   console.error(
-    "Tests belong in src/backend/tests/, src/ui/tests/, scripts/ or plugins/<id>/tests/, mirroring the source:",
+    "Tests belong in src/backend/tests/, src/ui/tests/ or scripts/, mirroring the source:",
   );
   for (const file of found) console.error(`  ${file}`);
   process.exit(1);

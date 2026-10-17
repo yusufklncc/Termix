@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useTranslation } from "@termix/plugin-sdk/frontend";
+import { useTranslation } from "@termix-ssh/plugin-sdk/frontend";
 
 import type { VpnApi, VpnProfile } from "./api.js";
 import { VpnProfileManager } from "./VpnProfileManager.js";

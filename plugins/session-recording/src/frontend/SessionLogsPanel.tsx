@@ -11,7 +11,7 @@ import {
   useToast,
   usePluginApi,
   usePermission,
-} from "@termix/plugin-sdk/frontend";
+} from "@termix-ssh/plugin-sdk/frontend";
 import {
   Input,
   Tooltip,
@@ -19,7 +19,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
   copyToClipboard,
-} from "@termix/plugin-sdk/ui";
+} from "@termix-ssh/plugin-sdk/ui";
 import {
   ArrowLeft,
   Check,

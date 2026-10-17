@@ -29,11 +29,12 @@ const pty = require("node-pty");
 const WebSocket = require("ws");
 const linkedServer = require("./linked-server.cjs");
 const desktopSettings = require("./desktop-settings.cjs");
+const autoUpdates = require("./auto-updater.cjs");
 const { launchNativeRdp } = require("./native-rdp.cjs");
 const { isCloseActiveTabInput } = require("./keyboard-shortcuts.cjs");
 const { quitApp } = require("./app-quit.cjs");
 const { selectLinuxPasswordStore } = require("./linux-password-store.cjs");
-const { resolveLocalShell } = require("./local-shell.cjs");
+const { resolveLocalShell, repairSpawnHelpers } = require("./local-shell.cjs");
 const { registerLocalFileHandlers } = require("./local-files.cjs");
 
 const localTerminalSessions = new Map();
@@ -644,17 +645,30 @@ const BACKEND_REQUEST_HANDLERS = {
   },
 };
 
+function isDevRunner() {
+  return (
+    process.env.TERMIX_DEV_RUNNER === "true" &&
+    typeof process.send === "function"
+  );
+}
+
 async function handleBackendRequest(msg) {
   if (!msg || msg.type !== "backend-request") return;
   const { id, channel, payload } = msg;
   const handler = BACKEND_REQUEST_HANDLERS[channel];
+  // Under npm run dev:electron the runner owns the backend and relays these messages.
+  const target =
+    backendProcess && !backendProcess.killed
+      ? backendProcess
+      : isDevRunner()
+        ? process
+        : null;
   const reply = (response) => {
-    if (backendProcess && !backendProcess.killed) {
-      try {
-        backendProcess.send({ type: "backend-response", id, ...response });
-      } catch (error) {
-        logToFile("Failed to reply to backend request:", error.message);
-      }
+    if (!target) return;
+    try {
+      target.send({ type: "backend-response", id, ...response });
+    } catch (error) {
+      logToFile("Failed to reply to backend request:", error.message);
     }
   };
   if (!handler) {
@@ -1028,7 +1042,7 @@ function getBackendPaths() {
       backendCwd: backendDir,
     };
   }
-  // fork() does not go through Electron's asar redirector — use the unpacked path.
+  // fork() does not go through Electron's asar redirector, use the unpacked path.
   // On macOS multi-arch builds (mergeASARs: false), electron-builder names the ASAR
   // app-arm64.asar / app-x64.asar instead of app.asar, so match all variants.
   const unpackedRoot = getUnpackedAppRoot(appRoot);
@@ -1290,7 +1304,7 @@ function createTray() {
   try {
     const { nativeImage } = require("electron");
 
-    // Native APIs (Tray, nativeImage) can't load files from inside app.asar —
+    // Native APIs (Tray, nativeImage) can't load files from inside app.asar,
     // use the unpacked path so the OS sees a real file.
     const publicRoot = isDev
       ? path.join(appRoot, "public")
@@ -1448,6 +1462,14 @@ function createWindow() {
       details.requestHeaders["X-Electron-App"] = "true";
 
       details.requestHeaders["User-Agent"] = customUserAgent;
+
+      // YouTube refuses embeds without a Referer, which file:// never sends.
+      if (
+        details.url.startsWith("https://www.youtube-nocookie.com/embed/") &&
+        !details.requestHeaders.Referer
+      ) {
+        details.requestHeaders.Referer = "https://termix.site/";
+      }
 
       const rememberedJwt = getRememberedElectronAuthCookie("jwt", details.url);
       if (rememberedJwt) {
@@ -1731,6 +1753,65 @@ ipcMain.handle("save-desktop-settings", (_event, settings) => {
   return desktopSettings.saveDesktopSettings(settings);
 });
 
+let appUpdater = null;
+
+function startAppUpdater() {
+  const kind = autoUpdates.getInstallKind({
+    platform: process.platform,
+    arch: process.arch,
+    isPackaged: app.isPackaged,
+    mas: !!process.mas,
+    env: process.env,
+    execPath: process.execPath,
+    resourcesPath: process.resourcesPath,
+    exists: (target) => fs.existsSync(target),
+    readFile: (target) => fs.readFileSync(target, "utf8"),
+  });
+  logToFile("Updater install kind:", kind);
+  appUpdater = autoUpdates.createUpdater({
+    currentVersion: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+    kind,
+    getMode: () => desktopSettings.getDesktopSettings().updateMode,
+    saveMode: (mode) =>
+      desktopSettings.saveDesktopSettings({ updateMode: mode }),
+    fetchReleases: async () => {
+      const { net } = require("electron");
+      const response = await net.fetch(autoUpdates.RELEASES_API, {
+        headers: { Accept: "application/vnd.github+json" },
+      });
+      if (!response.ok) {
+        throw new Error(`GitHub releases returned ${response.status}`);
+      }
+      return response.json();
+    },
+    loadAutoUpdater: () => require("electron-updater").autoUpdater,
+    send: (state) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("desktop-update-state", state);
+      }
+    },
+    log: logToFile,
+    beforeInstall: () => {
+      isQuitting = true;
+    },
+  });
+  appUpdater.start();
+}
+
+ipcMain.handle(
+  "desktop-update-get-state",
+  () => appUpdater?.getState() ?? null,
+);
+ipcMain.handle("desktop-update-check", () => appUpdater?.check() ?? null);
+ipcMain.handle("desktop-update-download", () => appUpdater?.download() ?? null);
+ipcMain.handle("desktop-update-install", () => appUpdater?.install() ?? false);
+ipcMain.handle(
+  "desktop-update-set-mode",
+  (_event, mode) => appUpdater?.setMode(mode) ?? null,
+);
+
 // The server an older version of the app was pointed at, offered again when
 // linking so upgraded installs do not have to look it up.
 ipcMain.handle("get-previous-server-url", () => {
@@ -1902,6 +1983,16 @@ const c2sTunnelRuntimes = new Map();
 const C2S_WS_HIGH_WATERMARK = 1024 * 1024;
 const C2S_WS_LOW_WATERMARK = 256 * 1024;
 const C2S_STREAM_WRITE_LIMIT = 8 * 1024 * 1024;
+
+// A proxy in front of the server may drop an idle WebSocket, which stopped
+// the tunnel. Pings count as traffic.
+function keepC2SSocketAlive(ws) {
+  const timer = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) ws.ping();
+  }, 25_000);
+  timer.unref?.();
+  ws.once("close", () => clearInterval(timer));
+}
 
 // C2S (client-to-server) tunnels relay through the server this desktop is
 // linked to, not the embedded backend.
@@ -2166,16 +2257,12 @@ async function openC2SRelay(
     targetHost,
     targetPort,
   });
-  setC2STunnelStatus(tunnelName, {
-    connected: false,
-    status: "CONNECTING",
-    reason: `Opening relay to ${targetHost}:${targetPort}`,
-  });
   const ws = new WebSocket(
     relayUrl,
     getWebSocketOptions(relayUrl, { headers }),
   );
   attachC2SAuth(ws, tunnel.name || getC2STunnelName(tunnel));
+  keepC2SSocketAlive(ws);
   const pendingChunks = [];
   let ready = false;
   let closed = false;
@@ -2205,13 +2292,16 @@ async function openC2SRelay(
 
   socket.on("data", sendChunk);
   socket.on("close", cleanup);
+  // One connection failing must not stop the tunnel: the listener refuses
+  // new connections while the tunnel is not connected, and a browser opens
+  // many at once.
   socket.on("error", (error) => {
-    setC2STunnelError(tunnelName, error.message || "Local socket error");
+    logToFile(`[c2s] ${tunnelName} local socket error:`, error.message);
     cleanup();
   });
   ws.on("close", cleanup);
   ws.on("error", (error) => {
-    setC2STunnelError(tunnelName, error.message || "Relay connection failed");
+    logToFile(`[c2s] ${tunnelName} relay error:`, error.message);
     cleanup();
   });
 
@@ -2238,10 +2328,6 @@ async function openC2SRelay(
       if (message.type === "ready") {
         ready = true;
         logToFile(`[c2s] relay ready for ${tunnelName}`);
-        setC2STunnelStatus(tunnelName, {
-          connected: true,
-          status: "CONNECTED",
-        });
         if (initialData?.length) {
           ws.send(initialData);
         }
@@ -2254,12 +2340,13 @@ async function openC2SRelay(
           "Relay rejected the client tunnel",
         );
         logToFile("[c2s] relay error:", relayError);
-        setC2STunnelError(tunnelName, relayError);
+        if (relayError === C2S_REMOTE_SESSION_EXPIRED_ERROR) {
+          setC2STunnelError(tunnelName, relayError);
+        }
         cleanup();
       }
     } catch (error) {
       logToFile("[c2s] invalid relay message:", error.message);
-      setC2STunnelError(tunnelName, error.message || "Invalid relay response");
       cleanup();
     }
   });
@@ -2283,6 +2370,7 @@ async function testC2SRelay(
     getWebSocketOptions(relayUrl, { headers }),
   );
   attachC2SAuth(ws, tunnel.name || getC2STunnelName(tunnel));
+  keepC2SSocketAlive(ws);
 
   if (runtime) runtime.authSocket = ws;
   return new Promise((resolve) => {
@@ -2485,7 +2573,9 @@ function handleC2SLocalConnection(tunnel, socket, authToken) {
       "Local relay failed",
     );
     logToFile("[c2s] local relay failed:", message);
-    setC2STunnelError(tunnelName, message);
+    if (message === C2S_REMOTE_SESSION_EXPIRED_ERROR) {
+      setC2STunnelError(tunnelName, message);
+    }
     socket.destroy();
   });
 }
@@ -2591,6 +2681,7 @@ async function startC2SRemoteTunnel(tunnel, index = 0, authToken) {
     getWebSocketOptions(relayUrl, { headers }),
   );
   attachC2SAuth(ws, tunnel.name || getC2STunnelName(tunnel));
+  keepC2SSocketAlive(ws);
   const sockets = new Map();
   let closed = false;
 
@@ -3222,17 +3313,32 @@ ipcMain.handle("local-terminal-start", (event, dimensions = {}) => {
   const rows = Math.min(300, Math.max(1, Number(dimensions.rows) || 24));
   const sessionId = crypto.randomUUID();
   const shellConfig = resolveLocalShell(process.platform, dimensions.shell);
-  const child = pty.spawn(shellConfig.file, shellConfig.args, {
-    name: "xterm-256color",
-    cols,
-    rows,
-    cwd: os.homedir(),
-    env: {
-      ...process.env,
-      TERM: "xterm-256color",
-      COLORTERM: "truecolor",
-    },
-  });
+  const spawnShell = () =>
+    pty.spawn(shellConfig.file, shellConfig.args, {
+      name: "xterm-256color",
+      cols,
+      rows,
+      cwd: os.homedir(),
+      env: {
+        ...process.env,
+        TERM: "xterm-256color",
+        COLORTERM: "truecolor",
+      },
+    });
+  let child;
+  try {
+    child = spawnShell();
+  } catch (error) {
+    const ptyDir = path.dirname(require.resolve("node-pty/package.json"));
+    if (
+      !String(error?.message).includes("posix_spawnp") ||
+      repairSpawnHelpers(ptyDir) === 0
+    ) {
+      throw error;
+    }
+    logToFile("[local-terminal] restored the spawn-helper execute bit");
+    child = spawnShell();
+  }
   const ownerId = event.sender.id;
   const session = { ownerId, process: child, ready: false, buffered: "" };
   localTerminalSessions.set(sessionId, session);
@@ -3762,12 +3868,16 @@ app.whenReady().then(async () => {
     logToFile("startBackendServer result:", result);
   } else {
     logToFile(
-      "Skipping embedded backend (isDev=true) - expecting separate dev:backend process",
+      "Skipping embedded backend (isDev=true) - expecting the dev runner's backend",
     );
+    if (isDevRunner()) {
+      process.on("message", (msg) => void handleBackendRequest(msg));
+    }
   }
 
   createTray();
   createWindow();
+  startAppUpdater();
   desktopSettings.removeOldSyncFiles();
   logToFile("=== Startup complete ===");
 });

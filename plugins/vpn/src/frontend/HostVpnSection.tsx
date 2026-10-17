@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import {
   useTranslation,
   type HostEditorSectionProps,
-} from "@termix/plugin-sdk/frontend";
-import { SettingRow } from "@termix/plugin-sdk/ui";
+} from "@termix-ssh/plugin-sdk/frontend";
+import { SettingRow } from "@termix-ssh/plugin-sdk/ui";
 import type { VpnApi, VpnProfile } from "./api.js";
 
 /**

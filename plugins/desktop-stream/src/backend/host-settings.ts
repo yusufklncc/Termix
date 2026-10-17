@@ -1,4 +1,4 @@
-import type { PluginContext } from "@termix/plugin-sdk/backend";
+import type { PluginContext } from "@termix-ssh/plugin-sdk/backend";
 import type { StreamPublisher } from "./signaling-adapter.js";
 
 export interface StreamHostSettings {

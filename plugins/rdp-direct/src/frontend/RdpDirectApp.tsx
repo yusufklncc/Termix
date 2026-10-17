@@ -5,9 +5,9 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { useTranslation } from "@termix/plugin-sdk/frontend";
+import { useTranslation } from "@termix-ssh/plugin-sdk/frontend";
 import { AlertCircle, RefreshCw } from "lucide-react";
-import { Button } from "@termix/plugin-sdk/ui";
+import { Button } from "@termix-ssh/plugin-sdk/ui";
 
 /**
  * A plugin has no core logger. What this writes is for whoever is working out

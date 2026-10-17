@@ -1,4 +1,4 @@
-import type { PluginContext } from "@termix/plugin-sdk/backend";
+import type { PluginContext } from "@termix-ssh/plugin-sdk/backend";
 import { isLegacyEnvelope } from "./legacy-secrets.js";
 import type { VpnProfileRecord, VpnProfileRepository } from "./repository.js";
 import {

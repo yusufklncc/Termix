@@ -1,4 +1,4 @@
-import type { PluginContext } from "@termix/plugin-sdk/backend";
+import type { PluginContext } from "@termix-ssh/plugin-sdk/backend";
 import { readHostSettings } from "./host-settings.js";
 import { runSession } from "./session.js";
 

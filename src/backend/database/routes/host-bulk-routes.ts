@@ -23,6 +23,7 @@ import type { AuthenticatedRequest } from "../../../types/index.js";
 import type { Request, RequestHandler, Response, Router } from "express";
 import { sshLogger } from "../../utils/logger.js";
 import { DatabaseSaveTrigger } from "../../utils/database-save-trigger.js";
+import { pluginEvents, TOPICS } from "../../plugins/events.js";
 import {
   createCurrentCredentialRepository,
   createCurrentHostRepository,
@@ -90,11 +91,11 @@ export function parseSSHConfig(content: string): SSHConfigHost[] {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
 
-    const spaceIdx = line.indexOf(" ");
-    if (spaceIdx === -1) continue;
+    const match = /^(\S+?)(?:\s*=\s*|\s+)(.+)$/.exec(line);
+    if (!match) continue;
 
-    const key = line.slice(0, spaceIdx).toLowerCase();
-    const value = line.slice(spaceIdx + 1).trim();
+    const key = match[1].toLowerCase();
+    const value = match[2];
 
     if (key === "host") {
       if (current && current.hostname) results.push(current);
@@ -133,6 +134,16 @@ export function parseSSHConfig(content: string): SSHConfigHost[] {
   if (current && current.hostname) results.push(current);
 
   return results;
+}
+
+/**
+ * Tells status checks and other pollers about hosts an import wrote, the way
+ * a single host create or update does.
+ */
+export function notifyImportedHosts(userId: string, hostIds: number[]): void {
+  for (const hostId of hostIds) {
+    pluginEvents.emit(TOPICS.hostUpdated, { hostId, userId });
+  }
 }
 
 export function importedHostUsername(
@@ -557,22 +568,21 @@ export function registerHostBulkRoutes(
         );
       }
 
+      // Loaded for both modes: overwrite updates a match, skip leaves it alone.
       let existingHostMap: Map<string, { id: number }> | undefined;
       const hostRepository = createCurrentHostRepository();
-      if (overwrite) {
-        try {
-          const allHosts =
-            await createCurrentHostResolutionRepository().findHostsByUserId(
-              userId,
-            );
-          existingHostMap = new Map();
-          for (const h of allHosts) {
-            const key = `${h.ip}:${h.port}:${h.username}`;
-            existingHostMap.set(key, { id: h.id as number });
-          }
-        } catch {
-          existingHostMap = undefined;
+      try {
+        const allHosts =
+          await createCurrentHostResolutionRepository().findHostsByUserId(
+            userId,
+          );
+        existingHostMap = new Map();
+        for (const h of allHosts) {
+          const key = `${h.ip}:${h.port}:${h.username}`;
+          existingHostMap.set(key, { id: h.id as number });
         }
+      } catch {
+        existingHostMap = undefined;
       }
 
       const knownAuthTypes = listKnownAuthTypes();
@@ -610,6 +620,15 @@ export function registerHostBulkRoutes(
             results.errors.push(
               `Host ${i + 1}: Username required for SSH connections`,
             );
+            continue;
+          }
+
+          const lookupKey = `${hostData.ip}:${hostData.port}:${hostData.username}`;
+          const existing = existingHostMap?.get(lookupKey);
+          if (existing && !overwrite) {
+            // Hosts that jump through this one still resolve to the kept host.
+            if (exportId !== undefined) importedIds.set(exportId, existing.id);
+            results.skipped++;
             continue;
           }
 
@@ -710,9 +729,6 @@ export function registerHostBulkRoutes(
             sudoPassword: hostData.sudoPassword || null,
             jumpHosts: jumpHosts ? JSON.stringify(jumpHosts) : null,
             ...importedStatusCheck(hostData as Record<string, unknown>),
-            terminalConfig: hostData.terminalConfig
-              ? JSON.stringify(hostData.terminalConfig)
-              : null,
             // A 2.8 export carries these inside terminalConfig.
             sshOptions:
               sshOptionsForWrite({
@@ -761,8 +777,6 @@ export function registerHostBulkRoutes(
               hostData.authType === "key" ? hostData.keyType || "auto" : null;
           }
 
-          const lookupKey = `${hostData.ip}:${hostData.port}:${hostData.username}`;
-          const existing = existingHostMap?.get(lookupKey);
           await withHostDefaults(
             userId,
             existing?.id ?? null,
@@ -820,9 +834,10 @@ export function registerHostBulkRoutes(
       }
 
       await applyDefaultsAfterHostWrites(writtenHostIds);
+      notifyImportedHosts(userId, writtenHostIds);
 
       res.json({
-        message: `Import completed: ${results.success} created, ${results.updated} updated, ${results.failed} failed`,
+        message: `Import completed: ${results.success} created, ${results.updated} updated, ${results.skipped} skipped, ${results.failed} failed`,
         success: results.success,
         updated: results.updated,
         skipped: results.skipped,
@@ -922,20 +937,18 @@ export function registerHostBulkRoutes(
 
       let existingHostMap: Map<string, { id: number }> | undefined;
       const hostRepository = createCurrentHostRepository();
-      if (overwrite) {
-        try {
-          const allHosts =
-            await createCurrentHostResolutionRepository().findHostsByUserId(
-              userId,
-            );
-          existingHostMap = new Map();
-          for (const h of allHosts) {
-            const key = `${h.ip}:${h.port}:${h.username}`;
-            existingHostMap.set(key, { id: h.id as number });
-          }
-        } catch {
-          existingHostMap = undefined;
+      try {
+        const allHosts =
+          await createCurrentHostResolutionRepository().findHostsByUserId(
+            userId,
+          );
+        existingHostMap = new Map();
+        for (const h of allHosts) {
+          const key = `${h.ip}:${h.port}:${h.username}`;
+          existingHostMap.set(key, { id: h.id as number });
         }
+      } catch {
+        existingHostMap = undefined;
       }
 
       const writtenHostIds: number[] = [];
@@ -950,6 +963,13 @@ export function registerHostBulkRoutes(
             results.errors.push(
               `Host "${parsed[i].name}": Missing required fields (HostName, Port)`,
             );
+            continue;
+          }
+
+          const lookupKey = `${hostData.ip}:${hostData.port}:${hostData.username}`;
+          const existing = existingHostMap?.get(lookupKey);
+          if (existing && !overwrite) {
+            results.skipped++;
             continue;
           }
 
@@ -975,7 +995,6 @@ export function registerHostBulkRoutes(
               : null,
             statusCheckEnabled: true,
             statusCheckInterval: null,
-            terminalConfig: null,
             sshOptions: null,
             forceKeyboardInteractive: "false",
             notes: null,
@@ -991,8 +1010,6 @@ export function registerHostBulkRoutes(
             updatedAt: new Date().toISOString(),
           };
 
-          const lookupKey = `${hostData.ip}:${hostData.port}:${hostData.username}`;
-          const existing = existingHostMap?.get(lookupKey);
           await withHostDefaults(
             userId,
             existing?.id ?? null,
@@ -1026,9 +1043,10 @@ export function registerHostBulkRoutes(
       }
 
       await applyDefaultsAfterHostWrites(writtenHostIds);
+      notifyImportedHosts(userId, writtenHostIds);
 
       res.json({
-        message: `Import completed: ${results.success} created, ${results.updated} updated, ${results.failed} failed`,
+        message: `Import completed: ${results.success} created, ${results.updated} updated, ${results.skipped} skipped, ${results.failed} failed`,
         success: results.success,
         updated: results.updated,
         skipped: results.skipped,

@@ -504,6 +504,27 @@ Kurulum: [`docs/jenkins-ci.md`](docs/jenkins-ci.md)
 
 ---
 
+## Faz 13 — Upstream 26.10 ve eklentilerin depodan çıkışı
+
+- [x] `26.10.0` ve `26.10.1` birleştirildi (2026-10-17). Upstream takvim
+      sürümlendirmesine geçti; bizim etiketimiz artık `26.10.1-rdp.<n>`
+- [x] Upstream 34 eklentisini ayrı depolara taşıyıp sha ile sabitlenmiş
+      `.tmxplug` paketleri hâline getirdi; `plugins/` dizini onlarda yok
+- [x] Bu fork beş eklentiyi ağaçta tutuyor (kullanıcı kararı): kendi üçümüz
+      ve yamaladığımız `ssh-terminal` ile `session-recording`. Upstream'in
+      yayınladığı `ssh-terminal@1.0.2`'de DNS hatası hâlâ duruyor, paketi
+      olduğu gibi almak Netbird'ü isimle bağlanamaz hâle getirirdi
+- [x] Upstream'in kaldırdığı parçalar geri kondu: `bundled-plugins.cjs`'te
+      `workspace` kaynağı (onboarding taşıyarak), `build-plugins.cjs`'te
+      derlemesi, `workspaces`'te `plugins/*`, lint'te eklenti kontrolleri,
+      `check-test-locations`'ta `plugins/<id>/tests/`, ve silinen dört betik
+- [x] SDK paketi `@termix/plugin-sdk` → `@termix-ssh/plugin-sdk` olarak
+      yeniden adlandırıldı; beş eklentide 107 dosya çevrildi
+- [ ] Yamaladığımız iki eklentinin kaynağı 2.9.2'de donmuş durumda;
+      upstream'in yeni sürümleriyle elle tazelenmesi gerekecek
+
+---
+
 ## Hedef makine tarafı (kodla ilgisi yok)
 
 Faz 2 veya 3'e geçmeden önce durumu sorulacak:

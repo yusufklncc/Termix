@@ -159,11 +159,12 @@ All three have been used against real gateways and networks.
 ### Running this fork
 
 Upstream's published image does not contain these changes. This fork publishes its own images to
-the GitLab registry at `registry.fatihk.tr/yusufihsankilinc/termix` (the application at the project
-root, `/netmgr` and `/rdp-bridge` beside it). The project is public, so pulling needs no login;
-pushing does. Docker Hub — [`yusufklncc/termix`](https://hub.docker.com/r/yusufklncc/termix) and
+Harbor at `harbor.fatihk.tr/flab/termix` (the application at the project root, `/netmgr` and
+`/rdp-bridge` beside it). The project is public, so pulling needs no login; pushing does. The
+GitLab registry at `registry.fatihk.tr/yusufihsankilinc/termix`, where they were published until
+2026-10-16, holds the same images up to `2.9.2-rdp.13` and nothing after it. Docker Hub — [`yusufklncc/termix`](https://hub.docker.com/r/yusufklncc/termix) and
 [`yusufklncc/termix-rdp-bridge`](https://hub.docker.com/r/yusufklncc/termix-rdp-bridge) — carries
-the same images up to `2.9.2-rdp.11` and nothing after it. `compose-fork.yml` names the GitLab
+the same images up to `2.9.2-rdp.11` and nothing after it. `compose-fork.yml` names the Harbor
 images:
 
 ```bash

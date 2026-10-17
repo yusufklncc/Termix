@@ -7,16 +7,20 @@
 // load-bearing, because everything after it type-checks against the plugin
 // SDK's built output.
 //
-// Publishing hangs off a tag, never a branch. A push to main should be able
-// to fail its checks without moving an image somebody is running.
+// A push to main that passes the checks is a release, the way the other
+// pipelines on this Jenkins publish; one that fails them publishes nothing.
+// Every image of a release carries the same version, <upstream>-rdp.<build>:
+// upstream's version from package.json, then this branch's build number,
+// which only goes up. The application is published every time; the VPN
+// manager and the FreeRDP bridge only when their directory changed.
 //
-// Tags that publish:
-//   v2.9.2-rdp.12         -> the application image
-//   netmgr-v2.9.2-rdp.5   -> the VPN manager
-//   bridge-v2.8.0-rdp.2   -> the FreeRDP bridge
+// Until 2026-10-16 publishing hung off v*, netmgr-v* and bridge-v* tags,
+// which Jenkins does not build on its own; a tag no longer publishes.
 //
 // Jenkins credentials this expects:
-//   termix-gitlab-registry  username/password for registry.fatihk.tr
+//   harbor-flab-push        username/password for harbor.fatihk.tr, the push
+//                           robot of the flab project; the other fork
+//                           pipelines push with the same one
 //   termix-dockerhub        only when PUBLISH_DOCKER_HUB is turned on, which
 //                           it is not by default
 
@@ -36,7 +40,7 @@ pipeline {
         booleanParam(
             name: 'PUBLISH_DOCKER_HUB',
             defaultValue: false,
-            description: 'Also push to Docker Hub. Off: the registry is GitLab now, and Docker Hub was only the fallback while the server was moved onto it. Turning this on needs the termix-dockerhub credential to exist, or the build fails looking for it.'
+            description: 'Also push to Docker Hub. Off: the registry is Harbor now, and Docker Hub was only the fallback while the server was moved onto it. Turning this on needs the termix-dockerhub credential to exist, or the build fails looking for it.'
         )
     }
 
@@ -96,47 +100,28 @@ pipeline {
         }
 
         stage('Publish') {
-            // Matched here rather than inside, so that upstream's own tags --
-            // the repository carries 48 of the release-2.9.2-tag kind -- skip
-            // this stage instead of failing it.
-            when {
-                allOf {
-                    buildingTag()
-                    tag pattern: /^(netmgr-|bridge-)?v.+$/, comparator: 'REGEXP'
-                }
-            }
+            // Every other branch, merge request and tag stops after Checks.
+            when { branch 'main' }
             agent any
             steps {
                 script {
-                    // Plain string work on purpose. A Groovy Matcher is not
-                    // serializable, and this pipeline's CPS interpreter saves
-                    // its state between steps -- a regex here fails the build
-                    // with NotSerializableException rather than a bad tag.
-                    String name = env.TAG_NAME
-                    String component = 'app'
-                    String version = null
-                    if (name.startsWith('netmgr-v')) {
-                        component = 'netmgr'
-                        version = name.substring('netmgr-v'.length())
-                    } else if (name.startsWith('bridge-v')) {
-                        component = 'bridge'
-                        version = name.substring('bridge-v'.length())
-                    } else if (name.startsWith('v')) {
-                        version = name.substring(1)
+                    // The first "version" in package.json is the package's own.
+                    String upstream = sh(
+                        script: 'grep -m1 \'"version"\' package.json | cut -d\'"\' -f4',
+                        returnStdout: true
+                    ).trim()
+                    if (!upstream) {
+                        error('no version found in package.json')
                     }
-                    if (!version) {
-                        error("tag ${name} does not name a release; expected v<tag>, netmgr-v<tag> or bridge-v<tag>")
-                    }
-                    env.TERMIX_COMPONENT = component
-                    env.TERMIX_IMAGE_TAG = version
+                    env.TERMIX_IMAGE_TAG = "${upstream}-rdp.${env.BUILD_NUMBER}"
                 }
 
                 withCredentials([usernamePassword(
-                    credentialsId: 'termix-gitlab-registry',
-                    usernameVariable: 'GL_REGISTRY_USER',
-                    passwordVariable: 'GL_REGISTRY_PASS'
+                    credentialsId: 'harbor-flab-push',
+                    usernameVariable: 'REGISTRY_USER',
+                    passwordVariable: 'REGISTRY_PASS'
                 )]) {
-                    sh 'echo "$GL_REGISTRY_PASS" | docker login registry.fatihk.tr -u "$GL_REGISTRY_USER" --password-stdin'
+                    sh 'echo "$REGISTRY_PASS" | docker login harbor.fatihk.tr -u "$REGISTRY_USER" --password-stdin'
                 }
 
                 script {
@@ -153,17 +138,41 @@ pipeline {
 
                 // The script does the rest: it refuses an uncommitted tree,
                 // builds one manifest rather than an OCI index (GitLab's
-                // registry rejects the index), renders both nginx templates
+                // registry rejected the index, and Harbor cannot scan the
+                // build attestation an index carries), renders both nginx templates
                 // inside the built image and runs nginx -t on them, and only
                 // then pushes.
+                //
+                // The VPN manager and the bridge change rarely, and the bridge
+                // builds FreeRDP from source. Each of their images is also
+                // tagged src-<tree hash of its directory>; when Harbor already
+                // has that tag, nothing in the directory changed and the build
+                // is skipped. A first build, or one after a failed release,
+                // finds no such tag and publishes.
                 sh '''
-                    DOCKER_HUB=$([ "$PUBLISH_DOCKER_HUB" = "true" ] && echo 1 || echo 0) \
-                      bash scripts/publish-fork-images.sh "$TERMIX_COMPONENT" "$TERMIX_IMAGE_TAG"
+                    export DOCKER_HUB=$([ "$PUBLISH_DOCKER_HUB" = "true" ] && echo 1 || echo 0)
+
+                    bash scripts/publish-fork-images.sh app "$TERMIX_IMAGE_TAG"
+
+                    publish_if_changed() {
+                      component=$1 dir=$2 repo=$3
+                      src="src-$(git rev-parse "HEAD:$dir" | cut -c1-12)"
+                      code=$(curl -s -o /dev/null -w '%{http_code}' \
+                        "https://harbor.fatihk.tr/api/v2.0/projects/flab/repositories/$repo/artifacts/$src")
+                      case "$code" in
+                        200) echo "==> $component: $dir unchanged ($src is in Harbor), not rebuilt" ;;
+                        404) EXTRA_TAGS="$src" bash scripts/publish-fork-images.sh "$component" "$TERMIX_IMAGE_TAG" ;;
+                        *) echo "Harbor answered $code looking for $component $src" >&2; return 1 ;;
+                      esac
+                    }
+                    # The repository name is encoded twice in Harbor's API path.
+                    publish_if_changed netmgr docker/net-manager termix%252Fnetmgr
+                    publish_if_changed bridge docker/freerdp-bridge termix%252Frdp-bridge
                 '''
             }
             post {
                 always {
-                    sh 'docker logout registry.fatihk.tr || true'
+                    sh 'docker logout harbor.fatihk.tr || true'
                     sh 'docker logout || true'
                 }
             }

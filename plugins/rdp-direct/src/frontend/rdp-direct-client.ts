@@ -174,6 +174,9 @@ export function connectRdpDirect({
 
   const reader = new RdpFrameReader();
   let closed = false;
+  // Set once the bridge has said why it failed. The socket closes right after
+  // that, and its generic "websocket closed" must not replace the reason.
+  let failed = false;
   let remote = { width: 0, height: 0 };
 
   const send = (magic: string, payload: Uint8Array) => {
@@ -390,6 +393,7 @@ export function connectRdpDirect({
         }
 
         case "ERRR": {
+          failed = true;
           onState("failed", new TextDecoder().decode(frame.payload));
           break;
         }
@@ -408,7 +412,7 @@ export function connectRdpDirect({
   socket.addEventListener("close", (event) => {
     // A bare "closed" tells nobody anything; the close code and reason are the
     // only clue when the session ends without an error frame.
-    if (!closed) {
+    if (!closed && !failed) {
       onState(
         "closed",
         `websocket closed (${event.code}${event.reason ? `: ${event.reason}` : ""})`,

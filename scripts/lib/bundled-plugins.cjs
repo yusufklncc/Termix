@@ -265,9 +265,29 @@ function pinsFromIndex(index, ids, current = []) {
   const currentById = new Map(current.map((entry) => [entry.id, entry]));
   const wanted = ids ?? plugins.map((plugin) => plugin.id);
   return [...wanted].sort().map((id) => {
+    const existing = currentById.get(id);
+    /*
+     * A plugin built from this tree is not the registry's to pin.
+     *
+     * Two of them share an id with an official plugin because they are that
+     * plugin, carried here with local patches. Re-pinning would quietly turn
+     * them into downloads of upstream's build -- the patches gone, and
+     * nothing in the diff but a url and a hash to say so. The other three
+     * are not in the index at all and would stop the whole run.
+     */
+    if (existing?.source === "workspace") {
+      // Written back out, so a parsed null onboarding does not become a
+      // "onboarding": null the parser then refuses.
+      return {
+        id,
+        source: "workspace",
+        ...(existing.onboarding ? { onboarding: existing.onboarding } : {}),
+      };
+    }
+
     const latest = byId.get(id)?.versions?.[0];
     if (!latest) throw new Error(`${id} is not in the registry index`);
-    const onboarding = currentById.get(id)?.onboarding;
+    const onboarding = existing?.onboarding;
     return {
       id,
       source: "tmxplug",

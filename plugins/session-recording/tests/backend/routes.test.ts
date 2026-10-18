@@ -26,6 +26,12 @@ describe("session recording routes", () => {
     expect(res.status).toBe(401);
   });
 
+  it("403s without session-recording.view", async () => {
+    server = await startServer({ permissions: [] });
+    const res = await server.request("GET", "/");
+    expect(res.status).toBe(403);
+  });
+
   it("lists only the caller's own recordings", async () => {
     server = await startServer();
 
@@ -153,8 +159,33 @@ describe("session recording routes", () => {
     expect(res.status).toBe(403);
   });
 
-  it("deletes only the caller's own recording", async () => {
+  it("refuses delete for a non-admin, even on their own recording", async () => {
     server = await startServer();
+    server.db.sqlite
+      .prepare(
+        `INSERT INTO p_session_recording_session_recordings
+         (host_id, user_id, recording_path, protocol, format, started_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        7,
+        "user-1",
+        "/tmp/a.cast",
+        "ssh",
+        "asciicast",
+        new Date().toISOString(),
+      );
+
+    const denied = await server.request("DELETE", "/1", { user: "user-1" });
+    expect(denied.status).toBe(403);
+    const still = await server.request("GET", "/1", { user: "user-1" });
+    expect(still.status).toBe(200);
+  });
+
+  it("lets an admin delete only their own recording", async () => {
+    server = await startServer({
+      permissions: ["session-recording.view", "admin.plugins.manage"],
+    });
     server.db.sqlite
       .prepare(
         `INSERT INTO p_session_recording_session_recordings

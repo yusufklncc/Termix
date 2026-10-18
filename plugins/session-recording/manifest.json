@@ -1,18 +1,26 @@
 {
   "id": "session-recording",
   "name": "Session Recording",
-  "version": "1.0.0",
-  "description": "Record terminal sessions and play them back or download them later.",
+  "version": "1.0.2",
+  "description": "Record terminal and remote desktop sessions and play them back or download them later.",
   "author": {
     "name": "Termix"
   },
-  "license": "MIT",
-  "repository": "https://github.com/Termix-SSH/Termix",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/Termix-SSH/Plugin-Session-Recording",
+  "docs": "https://docs.termix.site/plugins/session-recording",
+  "video": "https://www.youtube.com/watch?v=fmYg3wqMHC0",
   "category": "Terminal",
   "icon": "ScrollText",
+  "features": [
+    "Record SSH, RDP and VNC sessions",
+    "Play recordings back at any speed",
+    "Download a recording as a file or plain text",
+    "Old recordings are removed after a number of days you choose"
+  ],
   "engine": {
-    "termix": ">=2.9.0",
-    "api": "1"
+    "termix": ">=26.10.0",
+    "api": "^1.2"
   },
   "capabilities": [
     "hosts:read",
@@ -66,14 +74,22 @@
         "enableLabelKey": "settings.host.enable.label",
         "enableDescriptionKey": "settings.host.enable.description",
         "fields": []
-      }
+      },
+      "user": [
+        {
+          "key": "alwaysShowActions",
+          "type": "boolean",
+          "labelKey": "settings.alwaysShowActions.label",
+          "descriptionKey": "settings.alwaysShowActions.description",
+          "default": false
+        }
+      ]
     },
     "hostCapability": {
       "key": "enableSessionRecording",
       "labelKey": "hosts.enableSessionRecording",
       "editorTab": "general"
-    },
-    "uses": ["terminal.toolbarStatus"]
+    }
   },
   "locales": "locales",
   "platforms": ["linux", "win32", "darwin"]

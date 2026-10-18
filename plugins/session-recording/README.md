@@ -1,39 +1,92 @@
-# Session Recording
+<div align="center">
 
-Record terminal sessions and play them back or download them later.
+<img src="https://termix.site/img/logo.svg" width="120" alt="Termix Logo" />
+
+<h1>Session Recording</h1>
+
+<p>Record terminal and remote desktop sessions and play them back or download them later</p>
+
+<!-- VIDEO:START -->
+
+<a href="https://www.youtube.com/watch?v=fmYg3wqMHC0"><img src="https://img.shields.io/badge/Watch_the_demo-f59145?style=for-the-badge&logo=youtube&logoColor=white" alt="Watch the demo on YouTube" /></a>
+
+<!-- VIDEO:END -->
+
+</div>
+
+<br />
+
+## Overview
+
+Session Recording records your terminal and remote desktop sessions so you can watch them again later.
+
+Read the [docs](https://docs.termix.site/plugins/session-recording) to set it up and use it.
+
+<br />
 
 ## Features
 
-- Records SSH terminal sessions as they happen.
-- Play a recording back, skip through it and copy its text.
-- Download a recording as a file or as plain text.
-- Removes recordings older than a set number of days.
-- Keeps recordings when a user is deleted, with the user's name removed.
+- Record SSH, RDP and VNC sessions
+- Play recordings back at any speed
+- Download a recording as a file or plain text
+- Old recordings are removed after a number of days you choose
 
-## Settings
+<br />
 
-### Admin
+## Sponsors
 
-- Retention (days): remove recordings older than this. Checked at startup and once a day.
+For a paid sponsor spot, email [mail@termix.site](mailto:mail@termix.site).
 
-### Host
+<!-- SPONSORS:START -->
 
-- Enable session recording: record sessions on this host.
+<div align="center">
 
-## Permissions
+<br />
 
-- `session-recording.view`: View and download session recordings. Admins and users have it by default.
+<a href="https://www.blacksmith.sh/">
+  <img src="https://termix.site/img/sponsors/blacksmith.svg" height="40" alt="Blacksmith" />
+</a>
+&nbsp;&nbsp;&nbsp;
+<a href="https://www.cloudflare.com/">
+  <img src="https://termix.site/img/sponsors/cloudflare.png" height="40" alt="Cloudflare" />
+</a>
+&nbsp;&nbsp;&nbsp;
+<a href="https://akamai.com/">
+  <img src="https://termix.site/img/sponsors/akamai.svg" height="40" alt="Akamai" />
+</a>
+&nbsp;&nbsp;&nbsp;
+<a href="https://aws.amazon.com/">
+  <img src="https://termix.site/img/sponsors/aws.png" height="40" alt="AWS" />
+</a>
+&nbsp;&nbsp;&nbsp;
+<a href="https://rackgenius.com/">
+  <img src="https://termix.site/img/sponsors/rackgenius.png" height="40" alt="Rack Genius" />
+</a>
+&nbsp;&nbsp;&nbsp;
+<a href="https://ginernet.com/">
+  <img src="https://termix.site/img/sponsors/ginernet.png" height="40" alt="Ginernet" />
+</a>
+&nbsp;&nbsp;&nbsp;
+<a href="https://www.hetzner.com/?mtm_campaign=termix&mtm_medium=referral&mtm_content=sponsoring_link">
+  <img src="https://termix.site/img/sponsors/hetzner.png" height="40" alt="Hetzner" />
+</a>
 
-## Services
+</div>
 
-Provides to other plugins:
+<!-- SPONSORS:END -->
 
-- `recordings.writer`: start a recording and add to it as a session runs, or save a recording that is already finished.
+<br />
 
-## Development
+## Support
 
-```bash
-npm run build      # build into dist/
-npm run test       # run this plugin's tests
-npm run typecheck  # type-check this plugin
-```
+Bugs and ideas for Session Recording go in this repo: [report a bug](https://github.com/Termix-SSH/Plugin-Session-Recording/issues/new?template=bug_report.yml) or [request a feature](https://github.com/Termix-SSH/Plugin-Session-Recording/issues/new?template=feature_request.yml). Report an issue on the plugin's page in the Plugins tab fills in your versions for you.
+
+Problems with Termix itself (login, hosts, credentials, sharing, sync) go in the [Termix repo](https://github.com/Termix-SSH/Termix/issues/new/choose). Not sure where it goes? Open it there and it will be moved.
+
+Add as much detail as you can, in English if possible. For questions, join the [Discord](https://discord.gg/jVQGdvHDrf) server.
+
+<br />
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).

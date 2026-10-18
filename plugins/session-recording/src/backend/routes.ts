@@ -4,6 +4,9 @@ import express, { type Request, type Response, type Router } from "express";
 import type { PluginContext } from "@termix-ssh/plugin-sdk/backend";
 import type { SessionRecordingRepository } from "./repository.js";
 
+// Recordings are evidence about a host, so only admins delete them.
+const ADMIN_PERMISSION = "admin.plugins.manage";
+
 function actorId(ctx: PluginContext): string | undefined {
   return ctx.currentActor();
 }
@@ -156,7 +159,6 @@ function registerContent(
         return res.status(404).json({ error: "File not found" });
       }
 
-      const content = await fs.promises.readFile(resolvedPath);
       const format =
         row.format ?? (filePath.endsWith(".cast") ? "asciicast" : "text");
       const contentType =
@@ -165,7 +167,19 @@ function registerContent(
           : format === "asciicast"
             ? "application/x-asciicast"
             : "text/plain";
-      res.type(contentType).send(content);
+      // Remote desktop recordings can be large, so stream instead of
+      // reading the whole file first.
+      res.type(contentType);
+      const stream = fs.createReadStream(resolvedPath);
+      stream.on("error", (error) => {
+        ctx.log.error("Failed to stream session recording", error);
+        if (!res.headersSent) {
+          res.status(500).json({ error: "Failed to read session recording" });
+        } else {
+          res.destroy(error);
+        }
+      });
+      stream.pipe(res);
     } catch (error) {
       ctx.log.error(
         "Failed to read session recording content",
@@ -181,7 +195,7 @@ function registerContent(
  * /plugin-api/session-recording/{id}:
  *   delete:
  *     summary: Delete session recording
- *     description: Deletes a session recording and its file.
+ *     description: Deletes one of the caller's session recordings and its file. Admins only, since a recording is a record of what happened on the host.
  *     tags:
  *       - Session Recording
  *     parameters:
@@ -192,6 +206,8 @@ function registerContent(
  *     responses:
  *       200:
  *         description: Session recording deleted.
+ *       403:
+ *         description: Only admins can delete recordings.
  *       404:
  *         description: Session recording not found.
  *       500:
@@ -206,6 +222,11 @@ function registerDelete(
   router.delete("/:id", async (req: Request, res: Response) => {
     const userId = actorId(ctx);
     if (!userId) return res.status(401).json({ error: "Not authenticated" });
+    if (!(await ctx.rbac.has(ADMIN_PERMISSION))) {
+      return res
+        .status(403)
+        .json({ error: "Only admins can delete recordings" });
+    }
     const rawId = Array.isArray(req.params.id)
       ? req.params.id[0]
       : req.params.id;
@@ -245,6 +266,9 @@ export function registerSessionRecordingRoutes(
   dataDir: () => Promise<string>,
 ): Router {
   const router = express.Router();
+  // Every route needs session-recording.view, the same permission the rail
+  // item and the writer service are gated on.
+  router.use(ctx.rbac.require("view") as never);
   registerList(router, ctx, repository);
   registerGet(router, ctx, repository);
   registerContent(router, ctx, repository, dataDir);

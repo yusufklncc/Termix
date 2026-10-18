@@ -3,8 +3,7 @@
     "sessionLogs": "Session Logs"
   },
   "hosts": {
-    "enableSessionRecording": "Session Recording",
-    "enableSessionRecordingDesc": "Record terminal session output for later review"
+    "enableSessionRecording": "Session Recording"
   },
   "permissions": {
     "view": {
@@ -24,10 +23,11 @@
         "label": "Enable session recording",
         "description": "Record terminal output for this host so you can play it back or download it later."
       }
+    },
+    "alwaysShowActions": {
+      "label": "Always show buttons",
+      "description": "Keep the view, download and delete buttons under each log visible. Turn off to show them only on hover."
     }
-  },
-  "terminalStatus": {
-    "recording": "Recording"
   },
   "sessionLogs": {
     "title": "Session Logs",
@@ -39,7 +39,6 @@
     "downloadAsText": "Download as text",
     "deleteLog": "Delete",
     "confirmDelete": "Delete this session log?",
-    "confirmDeleteDesc": "This action cannot be undone.",
     "copyContent": "Copy",
     "copied": "Copied!",
     "loadError": "Failed to load session logs",
@@ -49,15 +48,22 @@
     "empty": "(empty)",
     "noResults": "No results for \"{{query}}\"",
     "hostFallback": "Host {{id}}",
-    "sessionFallback": "Session {{id}}"
+    "sessionFallback": "Session {{id}}",
+    "settingsTitle": "Session log settings",
+    "settingsDisplayTitle": "Display"
   },
   "player": {
     "timeline": "Recording timeline",
     "speed": "Playback speed",
     "play": "Play recording",
-    "pause": "Pause recording"
+    "pause": "Pause recording",
+    "zoom": "Zoom",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fit": "Fit to panel"
   },
   "plugin": {
-    "name": "Session Recording"
+    "name": "Session Recording",
+    "description": "Record terminal and remote desktop sessions and play them back or download them later."
   }
 }

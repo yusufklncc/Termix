@@ -11,14 +11,23 @@ import {
   useToast,
   usePluginApi,
   usePermission,
+  useSettings,
 } from "@termix-ssh/plugin-sdk/frontend";
 import {
-  Input,
+  Button,
+  PanelSearch,
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
   copyToClipboard,
+  useConfirm,
+  EmptyState,
+  Facts,
+  ListBadge,
+  ListRow,
+  ListRowAction,
+  PanelList,
 } from "@termix-ssh/plugin-sdk/ui";
 import {
   ArrowLeft,
@@ -29,10 +38,15 @@ import {
   FileText,
   Loader2,
   ScrollText,
-  Search,
-  X,
+  SlidersHorizontal,
+  Trash2,
 } from "lucide-react";
 import { SessionRecordingPlayer } from "./SessionRecordingPlayer";
+import {
+  SessionLogSettings,
+  readSessionLogSettings,
+  rowActionProps,
+} from "./SessionLogSettings";
 import { asciicastToPlainText, parseAsciicast } from "./asciicast";
 import {
   createSessionRecordingApi,
@@ -134,26 +148,19 @@ async function extractPlainText(
   log: SessionLogRecord,
   blob: Blob,
 ): Promise<string | null> {
-  // Named rather than excluded: a format this does not know is as likely to
-  // be bytes as text, and reading a video recording as an asciicast produces
-  // nonsense instead of nothing.
+  /*
+   * Named rather than excluded: a format this does not know is as likely to
+   * be bytes as text, and reading a video recording as an asciicast produces
+   * nonsense instead of nothing.
+   *
+   * Upstream excludes guacamole alone, and still did in 1.0.2. Carried
+   * across every time this plugin is taken from upstream: Direct RDP writes
+   * H.264 frames, which are not guacamole and are not text either.
+   */
   if (log.format !== "text" && log.format !== "asciicast") return null;
   const source = await blob.text();
   if (log.format === "text") return source;
   return asciicastToPlainText(parseAsciicast(source));
-}
-
-function SectionHeader({ label, count }: { label: string; count: number }) {
-  return (
-    <div className="flex items-center gap-2 px-3 py-2 border-b border-border/60 bg-muted/20">
-      <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60 flex-1">
-        {label}
-      </span>
-      <span className="text-[10px] font-semibold text-muted-foreground/40 bg-muted/60 px-1.5 py-0.5">
-        {count}
-      </span>
-    </div>
-  );
 }
 
 function LogMeta({
@@ -215,16 +222,20 @@ function ActionButton({
 
 function LogRow({
   log,
+  stripe,
+  alwaysShowActions,
   onView,
   onDownload,
   onDownloadText,
   onDelete,
 }: {
   log: SessionLogRecord;
+  stripe: number;
+  alwaysShowActions: boolean;
   onView: () => void;
   onDownload: () => void;
   onDownloadText: () => void;
-  onDelete: () => void;
+  onDelete?: () => void;
 }) {
   const { t } = useTranslation();
   const hostLabel =
@@ -233,56 +244,57 @@ function LogRow({
     t("sessionLogs.hostFallback", { id: log.hostId });
 
   return (
-    <div className="group flex items-center gap-2.5 px-3 py-2.5 border-b border-border/40 last:border-b-0 hover:bg-muted/40 transition-colors">
-      <div className="shrink-0 flex items-center justify-center size-7 bg-muted/60 text-muted-foreground">
-        <ScrollText className="size-3.5" />
-      </div>
-
-      <div className="flex flex-col flex-1 min-w-0 gap-0.5">
-        <span className="text-xs font-semibold truncate text-foreground">
-          {hostLabel}
-        </span>
-        <LogMeta
-          className="text-muted-foreground/60"
-          items={[
-            formatDate(log.startedAt),
-            (log.protocol ?? "ssh").toUpperCase(),
-            log.username,
-            formatDuration(log.duration),
-            formatBytes(log.sizeBytes),
-          ]}
-        />
-      </div>
-
-      <TooltipProvider disableHoverableContent>
-        <div className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-          <ActionButton label={t("sessionLogs.viewLog")} onClick={onView}>
-            <Eye className="size-3" />
-          </ActionButton>
+    <ListRow
+      stripe={stripe}
+      tone="muted"
+      icon={<ScrollText />}
+      title={hostLabel}
+      onClick={onView}
+      badges={
+        <ListBadge className="ml-auto">
+          {(log.protocol ?? "ssh").toUpperCase()}
+        </ListBadge>
+      }
+      meta={
+        <Facts>
+          <span>{formatDate(log.startedAt)}</span>
+          {log.username ? <span>{log.username}</span> : null}
+          <span>{formatDuration(log.duration)}</span>
+          <span>{formatBytes(log.sizeBytes)}</span>
+        </Facts>
+      }
+      {...rowActionProps(
+        alwaysShowActions,
+        <>
+          <ListRowAction label={t("sessionLogs.viewLog")} onClick={onView}>
+            <Eye />
+          </ListRowAction>
           {log.format === "asciicast" && (
-            <ActionButton
+            <ListRowAction
               label={t("sessionLogs.downloadAsText")}
               onClick={onDownloadText}
             >
-              <FileText className="size-3" />
-            </ActionButton>
+              <FileText />
+            </ListRowAction>
           )}
-          <ActionButton
+          <ListRowAction
             label={t("sessionLogs.downloadLog")}
             onClick={onDownload}
           >
-            <Download className="size-3" />
-          </ActionButton>
-          <ActionButton
-            label={t("sessionLogs.deleteLog")}
-            onClick={onDelete}
-            destructive
-          >
-            <X className="size-3" />
-          </ActionButton>
-        </div>
-      </TooltipProvider>
-    </div>
+            <Download />
+          </ListRowAction>
+          {onDelete && (
+            <ListRowAction
+              label={t("sessionLogs.deleteLog")}
+              tone="destructive"
+              onClick={onDelete}
+            >
+              <Trash2 />
+            </ListRowAction>
+          )}
+        </>,
+      )}
+    />
   );
 }
 
@@ -292,6 +304,7 @@ export function SessionLogsPanel() {
   const pluginApi = usePluginApi();
   const api = useMemo(() => createSessionRecordingApi(pluginApi), [pluginApi]);
   const canView = usePermission("view");
+  const canDelete = usePermission("admin.plugins.manage");
   const [logs, setLogs] = useState<SessionLogRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
@@ -300,11 +313,11 @@ export function SessionLogsPanel() {
   const [viewBlob, setViewBlob] = useState<Blob | null>(null);
   const [viewText, setViewText] = useState<string | null>(null);
   const [viewLoading, setViewLoading] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<SessionLogRecord | null>(
-    null,
-  );
-  const [deleting, setDeleting] = useState(false);
+  const confirm = useConfirm();
   const [copied, setCopied] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settings = useSettings("user");
+  const { alwaysShowActions } = readSessionLogSettings(settings.values);
   const logsRef = useRef(logs);
   logsRef.current = logs;
 
@@ -416,17 +429,22 @@ export function SessionLogsPanel() {
     }
   };
 
-  const handleDelete = async () => {
-    if (!deleteTarget) return;
-    setDeleting(true);
+  const handleDelete = async (log: SessionLogRecord) => {
+    const ok = await confirm({
+      title: t("sessionLogs.confirmDelete"),
+      description: `${
+        log.hostName ??
+        log.hostIp ??
+        t("sessionLogs.sessionFallback", { id: log.id })
+      }, ${formatDate(log.startedAt)}`,
+      confirmLabel: t("sessionLogs.deleteLog"),
+    });
+    if (!ok) return;
     try {
-      await api.delete(deleteTarget.id);
-      setLogs((prev) => prev.filter((l) => l.id !== deleteTarget.id));
-      setDeleteTarget(null);
+      await api.delete(log.id);
+      setLogs((prev) => prev.filter((l) => l.id !== log.id));
     } catch {
       toast.error(t("sessionLogs.deleteError"));
-    } finally {
-      setDeleting(false);
     }
   };
 
@@ -539,97 +557,62 @@ export function SessionLogsPanel() {
     );
   }
 
+  if (settingsOpen) {
+    return (
+      <SessionLogSettings
+        settings={settings}
+        onBack={() => setSettingsOpen(false)}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      <div className="flex-1 overflow-y-auto">
-        {logs.length === 0 ? (
-          <div className="flex flex-col items-center justify-center flex-1 gap-3 p-6 text-center py-16">
-            <div className="size-10 bg-muted/40 flex items-center justify-center">
-              <ScrollText className="size-5 text-muted-foreground/30" />
-            </div>
-            <div className="flex flex-col gap-1">
-              <span className="text-sm font-semibold text-muted-foreground/60">
-                {t("sessionLogs.noLogs")}
-              </span>
-              <span className="text-xs text-muted-foreground/40">
-                {t("sessionLogs.noLogsDesc")}
-              </span>
-            </div>
-          </div>
-        ) : (
-          <>
-            <div className="relative px-3 py-2 border-b border-border/60">
-              <Search className="absolute left-5.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/50 pointer-events-none" />
-              <Input
-                placeholder={t("sessionLogs.filterByHost")}
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                className="pl-8 h-7 text-xs"
-              />
-            </div>
-
-            {filtered.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
-                <span className="text-xs text-muted-foreground/50">
-                  {t("sessionLogs.noResults", { query: filter })}
-                </span>
-              </div>
-            ) : (
-              <div className="flex flex-col">
-                <SectionHeader
-                  label={t("sessionLogs.title")}
-                  count={filtered.length}
-                />
-                {filtered.map((log) => (
-                  <LogRow
-                    key={log.id}
-                    log={log}
-                    onView={() => handleView(log)}
-                    onDownload={() => handleDownload(log)}
-                    onDownloadText={() => handleDownloadText(log)}
-                    onDelete={() => setDeleteTarget(log)}
-                  />
-                ))}
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* Inline delete confirmation - positioned against the relative parent in AppShell */}
-      {deleteTarget && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
-          <div className="bg-popover border border-border shadow-xl w-full max-w-xs flex flex-col gap-4 p-4">
-            <p className="text-sm text-foreground">
-              {t("sessionLogs.confirmDelete")}
-            </p>
-            <div className="flex flex-col text-xs text-muted-foreground">
-              <span className="font-medium text-foreground/80">
-                {deleteTarget.hostName ??
-                  deleteTarget.hostIp ??
-                  t("sessionLogs.sessionFallback", { id: deleteTarget.id })}
-              </span>
-              <span>{formatDate(deleteTarget.startedAt)}</span>
-            </div>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setDeleteTarget(null)}
-                className="px-3 py-1.5 text-xs border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-              >
-                {t("common.cancel")}
-              </button>
-              <button
-                onClick={handleDelete}
-                disabled={deleting}
-                className="px-3 py-1.5 text-xs bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors flex items-center gap-1.5"
-              >
-                {deleting && <Loader2 className="size-3 animate-spin" />}
-                {t("sessionLogs.deleteLog")}
-              </button>
-            </div>
-          </div>
+      {logs.length > 0 && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+          <PanelSearch
+            value={filter}
+            onChange={setFilter}
+            placeholder={t("sessionLogs.filterByHost")}
+            fill
+          />
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => setSettingsOpen(true)}
+            title={t("sessionLogs.settingsTitle")}
+            aria-label={t("sessionLogs.settingsTitle")}
+          >
+            <SlidersHorizontal className="size-3.5" />
+          </Button>
         </div>
       )}
+      <PanelList
+        empty={
+          logs.length === 0 ? (
+            <EmptyState
+              icon={ScrollText}
+              title={t("sessionLogs.noLogs")}
+              hint={t("sessionLogs.noLogsDesc")}
+            />
+          ) : (
+            <EmptyState title={t("sessionLogs.noResults", { query: filter })} />
+          )
+        }
+      >
+        {filtered.map((log, index) => (
+          <LogRow
+            key={log.id}
+            log={log}
+            stripe={index}
+            alwaysShowActions={alwaysShowActions}
+            onView={() => handleView(log)}
+            onDownload={() => handleDownload(log)}
+            onDownloadText={() => handleDownloadText(log)}
+            onDelete={canDelete ? () => void handleDelete(log) : undefined}
+          />
+        ))}
+      </PanelList>
     </div>
   );
 }

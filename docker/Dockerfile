@@ -111,9 +111,20 @@ ENV DATA_DIR=/app/data \
     PORT=8080 \
     NODE_ENV=production
 
-RUN apt-get update && apt-get install -y nginx gettext-base openssl ca-certificates gosu wget && \
+# upgrade, because the base is where the findings are and the node image is
+# rebuilt on its own schedule: today that is one package, perl-base, carrying
+# three criticals Debian fixed. Pulling a fresh base does not bring it.
+#
+# npm goes because nothing here runs it -- the backend and every plugin were
+# checked -- and the copy inside the node image is its own dependency tree,
+# some of it older than ours: undici, ip-address, brace-expansion and
+# postcss-selector-parser were all reported against npm's vendored copies
+# while /app/node_modules already had the fixed versions.
+RUN apt-get update && apt-get -y upgrade && \
+    apt-get install -y nginx gettext-base openssl ca-certificates gosu wget && \
     update-ca-certificates && \
-    rm -rf /var/lib/apt/lists/* && \
+    rm -rf /var/lib/apt/lists/* \
+      /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx && \
     mkdir -p /app/data /app/uploads /app/nginx /tmp/nginx && \
     chown -R node:node /app /tmp/nginx && \
     chmod 755 /app/data /app/uploads /app/nginx /tmp/nginx

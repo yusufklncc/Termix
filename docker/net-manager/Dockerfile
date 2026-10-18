@@ -25,10 +25,16 @@ FROM netbirdio/netbird:0.79.0 AS netbird
 
 FROM node:22-trixie-slim
 
-RUN apt-get update \
+# upgrade for the same reason as the application image: the base carries the
+# findings and is rebuilt on its own schedule. npm goes with it -- the
+# entrypoint is node, nothing here shells out to npm, and npm's own vendored
+# tree is where this image's pacote, sigstore, ip-address and brace-expansion
+# reports come from.
+RUN apt-get update && apt-get -y upgrade \
  && apt-get install -y --no-install-recommends \
       openconnect vpnc-scripts microsocks iproute2 iptables ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+      /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 COPY --from=tailscale /usr/local/bin/tailscaled /usr/local/bin/tailscaled
 COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscale

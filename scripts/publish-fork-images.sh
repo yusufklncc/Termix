@@ -71,7 +71,14 @@ echo "==> building $component $tag from $commit"
 # registry rejected with "blob unknown to registry", after uploading every
 # layer, and Harbor cannot scan the attestation. One plain manifest pushes
 # to every registry and scans.
-docker build --provenance=false --sbom=false \
+#
+# --pull so a release starts from the base as it is published, not from
+# whatever this agent cached months ago. It is not what fixes today's
+# findings -- a freshly pulled node:24-slim carries the same perl-base, since
+# the node image has not been rebuilt against Debian's patch -- but without it
+# a base fix that does land would still never reach a release. The Dockerfiles
+# upgrade packages themselves for that reason.
+docker build --pull --provenance=false --sbom=false \
   -t "$local_tag" -f "$ROOT/$dockerfile" "$context"
 
 if [ "$component" = "app" ]; then

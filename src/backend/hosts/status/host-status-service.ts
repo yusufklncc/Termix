@@ -41,6 +41,15 @@ const FRESH_MS = 30_000;
  * packets out by the route the host was configured to avoid.
  */
 export const GATEWAY_DOWN_REASON = "hosts.status.gatewayDown";
+/**
+ * The host has a proxy of its own and its settings could not be read.
+ *
+ * The proxy's password is encrypted under the owner's key, which exists only
+ * while they are signed in, so a host shared with somebody else can be
+ * polled while nothing can decrypt it. Dialling the host directly would send
+ * the packets out by the route the proxy was set to avoid.
+ */
+export const GATEWAY_UNREADABLE_REASON = "hosts.status.gatewayUnreadable";
 
 export interface HostStatusEntry {
   status: HostStatus;
@@ -70,6 +79,8 @@ export interface StatusTarget {
   jumpHosts: Array<{ hostId: number }>;
   statusCheckEnabled: boolean;
   statusCheckInterval: number | null;
+  /** The host has a proxy of its own, so it is not dialled from here. */
+  useSocks5?: boolean;
 }
 
 type PortResolver = (
@@ -99,12 +110,24 @@ export interface HostStatusDeps {
   probeThroughGateway?: (
     target: StatusTarget,
     port: number,
-  ) => Promise<{ reachable: boolean | null } | null>;
+  ) => Promise<{ reachable: boolean | null; reason?: string } | null>;
   hasActiveSession?: (hostId: number) => boolean;
   globalInterval: () => number;
   emit: (payload: HostStatusPayload) => void;
   /** Pause before a failed ping is tried again. */
   retryDelayMs?: number;
+}
+
+/** A host's proxy chain, which the column keeps as JSON text. */
+function parseProxyChain(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== "string" || !raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function parseJumpHosts(raw: string | null): Array<{ hostId: number }> {
@@ -132,6 +155,7 @@ export function toStatusTarget(row: HostStatusTargetRow): StatusTarget {
     jumpHosts: parseJumpHosts(row.jumpHosts),
     statusCheckEnabled: row.statusCheckEnabled !== false,
     statusCheckInterval: row.statusCheckInterval ?? null,
+    useSocks5: row.useSocks5 === true,
   };
 }
 
@@ -164,12 +188,37 @@ const defaultDeps: HostStatusDeps = {
     // Imported here for the same reason the jump host chain is: the connect
     // path pulls in a good deal that a status check has no use for.
     const { resolveHostGateway } = await import("../connect/host-gateway.js");
+
+    /*
+     * The host's own proxy fields, for the few hosts that have one.
+     *
+     * A plugin is asked about every host from the id alone, but core's own
+     * socks5 columns have to be read off the row -- and the password among
+     * them is encrypted under the owner's key, so the row has to be
+     * decrypted the way the connect path decrypts it. Only hosts whose
+     * useSocks5 flag is set pay for that.
+     */
+    let host: Record<string, unknown> = {
+      id: target.id,
+      userId: target.userId,
+    };
+    if (target.useSocks5) {
+      const row = await createCurrentHostResolutionRepository()
+        .findHostByIdForUser(target.id, target.userId)
+        .catch(() => null);
+      // Null when the owner is not signed in: nothing here can read the
+      // password, and probing directly is the one thing not to do.
+      if (!row) return { reachable: null, reason: GATEWAY_UNREADABLE_REASON };
+      host = {
+        ...row,
+        // Stored as JSON text, and resolveHostGateway wants the list.
+        socks5ProxyChain: parseProxyChain(row.socks5ProxyChain),
+      };
+    }
+
     let gateway: Awaited<ReturnType<typeof resolveHostGateway>>;
     try {
-      gateway = await resolveHostGateway({
-        id: target.id,
-        userId: target.userId,
-      } as never);
+      gateway = await resolveHostGateway(host as never);
     } catch {
       /*
        * "This host's VPN is disabled", "that profile is gone". The route was
@@ -480,43 +529,52 @@ export class HostStatusService {
     return target.port;
   }
 
-  /** Null when the host was not asked at all. See GATEWAY_DOWN_REASON. */
-  private async pingOnce(target: StatusTarget): Promise<boolean | null> {
+  /**
+   * A reachable of null means the host was not asked at all, and the reason
+   * says why. See GATEWAY_DOWN_REASON.
+   */
+  private async pingOnce(
+    target: StatusTarget,
+  ): Promise<{ reachable: boolean | null; reason?: string }> {
     try {
-      if (this.deps.hasActiveSession?.(target.id)) return true;
+      if (this.deps.hasActiveSession?.(target.id)) return { reachable: true };
       const port = await this.portFor(target);
       // Jump hosts first, the way the connect path prefers them: a chain
       // reaches the host from inside, and the gateway is then moot.
       if (target.jumpHosts.length > 0)
-        return await this.deps.pingThroughJumpHosts(target, port);
+        return {
+          reachable: await this.deps.pingThroughJumpHosts(target, port),
+        };
       const through = await this.deps.probeThroughGateway?.(target, port);
-      if (through) return through.reachable;
-      return await this.deps.ping(target.ip, port);
+      if (through) return through;
+      return { reachable: await this.deps.ping(target.ip, port) };
     } catch {
-      return false;
+      return { reachable: false };
     }
   }
 
   private async probeNow(target: StatusTarget): Promise<void> {
     this.owners.set(target.id, target.userId);
-    let reachable = await this.pingOnce(target);
-    if (reachable === false) {
+    let outcome = await this.pingOnce(target);
+    if (outcome.reachable === false) {
       // One lost packet should not flip the dot.
       const delay = this.deps.retryDelayMs ?? 1000;
       if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
-      reachable = await this.pingOnce(target);
+      outcome = await this.pingOnce(target);
     }
-    if (reachable === null) {
+    if (outcome.reachable === null) {
       // Offline, because that is what the dot has and the host cannot be
       // reached right now either way -- but said with its reason, so it
       // does not read as a machine that is down.
       this.set(target.id, {
         status: "offline",
-        reason: GATEWAY_DOWN_REASON,
+        reason: outcome.reason ?? GATEWAY_DOWN_REASON,
       });
       return;
     }
-    this.set(target.id, { status: reachable ? "online" : "offline" });
+    this.set(target.id, {
+      status: outcome.reachable ? "online" : "offline",
+    });
   }
 
   private set(hostId: number, entry: Omit<HostStatusEntry, "lastChecked">) {

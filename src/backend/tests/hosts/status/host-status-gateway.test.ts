@@ -26,8 +26,12 @@ vi.mock("../../../utils/logger.js", () => ({
   pluginLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const { HostStatusService, GATEWAY_DOWN_REASON, toStatusTarget } =
-  await import("../../../hosts/status/host-status-service.js");
+const {
+  HostStatusService,
+  GATEWAY_DOWN_REASON,
+  GATEWAY_UNREADABLE_REASON,
+  toStatusTarget,
+} = await import("../../../hosts/status/host-status-service.js");
 
 type Target = ReturnType<typeof toStatusTarget>;
 
@@ -160,5 +164,33 @@ describe("the hosts this does not touch", () => {
     });
     expect(pingThroughJumpHosts).toHaveBeenCalled();
     expect(probeThroughGateway).not.toHaveBeenCalled();
+  });
+});
+
+describe("every reason the backend can send", () => {
+  it("has English to show for it", async () => {
+    /*
+     * The reason travels to the tooltip as a key, and a key with no string
+     * behind it renders as "hosts.status.gatewayDown" in the interface.
+     * Nothing else would catch that: the backend is happy either way.
+     */
+    const { readFileSync } = await import("node:fs");
+    const path = await import("node:path");
+    const en = JSON.parse(
+      readFileSync(
+        path.join(import.meta.dirname, "../../../../ui/locales/en.json"),
+        "utf8",
+      ),
+    );
+
+    for (const reason of [GATEWAY_DOWN_REASON, GATEWAY_UNREADABLE_REASON]) {
+      const text = reason
+        .split(".")
+        .reduce<unknown>(
+          (node, key) => (node as Record<string, unknown>)?.[key],
+          en,
+        );
+      expect(typeof text, reason).toBe("string");
+    }
   });
 });

@@ -370,6 +370,7 @@
       "checking": "Checking",
       "monitoringDisabled": "Status checks off",
       "gatewayDown": "Not checked: the network this host is reached through is not connected",
+      "gatewayUnreadable": "Not checked: this host's proxy settings could not be read",
       "label": "Status"
     },
     "folderRenamed": "Folder \"{{oldName}}\" renamed to \"{{newName}}\" successfully",

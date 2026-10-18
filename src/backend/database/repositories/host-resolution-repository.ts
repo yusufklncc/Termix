@@ -62,6 +62,15 @@ export interface HostStatusTargetRow {
   jumpHosts: string | null;
   statusCheckEnabled: boolean;
   statusCheckInterval: number | null;
+  /**
+   * Only whether the host has a proxy of its own, not which one.
+   *
+   * The address, the account and the password behind it are read separately
+   * and only for the few hosts this is true for: the password is encrypted
+   * under its owner's key, and decrypting every row on every poll to find
+   * the handful that need it would be paid for by all of them.
+   */
+  useSocks5: boolean | null;
 }
 
 export class HostResolutionRepository {
@@ -288,6 +297,7 @@ export class HostResolutionRepository {
         jumpHosts: hosts.jumpHosts,
         statusCheckEnabled: hosts.statusCheckEnabled,
         statusCheckInterval: hosts.statusCheckInterval,
+        useSocks5: hosts.useSocks5,
       })
       .from(hosts)
       .where(conditions.length > 0 ? and(...conditions) : undefined);

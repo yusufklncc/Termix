@@ -297,6 +297,7 @@ describe("toStatusTarget", () => {
         jumpHosts: '[{"hostId":3},{"bad":1}]',
         statusCheckEnabled: false,
         statusCheckInterval: 30,
+        useSocks5: null,
       }),
     ).toEqual({
       id: 1,
@@ -307,6 +308,24 @@ describe("toStatusTarget", () => {
       jumpHosts: [{ hostId: 3 }],
       statusCheckEnabled: false,
       statusCheckInterval: 30,
+      useSocks5: false,
     });
+  });
+
+  it("carries the host's own proxy flag", () => {
+    // Which decides whether the probe reads the row's proxy settings at all.
+    expect(
+      toStatusTarget({
+        id: 1,
+        userId: "u",
+        ip: "h",
+        port: 22,
+        connectionType: "ssh",
+        jumpHosts: null,
+        statusCheckEnabled: true,
+        statusCheckInterval: null,
+        useSocks5: true,
+      }).useSocks5,
+    ).toBe(true);
   });
 });

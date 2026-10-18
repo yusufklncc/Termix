@@ -545,11 +545,12 @@ Kurulum: [`docs/jenkins-ci.md`](docs/jenkins-ci.md)
       tutardı. O durumda dot "offline" ama gerekçesiyle: entry'de
       `reason: hosts.status.gatewayDown`, tooltip "bu hostun çıktığı ağ bağlı
       değil" diyor. TİM hostlarında yoklama tekrar açılabilir
-- [ ] Aynı sızıntının çekirdek tarafı açık: host'un **kendi** SOCKS5 alanı
-      (`useSocks5`) kullanılıyorsa yoklama hâlâ doğrudan gidiyor.
-      `listStatusTargets` o kolonları seçmiyor ve `socks5Password`
-      kullanıcı anahtarıyla şifreli, yani satırı çözmeden proxy'den
-      geçilemiyor
+- [x] Aynı sızıntının çekirdek tarafı da kapandı: host'un **kendi** SOCKS5
+      alanı kullanılıyorsa yoklama o proxy'den geçiyor. `useSocks5` bayrağı
+      ucuz status satırına eklendi; yalnızca bayrağı olan host için satır
+      sahibin anahtarıyla çözülüyor (`socks5Password` şifreli) ve zincir
+      JSON'u ayrıştırılıyor. Satır çözülemiyorsa (sahibi oturumda değil)
+      host **hiç** yoklanmıyor: `reason: hosts.status.gatewayUnreadable`
 - [ ] Çöken bir eklenti kalıcı olarak kapanıyor (`enabled=false`) ve düzelmiş
       imaj gelse de kendiliğinden açılmıyor; arayüzden de açılamıyor.
       `PATCH /plugins/<id>/state` ile elle açmak gerekti

@@ -522,6 +522,30 @@ Kurulum: [`docs/jenkins-ci.md`](docs/jenkins-ci.md)
       yeniden adlandırıldı; beş eklentide 107 dosya çevrildi
 - [ ] Yamaladığımız iki eklentinin kaynağı 2.9.2'de donmuş durumda;
       upstream'in yeni sürümleriyle elle tazelenmesi gerekecek
+- [x] İmaj derlemesi `plugins/` dizinini göremiyordu: upstream'in
+      `.dockerignore`'u onu dışlıyor ve `npm ci`'ye manifest besleyen aşamayı
+      kaldırmışlar. İkisi de geri kondu; yayın `26.10.1-rdp.22` ile çıktı
+
+### Canlıda bulunan, kapanmamış (2026-10-16/17)
+
+- [ ] **netmgr kapıları kimliksiz dinliyor.** `openDoorway` 0.0.0.0:20000+id'de
+      açık; aynı Docker ağındaki herhangi bir konteyner kurum VPN'ine
+      girebiliyor ve bağlanmak tüneli de açıyor. Geçici önlem: netmgr ayrı bir
+      ağa (`termix-internal`) alındı. Kalıcısı: kapıda SOCKS kimliği
+      (`NET_MANAGER_TOKEN`) ya da kaynak adresi kısıtı. **Önceliklisi bu**
+- [ ] netmgr imajında kök sertifika deposu eksik görünüyor: `vpn.tim.org.tr`
+      için "signer not found", aynı zincir başka makinede doğruluyor. Şimdilik
+      profilde pin-sha256 sabitlendi
+- [ ] RDP'de hosta hiç ulaşılamazsa asıl sebep yalnızca Termix günlüğünde
+      kalıyor, ekrana "transport layer failed" düşüyor. Sebep ekrana
+      taşınabilir (notice ya da ERRR)
+- [ ] Durum yoklaması (host-status / tcpPing) VPN'li hostlarda VPN'den değil
+      doğrudan gidiyor: hepsi yanlışlıkla çevrimdışı görünüyor ve ev
+      bağlantısından kurum IP'lerine paket çıkıyor. TİM hostlarında yoklama
+      kapatılarak geçiştirildi
+- [ ] Çöken bir eklenti kalıcı olarak kapanıyor (`enabled=false`) ve düzelmiş
+      imaj gelse de kendiliğinden açılmıyor; arayüzden de açılamıyor.
+      `PATCH /plugins/<id>/state` ile elle açmak gerekti
 
 ---
 

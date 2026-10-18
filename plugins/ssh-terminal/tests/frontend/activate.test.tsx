@@ -63,6 +63,28 @@ describe(`${manifest.id} activate`, () => {
     );
   });
 
+  it("opens a fresh terminal tab carrying the requested tmux session name", async () => {
+    rendered = await renderWithApp(plugin, { manifest, locales });
+    const host = { id: 7, name: "server", ip: "192.0.2.1", port: 22 };
+    await rendered.app.invokeAction("terminal.open", host, {
+      tmuxSession: "agent-session",
+      label: "agent-session",
+    });
+    expect(rendered.shellCalls).toEqual([
+      {
+        method: "openTab",
+        args: [
+          { ...host, pluginSettings: {} },
+          "terminal",
+          {
+            forceNewTab: true,
+            label: "agent-session",
+            data: { tmuxSession: "agent-session" },
+          },
+        ],
+      },
+    ]);
+  });
   it("duplicates only the SSH connection configuration into a fresh tab", async () => {
     rendered = await renderWithApp(plugin, { manifest, locales });
     const host = { id: 7, name: "server", ip: "192.0.2.1", port: 22 };
@@ -118,9 +140,19 @@ describe(`${manifest.id} activate`, () => {
       expect(rendered.registered.railItems().map((item) => item.id)).toContain(
         "local-terminal",
       );
+      expect(rendered.registered.keybindingActions()).toContain(
+        "openLocalTerminal",
+      );
     } finally {
       delete (window as { IS_ELECTRON?: boolean }).IS_ELECTRON;
     }
+  });
+
+  it("does not register the local terminal shortcut in the browser", async () => {
+    rendered = await renderWithApp(plugin, { manifest, locales });
+    expect(rendered.registered.keybindingActions()).not.toContain(
+      "openLocalTerminal",
+    );
   });
 
   it("terminal.sendToActive and terminal.listSessions report no session when none is registered", async () => {
@@ -159,7 +191,7 @@ describe(`${manifest.id} activate`, () => {
       manifest,
       locales,
       api: {
-        get: async () => ({ data: { user: { terminalDefaults: {} } } }),
+        get: async () => ({ data: { user: {} } }),
       } as never,
     });
     const look = (await rendered.app.invokeAction("terminal.resolveTheme", {
@@ -169,7 +201,7 @@ describe(`${manifest.id} activate`, () => {
         ip: "10.0.0.1",
         port: 22,
         pluginSettings: {
-          "ssh-terminal": { inheritAppearance: false, theme: "dracula" },
+          "ssh-terminal": { theme: "dracula" },
         },
       },
       appTheme: "dark",

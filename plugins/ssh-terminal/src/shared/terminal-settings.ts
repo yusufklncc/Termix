@@ -31,7 +31,7 @@ export interface TerminalThemeColors {
   brightWhite: string;
 }
 
-export interface SyntaxHighlightingOptions {
+interface SyntaxHighlightingOptions {
   logLevels: boolean;
   paths: boolean;
   timestamps: boolean;
@@ -44,8 +44,8 @@ export type CursorStyle = "block" | "underline" | "bar";
 export type BellStyle = "none" | "sound" | "visual" | "both";
 export type FastScrollModifier = "alt" | "ctrl" | "shift";
 export type BackspaceMode = "normal" | "control-h";
-export type HostLocalEcho = "default" | "off" | "auto" | "on";
-export type HostLinkClickBehavior = "default" | "confirm" | "direct";
+type HostLocalEcho = "default" | "off" | "auto" | "on";
+type HostLinkClickBehavior = "default" | "confirm" | "direct";
 
 /** How a terminal looks. Each value follows the host defaults unless the host sets it. */
 export interface TerminalAppearance {
@@ -67,6 +67,8 @@ export interface TerminalAppearance {
 /** How a terminal behaves on one host. */
 export interface TerminalBehavior {
   rightClickSelectsWord: boolean;
+  /** Ctrl or Cmd plus the wheel changes the font size. */
+  wheelZoom: boolean;
   macOptionIsMeta: boolean;
   fastScrollModifier: FastScrollModifier;
   fastScrollSensitivity: number;
@@ -82,15 +84,18 @@ export interface TerminalBehavior {
   passwordPromptAutoFill: boolean;
   sudoPasswordAutoFill: boolean;
   autoReconnect: boolean;
+  keepOpenOnExit: boolean;
+  cloudflareTunnelEnabled: boolean;
+  cloudflareTunnelHostname: string;
+  cloudflareTunnelPort: number;
+  cloudflareTunnelClientId: string;
+  cloudflareTunnelClientSecret: string;
 }
 
 /** Everything the host editor's Terminal tab edits. */
-export interface HostTerminalSettings
-  extends TerminalAppearance, TerminalBehavior {
-  inheritAppearance: boolean;
-}
+export type HostTerminalSettings = TerminalAppearance & TerminalBehavior;
 
-export const APPEARANCE_KEYS = [
+const APPEARANCE_KEYS = [
   "theme",
   "cursorBlink",
   "cursorStyle",
@@ -106,8 +111,12 @@ export const APPEARANCE_KEYS = [
   "customThemeColors",
 ] as const satisfies readonly (keyof TerminalAppearance)[];
 
-export const BEHAVIOR_KEYS = [
+/** The look of a terminal, which a host-less one like the local terminal reads from defaults. */
+export const TERMINAL_APPEARANCE_KEYS: readonly string[] = APPEARANCE_KEYS;
+
+const BEHAVIOR_KEYS = [
   "rightClickSelectsWord",
+  "wheelZoom",
   "macOptionIsMeta",
   "fastScrollModifier",
   "fastScrollSensitivity",
@@ -123,14 +132,18 @@ export const BEHAVIOR_KEYS = [
   "passwordPromptAutoFill",
   "sudoPasswordAutoFill",
   "autoReconnect",
+  "keepOpenOnExit",
+  "cloudflareTunnelEnabled",
+  "cloudflareTunnelHostname",
+  "cloudflareTunnelPort",
+  "cloudflareTunnelClientId",
+  "cloudflareTunnelClientSecret",
 ] as const satisfies readonly (keyof TerminalBehavior)[];
 
-export const INHERIT_APPEARANCE_KEY = "inheritAppearance";
-
 export const DEFAULT_MOSH_COMMAND = "mosh-server new -s -l LANG=en_US.UTF-8";
-export const DEFAULT_FONT_FAMILY = "Caskaydia Cove Nerd Font Mono";
+const DEFAULT_FONT_FAMILY = "Caskaydia Cove Nerd Font Mono";
 
-export const DEFAULT_SYNTAX_HIGHLIGHTING: SyntaxHighlightingOptions = {
+const DEFAULT_SYNTAX_HIGHLIGHTING: SyntaxHighlightingOptions = {
   logLevels: true,
   paths: true,
   timestamps: true,
@@ -157,6 +170,7 @@ export const DEFAULT_APPEARANCE: TerminalAppearance = {
 
 export const DEFAULT_BEHAVIOR: TerminalBehavior = {
   rightClickSelectsWord: false,
+  wheelZoom: true,
   macOptionIsMeta: false,
   fastScrollModifier: "alt",
   fastScrollSensitivity: 5,
@@ -172,12 +186,17 @@ export const DEFAULT_BEHAVIOR: TerminalBehavior = {
   passwordPromptAutoFill: true,
   sudoPasswordAutoFill: false,
   autoReconnect: false,
+  keepOpenOnExit: false,
+  cloudflareTunnelEnabled: false,
+  cloudflareTunnelHostname: "",
+  cloudflareTunnelPort: 443,
+  cloudflareTunnelClientId: "",
+  cloudflareTunnelClientSecret: "",
 };
 
 export const DEFAULT_HOST_TERMINAL_SETTINGS: HostTerminalSettings = {
   ...DEFAULT_APPEARANCE,
   ...DEFAULT_BEHAVIOR,
-  inheritAppearance: true,
 };
 
 export interface SavedCustomTheme {
@@ -190,15 +209,11 @@ export interface SavedCustomTheme {
 export interface TerminalUserSettings {
   customThemes: SavedCustomTheme[];
   commandAutocomplete: boolean;
-  localEcho: "off" | "auto" | "on";
-  linkClickBehavior: "confirm" | "direct";
 }
 
 export const DEFAULT_USER_SETTINGS: TerminalUserSettings = {
   customThemes: [],
   commandAutocomplete: false,
-  localEcho: "auto",
-  linkClickBehavior: "confirm",
 };
 
 const ENUMS: Record<string, readonly string[]> = {
@@ -215,7 +230,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** A JSON string or an object as an object, anything else as null. */
-export function asObject(value: unknown): Record<string, unknown> | null {
+function asObject(value: unknown): Record<string, unknown> | null {
   let parsed = value;
   if (typeof parsed === "string") {
     if (!parsed) return null;
@@ -256,6 +271,12 @@ function pick(key: string, value: unknown): unknown {
         : value;
     case "fontFamily":
       return typeof value === "string" && value ? value : undefined;
+    case "cloudflareTunnelHostname":
+    case "cloudflareTunnelClientId":
+    case "cloudflareTunnelClientSecret":
+      return typeof value === "string" && value !== "[object Object]"
+        ? value
+        : undefined;
     case "backgroundImage":
     case "moshCommand":
       return value === null
@@ -269,6 +290,7 @@ function pick(key: string, value: unknown): unknown {
       return isObject(value)
         ? { ...DEFAULT_SYNTAX_HIGHLIGHTING, ...value }
         : undefined;
+    case "cloudflareTunnelPort":
     case "fontSize":
     case "scrollback":
     case "letterSpacing":
@@ -283,7 +305,7 @@ function pick(key: string, value: unknown): unknown {
 }
 
 /** The keys of an object that fit, typed, with everything else dropped. */
-export function pickTerminalValues(
+function pickTerminalValues(
   source: Record<string, unknown> | null | undefined,
   keys: readonly string[],
 ): Record<string, unknown> {
@@ -296,23 +318,13 @@ export function pickTerminalValues(
   return values;
 }
 
-/**
- * The host settings a 2.8 `terminalConfig` carried: every behavior key it
- * set, and the appearance keys only when it set any, which is also what
- * turns `inheritAppearance` off (2.8 stripped them to follow the user).
- */
+/** The host settings a 2.8 `terminalConfig` carried, each one typed. */
 export function hostSettingsFromTerminalConfig(
   terminalConfig: unknown,
 ): Record<string, unknown> {
   const config = asObject(terminalConfig);
   if (!config) return {};
-  const behavior = pickTerminalValues(config, BEHAVIOR_KEYS);
-  const appearance = pickTerminalValues(config, APPEARANCE_KEYS);
-  const values: Record<string, unknown> = { ...behavior };
-  if (APPEARANCE_KEYS.some((key) => key in config)) {
-    Object.assign(values, appearance, { [INHERIT_APPEARANCE_KEY]: false });
-  }
-  return values;
+  return pickTerminalValues(config, [...BEHAVIOR_KEYS, ...APPEARANCE_KEYS]);
 }
 
 /** Stored host values over the defaults, each one typed. */
@@ -323,11 +335,9 @@ export function readHostTerminalSettings(
     ...APPEARANCE_KEYS,
     ...BEHAVIOR_KEYS,
   ]);
-  const inherit = values?.[INHERIT_APPEARANCE_KEY];
   return {
     ...DEFAULT_HOST_TERMINAL_SETTINGS,
     ...typed,
-    inheritAppearance: typeof inherit === "boolean" ? inherit : true,
   } as HostTerminalSettings;
 }
 
@@ -356,12 +366,6 @@ export function readUserSettings(
         isObject(theme.colors),
     ),
     commandAutocomplete: source.commandAutocomplete === true,
-    localEcho:
-      source.localEcho === "off" || source.localEcho === "on"
-        ? source.localEcho
-        : "auto",
-    linkClickBehavior:
-      source.linkClickBehavior === "direct" ? "direct" : "confirm",
   };
 }
 

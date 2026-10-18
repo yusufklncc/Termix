@@ -4,7 +4,9 @@ import {
   type TouchInputSettings,
 } from "../shared/touch-input-settings";
 import {
+  readHostTerminalSettings,
   readUserSettings,
+  resolveTerminalSettings,
   type TerminalUserSettings,
 } from "../shared/terminal-settings";
 
@@ -29,12 +31,12 @@ export async function getClientSettings(
   };
 }
 
-/** Turns auto tmux on for a host (its terminal host setting). */
-export async function enableHostAutoTmux(
-  api: PluginApiClient,
-  hostId: number,
-): Promise<void> {
-  await api.put(`/hosts/${hostId}/auto-tmux`, { enabled: true });
+/** The user's default terminal look, for a terminal without a host. */
+export async function getDefaultAppearance(api: PluginApiClient) {
+  const { data } = await api.get<Record<string, unknown>>(
+    "/default-appearance",
+  );
+  return resolveTerminalSettings(readHostTerminalSettings(data));
 }
 
 export async function saveCommandToHistory(

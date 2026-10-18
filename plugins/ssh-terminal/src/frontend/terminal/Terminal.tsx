@@ -14,7 +14,6 @@ import {
   useCallback,
   useMemo,
 } from "react";
-import { createPortal } from "react-dom";
 import { useXTerm } from "react-xtermjs";
 import { FitAddon } from "@xterm/addon-fit";
 import { ClipboardAddon } from "@xterm/addon-clipboard";
@@ -27,8 +26,6 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import {
   deleteCommandFromHistory,
-  enableHostAutoTmux,
-  getClientSettings,
   getCommandHistory,
   hostSetting,
 } from "../terminal-api";
@@ -46,8 +43,13 @@ import {
 } from "../look/terminal-font-zoom";
 import { TmuxSessionPicker } from "./TmuxSessionPicker";
 import { getTerminalBufferText } from "./terminal-buffer-text.ts";
+import { isPaneNavHotkey } from "../lib/pane-nav-hotkey";
 import { getMacLineNavigationSequence } from "../lib/mac-line-navigation";
 import { useCommandTracker } from "./command-history/useCommandTracker";
+import {
+  isPasswordPrompt as endsInPasswordPrompt,
+  isSudoPrompt as isSudoPromptOutput,
+} from "./password-prompt";
 import {
   highlightTerminalOutput,
   updateControlStringMode,
@@ -58,6 +60,7 @@ import {
   buildImageUploadFormData,
   type TerminalImageUploadSource,
 } from "./terminal-image-upload";
+import { createTerminalNativePasteHandler } from "./terminal-native-paste";
 import { TerminalSearchBar } from "./search/TerminalSearchBar.tsx";
 import {
   CommandAutocomplete,
@@ -73,10 +76,17 @@ import {
 import { toast } from "sonner";
 import { Save } from "lucide-react";
 import { TerminalToolbar } from "./TerminalToolbar.tsx";
+import { readToolbarSettings } from "./toolbar-settings.ts";
 import type { TerminalHandle, TerminalHostConfig } from "./terminal-types.ts";
 import type { Host, TabType } from "../types";
 import { isTabKeyEvent } from "./terminal-key-event.ts";
 import { installTouchWheelCoordinator } from "./touch-wheel-coordinator.ts";
+import {
+  terminalWheelAction,
+  tmuxScrollLines,
+  wheelHasNothingToScroll,
+  wheelPixels,
+} from "./terminal-wheel.ts";
 import { loadTouchInputSettings } from "./touch-input-settings-store.ts";
 import {
   handleTerminalClipboardKeyEvent,
@@ -112,6 +122,7 @@ import {
   ConnectionLogProvider,
   useConnectionLog,
   ConnectionScreen,
+  PanePrompt,
   Button,
   hydrateLocalSharedHostAuth,
   findMatchingKeybinding,
@@ -119,7 +130,6 @@ import {
   isElectron,
 } from "@termix-ssh/plugin-sdk/ui";
 import {
-  notifyHostsChanged,
   useTranslation,
   invokeAction,
   usePluginApi,
@@ -150,6 +160,8 @@ interface SSHTerminalProps {
   executeCommand?: string;
   /** Attach to this tmux session right after connecting (tmux monitor). */
   tmuxAttachSession?: string;
+  /** The tmux session executeCommand attaches to, so the wheel can scroll it. */
+  tmuxSession?: string;
   onOpenFileManager?: (path?: string) => void;
   onOpenFileInEditor?: (filePath: string) => void;
   previewTheme?: string | null;
@@ -194,6 +206,7 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
       initialPath,
       executeCommand,
       tmuxAttachSession,
+      tmuxSession,
       onOpenFileManager,
       onOpenFileInEditor,
       previewTheme,
@@ -284,6 +297,9 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
     const sessionOriginRef = useRef<"local" | "remote">("local");
     // Set while an auto reconnect runs, so the old output stays on screen.
     const keepScrollbackRef = useRef(false);
+    // The session ended but the tab stays open to show its output.
+    const sessionEndedRef = useRef(false);
+    const reconnectAfterEndRef = useRef<() => void>(() => {});
     const customKeybindingsRef = useRef<CustomKeybinding[]>([]);
     const resizeTimeout = useRef<NodeJS.Timeout | null>(null);
     const wasDisconnectedBySSH = useRef(false);
@@ -295,6 +311,7 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
     const [isSavingQuickConnect, setIsSavingQuickConnect] = useState(false);
     const [isQuickConnectSaved, setIsQuickConnectSaved] = useState(false);
     const [isImageUploading, setIsImageUploading] = useState(false);
+    const imageUploadRef = useRef(handleImageUpload);
     const [isConnecting, setIsConnecting] = useState(false);
     const [isFitted, setIsFitted] = useState(false);
     const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -390,6 +407,8 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
       }>;
     } | null>(null);
     const tmuxSessionNameRef = useRef<string | null>(null);
+    const tmuxSessionPropRef = useRef(tmuxSession);
+    tmuxSessionPropRef.current = tmuxSession;
     const [isTmuxAttached, setIsTmuxAttached] = useState(false);
     const tmuxCopyModeHintShownRef = useRef(false);
 
@@ -426,10 +445,20 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
       true,
     );
 
+    const lastCommandRef = useRef("");
+    const outputTailRef = useRef("");
+    const passwordInputRef = useRef(false);
+    const alternateScreenModeRef = useRef(false);
+
     const { trackInput, getCurrentCommand, updateCurrentCommand } =
       useCommandTracker({
         hostId: hostConfig.id,
         enabled: commandHistoryTrackingEnabled,
+        onLineSubmitted: (line) => {
+          lastCommandRef.current = line;
+        },
+        isPasswordInput: () => passwordInputRef.current,
+        isFullScreen: () => alternateScreenModeRef.current,
         onCommandExecuted: (command) => {
           if (!autocompleteHistory.current.includes(command)) {
             autocompleteHistory.current = [
@@ -598,8 +627,12 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
       autosuggestionRef.current = autosuggestion;
     }, [autosuggestion]);
 
+    // History means nothing inside tmux, vim or less, so Tab and
+    // suggestions go to the app there.
     const isAutocompleteEnabled = useCallback(
-      () => termUserRef.current.commandAutocomplete,
+      () =>
+        termUserRef.current.commandAutocomplete &&
+        !alternateScreenModeRef.current,
       [],
     );
 
@@ -852,7 +885,6 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
     const activityLoggingRef = useRef(false);
     const passwordPromptShownRef = useRef(false);
     const passwordPromptBufferRef = useRef("");
-    const alternateScreenModeRef = useRef(false);
     const controlStringModeRef = useRef(false);
 
     const lastSentSizeRef = useRef<{ cols: number; rows: number } | null>(null);
@@ -1107,7 +1139,12 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
       }
     }
 
-    function handleTotpCancel() {
+    /**
+     * Closes the MFA dialog and stops its timer. Also used once the server
+     * has moved past the prompt, so a push approval that was waiting doesn't
+     * leave the dialog over the terminal or let the timer close the session.
+     */
+    function dismissMfaPrompt() {
       if (totpTimeoutRef.current) {
         clearTimeout(totpTimeoutRef.current);
         totpTimeoutRef.current = null;
@@ -1117,6 +1154,10 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
       setIsPasswordPrompt(false);
       setMfaPromptMode("totp");
       setMfaWaiting(false);
+    }
+
+    function handleTotpCancel() {
+      dismissMfaPrompt();
       if (onClose) onClose();
     }
 
@@ -1310,11 +1351,9 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
       );
       passwordPromptBufferRef.current = buffered;
 
-      const passwordPromptPattern =
-        /(?:\[sudo\][^\n\r]*:\s*$|sudo:[^\n\r]*password[^\n\r]*required|password for [^\n\r]*:\s*$|Password:\s*$|password:\s*$)/im;
-      if (!passwordPromptPattern.test(buffered)) return;
+      if (!endsInPasswordPrompt(buffered)) return;
 
-      const isSudoPrompt = /(?:\[sudo\]|sudo:)/i.test(buffered);
+      const isSudoPrompt = isSudoPromptOutput(buffered, lastCommandRef.current);
 
       // Sudo autofill is opt-in: the saved sudo password must not be sent
       // to a privilege-escalation prompt unless the host explicitly enables it.
@@ -1332,37 +1371,32 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
       passwordPromptShownRef.current = true;
       passwordPromptBufferRef.current = "";
 
-      /*
-       * Asked over this surface rather than as a toast: Enter confirms and
-       * Esc cancels before the terminal under it can see the key, which is
-       * the whole point of asking while a password prompt is waiting.
-       */
       void confirm({
         title: t("terminal.passwordPromptFillTitle"),
         confirmLabel: t("common.confirm"),
         cancelLabel: t("common.cancel"),
-        // Filling in a password is not the deleting kind.
         destructive: false,
-      }).then(async (filled) => {
-        // Declining leaves the 15 second timer below to clear the flag, the
-        // way it did when the toast was simply ignored.
-        if (!filled) return;
-        const passwordToFill = await resolvePasswordForPrompt(isSudoPrompt);
-        if (
-          passwordToFill &&
-          webSocketRef.current &&
-          webSocketRef.current.readyState === WebSocket.OPEN
-        ) {
-          webSocketRef.current.send(
-            JSON.stringify({
-              type: "input",
-              data: passwordToFill + "\n",
-            }),
-          );
-        }
-        setTimeout(() => {
-          passwordPromptShownRef.current = false;
-        }, 3000);
+      }).then((ok) => {
+        if (ok)
+          void (async () => {
+            const passwordToFill = await resolvePasswordForPrompt(isSudoPrompt);
+            if (
+              passwordToFill &&
+              webSocketRef.current &&
+              webSocketRef.current.readyState === WebSocket.OPEN
+            ) {
+              webSocketRef.current.send(
+                JSON.stringify({
+                  type: "input",
+                  data: passwordToFill + "\n",
+                }),
+              );
+            }
+            setTimeout(() => {
+              passwordPromptShownRef.current = false;
+            }, 3000);
+          })();
+        return ok;
       });
       setTimeout(() => {
         passwordPromptShownRef.current = false;
@@ -1593,49 +1627,6 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
       }, delay);
     }
 
-    // A persisted session that timed out reconnects to a fresh shell below.
-    // Say so, and offer the setting that would have kept it alive.
-    async function explainSessionExpiry() {
-      const hostLabel = hostConfig.name || hostConfig.ip;
-      let minutes: number | null = null;
-      try {
-        minutes = (await getClientSettings(api)).sessionTimeoutMinutes;
-      } catch {
-        /* the notice still makes sense without the number */
-      }
-      const notice = minutes
-        ? t("terminal.sessionExpiredNotice", { host: hostLabel, minutes })
-        : t("terminal.sessionExpiredNoticeNoMinutes", { host: hostLabel });
-      addLog({ type: "warning", stage: "connection", message: notice });
-
-      const canEnable =
-        typeof hostConfig.id === "number" &&
-        !termSettingsRef.current.autoTmux &&
-        !hostConfig.joinShareId;
-      toast.warning(notice, {
-        duration: 15000,
-        ...(canEnable
-          ? {
-              action: {
-                label: t("terminal.enableAutoTmuxAction"),
-                onClick: () => {
-                  void enableHostAutoTmux(api, hostConfig.id as number)
-                    .then(() => {
-                      notifyHostsChanged();
-                      toast.success(
-                        t("terminal.autoTmuxEnabled", { host: hostLabel }),
-                      );
-                    })
-                    .catch(() =>
-                      toast.error(t("terminal.autoTmuxEnableFailed")),
-                    );
-                },
-              },
-            }
-          : {}),
-      });
-    }
-
     async function connectToHost(cols: number, rows: number) {
       if (isConnectingRef.current) {
         return;
@@ -1812,12 +1803,13 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
         }
         terminalInputDisposableRef.current?.dispose();
         localEchoRef.current = new TerminalLocalEcho(
-          resolveLocalEchoMode(
-            termSettingsRef.current.localEcho,
-            termUserRef.current.localEcho,
-          ),
+          resolveLocalEchoMode(termSettingsRef.current.localEcho),
         );
         terminalInputDisposableRef.current = terminal.onData((data) => {
+          if (sessionEndedRef.current) {
+            if (data === "\r") reconnectAfterEndRef.current();
+            return;
+          }
           if (ws.readyState !== WebSocket.OPEN) return;
           if (data === "\r" || data === "\n") {
             const currentCmd = getCurrentCommand().trim();
@@ -1919,11 +1911,17 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
               const output = applyLocalEchoToOutput(msg.data);
               terminal.write(formatTerminalOutput(output));
               scheduleAutosuggestionUpdate();
-              // Strip ANSI escape codes before testing — newer sudo versions (Ubuntu 26.04+)
+              // Strip ANSI escape codes before testing, newer sudo versions (Ubuntu 26.04+)
               // emit colored prompts with embedded escape sequences that break the regex.
               const strippedData = msg.data.replace(
                 /\x1b(?:[@-Z\\-_]|\[[0-9:;<=>?!]*[@-~])/g,
                 "",
+              );
+              outputTailRef.current = (
+                outputTailRef.current + strippedData
+              ).slice(-200);
+              passwordInputRef.current = endsInPasswordPrompt(
+                outputTailRef.current,
               );
               maybeOfferPasswordFill(strippedData);
             } else {
@@ -1934,6 +1932,7 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
             }
           } else if (msg.type === "error") {
             const errorMessage = msg.message || t("terminal.unknownError");
+            dismissMfaPrompt();
 
             addLog({
               type: "error",
@@ -1985,6 +1984,7 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
             updateConnectionError(errorMessage);
             setIsConnecting(false);
           } else if (msg.type === "connected") {
+            dismissMfaPrompt();
             if (keepScrollbackRef.current) {
               keepScrollbackRef.current = false;
               reconnectAttempts.current = 0;
@@ -2077,9 +2077,7 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
             setIsConnected(false);
             setIsConnecting(false);
             shouldNotReconnectRef.current = true;
-            if (onClose) {
-              onClose();
-            }
+            endSession();
           } else if (msg.type === "disconnected") {
             wasDisconnectedBySSH.current = true;
             shouldNotReconnectRef.current = true;
@@ -2087,7 +2085,7 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
             setIsConnecting(false);
             if (msg.graceful) {
               wasConnectedRef.current = false;
-              if (onClose) onClose();
+              endSession();
             } else if (wasConnectedRef.current) {
               wasConnectedRef.current = false;
               if (
@@ -2136,9 +2134,15 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
             setMfaWaiting(false);
           } else if (msg.type === "password_required") {
             const promptText: string = msg.prompt || "";
+            // The backend says whether this is a confirm-only push. Older
+            // servers don't, so fall back to the prompt text. A menu such as
+            // "Choose [1] Push, or [2] TOTP:" needs a text field instead.
             const pushPromptPattern =
-              /choose.*push.*totp|press enter.*(push|send)|push notification|authentication by phone/i;
-            const isPush = pushPromptPattern.test(promptText);
+              /press enter.*(push|send)|push notification|authentication by phone/i;
+            const isPush =
+              typeof msg.isPush === "boolean"
+                ? msg.isPush
+                : pushPromptPattern.test(promptText);
             const isMenu = !isPush && msg.echo === true;
             const mode: "menu" | "push" | "password" = isPush
               ? "push"
@@ -2275,7 +2279,6 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
             isAttachingSessionRef.current = false;
             sessionIdRef.current = null;
             wasSessionExpiredRef.current = true;
-            void explainSessionExpiry();
             if (hostConfig.instanceId) {
               patchOpenTab(hostConfig.instanceId!, {
                 backendSessionId: null,
@@ -2676,7 +2679,8 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
         allowTransparency: true, // MUST be set before open()
         convertEol: false,
         macOptionIsMeta: config.macOptionIsMeta,
-        macOptionClickForcesSelection: false,
+        // Option+drag selects text while an app like mc uses the mouse.
+        macOptionClickForcesSelection: true,
         rightClickSelectsWord: config.rightClickSelectsWord,
         fastScrollSensitivity: config.fastScrollSensitivity,
         allowProposedApi: true,
@@ -2722,11 +2726,7 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
             ? uri
             : `https://${uri}`;
 
-        const hostBehavior = termSettingsRef.current.linkClickBehavior;
-        const behavior =
-          hostBehavior && hostBehavior !== "default"
-            ? hostBehavior
-            : termUserRef.current.linkClickBehavior;
+        const behavior = termSettingsRef.current.linkClickBehavior;
 
         if (behavior === "direct") {
           window.open(url, "_blank");
@@ -2771,23 +2771,58 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
         fitTerminal();
       });
 
+      let tmuxWheelPixels = 0;
+      let tmuxWheelTimer: ReturnType<typeof setTimeout> | null = null;
       terminal.attachCustomWheelEventHandler((ev) => {
-        if (ev.ctrlKey || ev.metaKey) {
+        const cfg = termSettingsRef.current;
+        const action = terminalWheelAction(ev, cfg);
+        if (action === "zoom") {
           changeTerminalFontSize(ev.deltaY < 0 ? 1 : -1);
           return false;
         }
-
-        const cfg = termSettingsRef.current;
-        const mod = cfg.fastScrollModifier;
-        const modHeld =
-          (mod === "alt" && ev.altKey) ||
-          (mod === "ctrl" && ev.ctrlKey) ||
-          (mod === "shift" && ev.shiftKey);
-        if (modHeld) {
+        if (action === "fast") {
           const lines = Math.round(
             (Math.abs(ev.deltaY) / 100) * (cfg.fastScrollSensitivity ?? 5),
           );
           terminal.scrollLines(ev.deltaY > 0 ? lines : -lines);
+          ev.preventDefault();
+          return false;
+        }
+        // Over tmux without mouse mode, xterm would send arrow keys to the
+        // shell. Ask tmux to scroll its own history instead.
+        const tmuxName =
+          tmuxSessionNameRef.current ?? tmuxSessionPropRef.current;
+        if (
+          tmuxName &&
+          tmuxName !== "(active)" &&
+          terminal.buffer.active.type === "alternate" &&
+          terminal.modes.mouseTrackingMode === "none"
+        ) {
+          ev.preventDefault();
+          tmuxWheelPixels += wheelPixels(ev.deltaY, ev.deltaMode);
+          if (!tmuxWheelTimer) {
+            tmuxWheelTimer = setTimeout(() => {
+              tmuxWheelTimer = null;
+              const pixels = tmuxWheelPixels;
+              tmuxWheelPixels = 0;
+              if (pixels === 0) return;
+              if (webSocketRef.current?.readyState !== WebSocket.OPEN) return;
+              webSocketRef.current.send(
+                JSON.stringify({
+                  type: "tmux_scroll",
+                  data: {
+                    sessionName: tmuxName,
+                    direction: pixels < 0 ? "up" : "down",
+                    lines: tmuxScrollLines(pixels),
+                  },
+                }),
+              );
+            }, 50);
+          }
+          return false;
+        }
+        if (wheelHasNothingToScroll(terminal.buffer.active)) {
+          ev.preventDefault();
           return false;
         }
         return true;
@@ -2822,7 +2857,7 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
         if (e.ctrlKey && onOpenFileManager) {
           e.preventDefault();
           e.stopPropagation();
-          onOpenFileManager();
+          openFilesAtCwd();
           return;
         }
 
@@ -2873,15 +2908,12 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
       };
       element?.addEventListener("auxclick", handleMiddleClick);
 
-      const handlePaste = (e: ClipboardEvent) => {
-        const text = e.clipboardData?.getData("text");
-        if (text) {
-          e.preventDefault();
-          e.stopPropagation();
-          terminal.paste(text);
-        }
-      };
-      element?.addEventListener("paste", handlePaste);
+      const handlePaste = createTerminalNativePasteHandler(
+        (text) => terminal.paste(text),
+        (file) => void imageUploadRef.current(file, "clipboard"),
+      );
+      // Capture before xterm handles paste, so images do not become empty or duplicate input.
+      element?.addEventListener("paste", handlePaste, true);
 
       let tmuxDragTracking = false;
       const handleTmuxDragStart = (e: MouseEvent) => {
@@ -2955,7 +2987,7 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
         element?.removeEventListener("contextmenu", handleContextMenu);
         element?.removeEventListener("mouseup", handleSelectionMouseUp);
         element?.removeEventListener("auxclick", handleMiddleClick);
-        element?.removeEventListener("paste", handlePaste);
+        element?.removeEventListener("paste", handlePaste, true);
         element?.removeEventListener("mousedown", handleTmuxDragStart);
         element?.removeEventListener("mousemove", handleTmuxDragMove);
         element?.removeEventListener("mouseup", handleTmuxDragEnd);
@@ -3146,7 +3178,7 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
           return false;
         }
 
-        // Forward global app shortcuts to AppShell directly — xterm swallows
+        // Forward global app shortcuts to AppShell directly, xterm swallows
         // all keydown events and synthetic re-dispatch is unreliable.
         // stopPropagation prevents the same event from also firing the window listener.
         if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
@@ -3164,16 +3196,12 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
           }
         }
 
-        if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
-          const arrowCodes = [
-            "ArrowLeft",
-            "ArrowRight",
-            "ArrowUp",
-            "ArrowDown",
-          ];
-          if (arrowCodes.includes(e.code)) {
+        // Only keep the key when core moved to another pane. Otherwise it
+        // goes to the shell, where Alt+Arrow jumps a word.
+        if (isPaneNavHotkey(e)) {
+          globalShortcutHandler.current?.(e);
+          if (e.defaultPrevented) {
             e.stopPropagation();
-            globalShortcutHandler.current?.(e);
             return false;
           }
         }
@@ -3365,9 +3393,7 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
             }
           };
 
-          const autocompleteEnabled = termUserRef.current.commandAutocomplete;
-
-          if (!autocompleteEnabled) {
+          if (!isAutocompleteEnabled()) {
             clearAutosuggestion();
             sendTabToShell();
             return false;
@@ -3575,6 +3601,11 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
       }
     }
 
+    // Keep the terminal session and upload callback current without rebuilding xterm.
+    useEffect(() => {
+      imageUploadRef.current = handleImageUpload;
+    });
+
     async function handleClipboardImage() {
       if (!navigator.clipboard?.read) {
         toast.error(t("terminal.imageClipboardUnavailable"));
@@ -3637,387 +3668,412 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
       }
     }
 
-    return (
-      <div
-        className="h-full w-full relative"
-        style={{
-          backgroundColor: backgroundImage ? "transparent" : backgroundColor,
-          ...(backgroundImage && {
-            backgroundImage: `url(${backgroundImage})`,
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-            backgroundRepeat: "no-repeat",
-          }),
+    const toolbar = host && showToolbar && (
+      <TerminalToolbar
+        host={host}
+        isConnected={isConnected}
+        isTmuxAttached={isTmuxAttached}
+        onTmuxDetach={() => {
+          if (webSocketRef.current?.readyState === WebSocket.OPEN) {
+            webSocketRef.current.send(JSON.stringify({ type: "tmux_detach" }));
+          }
         }}
-      >
-        {backgroundImage && (
-          <div
-            className="absolute inset-0 pointer-events-none"
-            style={{
-              backgroundColor: themeColors.background,
-              opacity: 1 - backgroundImageOpacity,
-            }}
-          />
-        )}
+        isImageUploading={isImageUploading}
+        onUploadImage={(file) => void handleImageUpload(file, "file")}
+        onPasteImage={() => void handleClipboardImage()}
+        slotApi={slotApi}
+        onOpenFiles={onOpenFileManager ? openFilesAtCwd : undefined}
+        isFocused={isFocusedPane}
+      />
+    );
+    const toolbarOnTop = readToolbarSettings(host).position === "top";
+
+    // Closes the tab when the shell ends, unless the host keeps it open to
+    // show the last output.
+    function endSession() {
+      if (!termSettingsRef.current.keepOpenOnExit) {
+        onClose?.();
+        return;
+      }
+      sessionEndedRef.current = true;
+      terminal?.write(
+        `\r\n\x1b[2m${t("terminal.sessionEndedKeepOpen")}\x1b[0m\r\n`,
+      );
+    }
+
+    reconnectAfterEndRef.current = () => {
+      if (!terminal) return;
+      sessionEndedRef.current = false;
+      isUnmountingRef.current = false;
+      shouldNotReconnectRef.current = false;
+      isReconnectingRef.current = false;
+      isConnectingRef.current = false;
+      reconnectAttempts.current = 0;
+      wasDisconnectedBySSH.current = false;
+      wasConnectedRef.current = false;
+      keepScrollbackRef.current = true;
+      updateConnectionError(null);
+      connectToHost(terminal.cols, terminal.rows);
+    };
+
+    return (
+      <div className="flex h-full w-full flex-col">
+        {toolbarOnTop && toolbar}
         <div
-          ref={xtermRef}
-          className="h-full w-full relative"
+          className="relative min-h-0 w-full flex-1"
           style={{
-            pointerEvents: isVisible ? "auto" : "none",
-            visibility:
-              isConnected && isFitted && !connectionError
-                ? "visible"
-                : "hidden",
+            backgroundColor: backgroundImage ? "transparent" : backgroundColor,
+            ...(backgroundImage && {
+              backgroundImage: `url(${backgroundImage})`,
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+              backgroundRepeat: "no-repeat",
+            }),
           }}
-          onClick={() => {
-            if (terminal && !splitScreen) {
-              terminal.focus();
-            }
-          }}
-        />
-
-        {isConnected &&
-          host &&
-          !showToolbar &&
-          dockContributions.map((contribution, index) => {
-            const Icon = contribution.icon;
-            return (
-              <Button
-                key={contribution.actionId}
-                type="button"
-                size="icon"
-                variant="secondary"
-                onClick={() =>
-                  setDock((open) =>
-                    open?.id === contribution.actionId
-                      ? null
-                      : { id: contribution.actionId, props: {} },
-                  )
-                }
-                title={
-                  t(contribution.titleKey) +
-                  (index === 0 ? " (Ctrl+Shift+A)" : "")
-                }
-                className="absolute top-2 z-[110] size-8 bg-black/60 text-white/75 hover:bg-black/80 hover:text-white"
-                style={{ right: 8 + index * 40 }}
-              >
-                {Icon && <Icon className="size-4" />}
-              </Button>
-            );
-          })}
-
-        {host && showToolbar && (
-          <TerminalToolbar
-            host={host}
-            isConnected={isConnected}
-            isTmuxAttached={isTmuxAttached}
-            onTmuxDetach={() => {
-              if (webSocketRef.current?.readyState === WebSocket.OPEN) {
-                webSocketRef.current.send(
-                  JSON.stringify({ type: "tmux_detach" }),
-                );
+        >
+          {backgroundImage && (
+            <div
+              className="absolute inset-0 pointer-events-none"
+              style={{
+                backgroundColor: themeColors.background,
+                opacity: 1 - backgroundImageOpacity,
+              }}
+            />
+          )}
+          <div
+            ref={xtermRef}
+            className="h-full w-full relative"
+            style={{
+              pointerEvents: isVisible ? "auto" : "none",
+              visibility:
+                isConnected && isFitted && !connectionError
+                  ? "visible"
+                  : "hidden",
+            }}
+            onClick={() => {
+              if (terminal && !splitScreen) {
+                terminal.focus();
               }
             }}
-            isImageUploading={isImageUploading}
-            onUploadImage={(file) => void handleImageUpload(file, "file")}
-            onPasteImage={() => void handleClipboardImage()}
-            isFocused={isFocusedPane}
-            slotApi={slotApi}
-            onOpenFiles={onOpenFileManager ? openFilesAtCwd : undefined}
           />
-        )}
 
-        {dock &&
-          (() => {
-            const contribution = dockContributions.find(
-              (item) => item.actionId === dock.id,
-            );
-            const Panel = contribution?.component;
-            if (!Panel) return null;
-            return (
-              <Panel
-                host={host}
-                hostId={hostConfig.id}
-                hostLabel={`${hostConfig.username}@${hostConfig.name || hostConfig.ip}`}
-                panelProps={dock.props}
-                onClose={closeDock}
-                onRunInTerminal={handleRunCommandInTerminal}
-              />
-            );
-          })()}
+          {isConnected &&
+            host &&
+            !showToolbar &&
+            dockContributions.map((contribution, index) => {
+              const Icon = contribution.icon;
+              return (
+                <Button
+                  key={contribution.actionId}
+                  type="button"
+                  size="icon"
+                  variant="secondary"
+                  onClick={() =>
+                    setDock((open) =>
+                      open?.id === contribution.actionId
+                        ? null
+                        : { id: contribution.actionId, props: {} },
+                    )
+                  }
+                  title={
+                    t(contribution.titleKey) +
+                    (index === 0 ? " (Ctrl+Shift+A)" : "")
+                  }
+                  className="absolute top-2 z-[110] size-8 bg-black/60 text-white/75 hover:bg-black/80 hover:text-white"
+                  style={{ right: 8 + index * 40 }}
+                >
+                  {Icon && <Icon className="size-4" />}
+                </Button>
+              );
+            })}
 
-        {isQuickConnect &&
-          isConnected &&
-          !isQuickConnectSaved &&
-          onSaveQuickConnect && (
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={isSavingQuickConnect}
-              onClick={async () => {
-                setIsSavingQuickConnect(true);
-                try {
-                  await onSaveQuickConnect();
-                  setIsQuickConnectSaved(true);
-                } catch {
-                  // The shell reports the failure with a toast.
-                } finally {
-                  setIsSavingQuickConnect(false);
+          {dock &&
+            (() => {
+              const contribution = dockContributions.find(
+                (item) => item.actionId === dock.id,
+              );
+              const Panel = contribution?.component;
+              if (!Panel) return null;
+              return (
+                <Panel
+                  host={host}
+                  hostId={hostConfig.id}
+                  hostLabel={`${hostConfig.username}@${hostConfig.name || hostConfig.ip}`}
+                  panelProps={dock.props}
+                  onClose={closeDock}
+                  onRunInTerminal={handleRunCommandInTerminal}
+                />
+              );
+            })()}
+
+          {isQuickConnect &&
+            isConnected &&
+            !isQuickConnectSaved &&
+            onSaveQuickConnect && (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={isSavingQuickConnect}
+                onClick={async () => {
+                  setIsSavingQuickConnect(true);
+                  try {
+                    await onSaveQuickConnect();
+                    setIsQuickConnectSaved(true);
+                  } catch {
+                    // The shell reports the failure with a toast.
+                  } finally {
+                    setIsSavingQuickConnect(false);
+                  }
+                }}
+                className="absolute top-2 left-2 z-[110] h-7 gap-1.5 bg-black/60 text-white/80 hover:bg-black/80 hover:text-white"
+              >
+                <Save className="size-3.5" />
+                {t("hosts.addHost")}
+              </Button>
+            )}
+
+          <ConnectionScreen
+            status={
+              showDisconnectedOverlay
+                ? "disconnected"
+                : isConnecting
+                  ? "connecting"
+                  : hasConnectionError
+                    ? "error"
+                    : "connected"
+            }
+            message={t("terminal.connecting")}
+            detail={
+              hostConfig.ip
+                ? `${hostConfig.username ? `${hostConfig.username}@` : ""}${hostConfig.ip}${hostConfig.port ? `:${hostConfig.port}` : ""}`
+                : undefined
+            }
+            errorDetail={connectionError}
+            backgroundColor={backgroundColor}
+            attempt={reconnectAttempts.current}
+            maxAttempts={maxReconnectAttempts}
+            disconnectedMessage={t("terminal.connectionLost")}
+            onManualRetry={() => {
+              setShowDisconnectedOverlay(false);
+              isUnmountingRef.current = false;
+              shouldNotReconnectRef.current = false;
+              isReconnectingRef.current = false;
+              isConnectingRef.current = false;
+              reconnectAttempts.current = 0;
+              wasDisconnectedBySSH.current = false;
+              wasConnectedRef.current = false;
+              updateConnectionError(null);
+              if (terminal) {
+                terminal.clear();
+                connectToHost(terminal.cols, terminal.rows);
+              }
+            }}
+            onClose={onClose}
+            logPosition={hasConnectionError ? "top" : "bottom"}
+          />
+
+          <TOTPDialog
+            isOpen={totpRequired}
+            prompt={totpPrompt}
+            mode={mfaPromptMode}
+            waiting={mfaWaiting}
+            onSubmit={handleTotpSubmit}
+            onCancel={handleTotpCancel}
+            backgroundColor={backgroundColor}
+          />
+
+          <SSHAuthDialog
+            isOpen={showAuthDialog}
+            reason={authDialogReason}
+            onSubmit={handleAuthDialogSubmit}
+            onCancel={handleAuthDialogCancel}
+            hostInfo={{
+              ip: hostConfig.ip,
+              port: hostConfig.port,
+              username: hostConfig.username,
+              name: hostConfig.name,
+            }}
+            backgroundColor={backgroundColor}
+          />
+
+          <PassphraseDialog
+            isOpen={showPassphraseDialog}
+            onSubmit={handlePassphraseSubmit}
+            onCancel={handlePassphraseCancel}
+            hostInfo={{
+              ip: hostConfig.ip,
+              port: hostConfig.port,
+              username: hostConfig.username,
+              name: hostConfig.name,
+            }}
+            backgroundColor={backgroundColor}
+          />
+
+          <BrowserSignInDialog
+            isOpen={browserSignIn !== null}
+            label={browserSignIn?.label ?? ""}
+            url={browserSignIn?.url ?? ""}
+            code={browserSignIn?.code ?? ""}
+            onContinue={handleBrowserSignInContinue}
+            onCancel={handleBrowserSignInCancel}
+            onOpenUrl={handleBrowserSignInOpenUrl}
+            backgroundColor={backgroundColor}
+          />
+
+          <ComponentSlot
+            slotId={TERMINAL_OVERLAY_SLOT}
+            when={{ host }}
+            props={overlayProps as unknown as Record<string, unknown>}
+          />
+
+          {hostKeyVerification?.isOpen && (
+            <HostKeyVerificationDialog
+              isOpen={true}
+              scenario={hostKeyVerification.scenario}
+              {...hostKeyVerification.data}
+              onAccept={() => {
+                if (webSocketRef.current) {
+                  webSocketRef.current.send(
+                    JSON.stringify({
+                      type: "host_key_verification_response",
+                      data: { action: "accept" },
+                    }),
+                  );
                 }
+                setHostKeyVerification(null);
               }}
-              className="absolute top-2 left-2 z-[110] h-7 gap-1.5 bg-black/60 text-white/80 hover:bg-black/80 hover:text-white"
-            >
-              <Save className="size-3.5" />
-              {t("hosts.addHost")}
-            </Button>
+              onReject={() => {
+                if (webSocketRef.current) {
+                  webSocketRef.current.send(
+                    JSON.stringify({
+                      type: "host_key_verification_response",
+                      data: { action: "reject" },
+                    }),
+                  );
+                }
+                setHostKeyVerification(null);
+                setIsConnecting(false);
+                updateConnectionError(t("terminal.hostKeyRejected"));
+              }}
+              backgroundColor={backgroundColor}
+            />
           )}
 
-        <ConnectionScreen
-          status={
-            showDisconnectedOverlay
-              ? "disconnected"
-              : isConnecting
-                ? "connecting"
-                : hasConnectionError
-                  ? "error"
-                  : "connected"
-          }
-          message={t("terminal.connecting")}
-          backgroundColor={backgroundColor}
-          attempt={reconnectAttempts.current}
-          maxAttempts={maxReconnectAttempts}
-          disconnectedMessage={t("terminal.connectionLost")}
-          onManualRetry={() => {
-            setShowDisconnectedOverlay(false);
-            isUnmountingRef.current = false;
-            shouldNotReconnectRef.current = false;
-            isReconnectingRef.current = false;
-            isConnectingRef.current = false;
-            reconnectAttempts.current = 0;
-            wasDisconnectedBySSH.current = false;
-            wasConnectedRef.current = false;
-            updateConnectionError(null);
-            if (terminal) {
-              terminal.clear();
-              connectToHost(terminal.cols, terminal.rows);
+          {tmuxSessionPicker && (
+            <TmuxSessionPicker
+              isOpen={true}
+              sessions={tmuxSessionPicker.sessions}
+              onSelect={(sessionName) => {
+                setTmuxSessionPicker(null);
+                if (webSocketRef.current?.readyState === WebSocket.OPEN) {
+                  webSocketRef.current.send(
+                    JSON.stringify({
+                      type: "tmux_attach",
+                      data: { sessionName },
+                    }),
+                  );
+                }
+                setTimeout(() => terminal?.focus(), 50);
+              }}
+              onCreateNew={() => {
+                setTmuxSessionPicker(null);
+                if (webSocketRef.current?.readyState === WebSocket.OPEN) {
+                  webSocketRef.current.send(
+                    JSON.stringify({
+                      type: "tmux_attach",
+                      data: { sessionName: "" },
+                    }),
+                  );
+                }
+                setTimeout(() => terminal?.focus(), 50);
+              }}
+              onCancel={() => setTmuxSessionPicker(null)}
+              backgroundColor={backgroundColor}
+            />
+          )}
+
+          <CommandAutocomplete
+            visible={showAutocomplete}
+            suggestions={autocompleteSuggestions}
+            selectedIndex={autocompleteSelectedIndex}
+            position={autocompletePosition}
+            onSelect={handleAutocompleteSelect}
+          />
+          <CommandAutosuggestion
+            visible={!showAutocomplete && Boolean(autosuggestion)}
+            suggestion={autosuggestion}
+            position={autosuggestionPosition}
+            style={autosuggestionStyle}
+          />
+
+          <TerminalSearchBar
+            visible={showSearch}
+            query={searchQuery}
+            onQueryChange={handleSearchQueryChange}
+            onFindNext={() => runSearch("next")}
+            onFindPrevious={() => runSearch("previous")}
+            onClose={closeSearch}
+            caseSensitive={searchCaseSensitive}
+            onToggleCaseSensitive={toggleSearchCaseSensitive}
+            wholeWord={searchWholeWord}
+            onToggleWholeWord={toggleSearchWholeWord}
+            regex={searchRegex}
+            onToggleRegex={toggleSearchRegex}
+            resultIndex={searchResultIndex}
+            resultCount={searchResultCount}
+            inputRef={searchInputRef}
+          />
+
+          <PanePrompt
+            open={!!linkClickDialog}
+            title={t("terminal.linkDialogTitle")}
+            description={
+              <span className="select-all break-all font-mono text-foreground">
+                {linkClickDialog?.url}
+              </span>
             }
-          }}
-          extraActions={
-            onClose && (
-              <Button variant="outline" onClick={onClose}>
-                {t("terminal.closeTab")}
-              </Button>
-            )
-          }
-          logPosition={hasConnectionError ? "top" : "bottom"}
-        />
-
-        <TOTPDialog
-          isOpen={totpRequired}
-          prompt={totpPrompt}
-          mode={mfaPromptMode}
-          waiting={mfaWaiting}
-          onSubmit={handleTotpSubmit}
-          onCancel={handleTotpCancel}
-          backgroundColor={backgroundColor}
-        />
-
-        <SSHAuthDialog
-          isOpen={showAuthDialog}
-          reason={authDialogReason}
-          onSubmit={handleAuthDialogSubmit}
-          onCancel={handleAuthDialogCancel}
-          hostInfo={{
-            ip: hostConfig.ip,
-            port: hostConfig.port,
-            username: hostConfig.username,
-            name: hostConfig.name,
-          }}
-          backgroundColor={backgroundColor}
-        />
-
-        <PassphraseDialog
-          isOpen={showPassphraseDialog}
-          onSubmit={handlePassphraseSubmit}
-          onCancel={handlePassphraseCancel}
-          hostInfo={{
-            ip: hostConfig.ip,
-            port: hostConfig.port,
-            username: hostConfig.username,
-            name: hostConfig.name,
-          }}
-          backgroundColor={backgroundColor}
-        />
-
-        <BrowserSignInDialog
-          isOpen={browserSignIn !== null}
-          label={browserSignIn?.label ?? ""}
-          url={browserSignIn?.url ?? ""}
-          code={browserSignIn?.code ?? ""}
-          onContinue={handleBrowserSignInContinue}
-          onCancel={handleBrowserSignInCancel}
-          onOpenUrl={handleBrowserSignInOpenUrl}
-          backgroundColor={backgroundColor}
-        />
-
-        <ComponentSlot
-          slotId={TERMINAL_OVERLAY_SLOT}
-          when={{ host }}
-          props={overlayProps as unknown as Record<string, unknown>}
-        />
-
-        {hostKeyVerification?.isOpen && (
-          <HostKeyVerificationDialog
-            isOpen={true}
-            scenario={hostKeyVerification.scenario}
-            {...hostKeyVerification.data}
-            onAccept={() => {
-              if (webSocketRef.current) {
-                webSocketRef.current.send(
-                  JSON.stringify({
-                    type: "host_key_verification_response",
-                    data: { action: "accept" },
-                  }),
-                );
-              }
-              setHostKeyVerification(null);
-            }}
-            onReject={() => {
-              if (webSocketRef.current) {
-                webSocketRef.current.send(
-                  JSON.stringify({
-                    type: "host_key_verification_response",
-                    data: { action: "reject" },
-                  }),
-                );
-              }
-              setHostKeyVerification(null);
-              setIsConnecting(false);
-              updateConnectionError(t("terminal.hostKeyRejected"));
-            }}
-            backgroundColor={backgroundColor}
-          />
-        )}
-
-        {tmuxSessionPicker && (
-          <TmuxSessionPicker
-            isOpen={true}
-            sessions={tmuxSessionPicker.sessions}
-            onSelect={(sessionName) => {
-              setTmuxSessionPicker(null);
-              if (webSocketRef.current?.readyState === WebSocket.OPEN) {
-                webSocketRef.current.send(
-                  JSON.stringify({
-                    type: "tmux_attach",
-                    data: { sessionName },
-                  }),
-                );
-              }
-              setTimeout(() => terminal?.focus(), 50);
-            }}
-            onCreateNew={() => {
-              setTmuxSessionPicker(null);
-              if (webSocketRef.current?.readyState === WebSocket.OPEN) {
-                webSocketRef.current.send(
-                  JSON.stringify({
-                    type: "tmux_attach",
-                    data: { sessionName: "" },
-                  }),
-                );
-              }
-              setTimeout(() => terminal?.focus(), 50);
-            }}
-            onCancel={() => setTmuxSessionPicker(null)}
-            backgroundColor={backgroundColor}
-          />
-        )}
-
-        <CommandAutocomplete
-          visible={showAutocomplete}
-          suggestions={autocompleteSuggestions}
-          selectedIndex={autocompleteSelectedIndex}
-          position={autocompletePosition}
-          onSelect={handleAutocompleteSelect}
-        />
-        <CommandAutosuggestion
-          visible={!showAutocomplete && Boolean(autosuggestion)}
-          suggestion={autosuggestion}
-          position={autosuggestionPosition}
-          style={autosuggestionStyle}
-        />
-
-        <TerminalSearchBar
-          visible={showSearch}
-          query={searchQuery}
-          onQueryChange={handleSearchQueryChange}
-          onFindNext={() => runSearch("next")}
-          onFindPrevious={() => runSearch("previous")}
-          onClose={closeSearch}
-          caseSensitive={searchCaseSensitive}
-          onToggleCaseSensitive={toggleSearchCaseSensitive}
-          wholeWord={searchWholeWord}
-          onToggleWholeWord={toggleSearchWholeWord}
-          regex={searchRegex}
-          onToggleRegex={toggleSearchRegex}
-          resultIndex={searchResultIndex}
-          resultCount={searchResultCount}
-          inputRef={searchInputRef}
-        />
-
-        {linkClickDialog &&
-          createPortal(
-            <div
-              className="fixed inset-0 flex items-center justify-center z-[10000]"
-              style={{ backgroundColor: "rgba(0,0,0,0.5)" }}
-              onClick={() => setLinkClickDialog(null)}
-            >
-              <div
-                className="flex flex-col gap-3 p-4 rounded shadow-lg max-w-sm w-full mx-4"
-                style={{ backgroundColor }}
-                onClick={(event) => event.stopPropagation()}
-              >
-                <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
-                  {t("terminal.linkDialogTitle")}
-                </p>
-                <p className="text-sm break-all text-foreground select-all">
-                  {linkClickDialog.url}
-                </p>
-                <div className="flex gap-2 justify-end">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
+            onCancel={() => setLinkClickDialog(null)}
+            actions={
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setLinkClickDialog(null)}
+                >
+                  {t("common.cancel")}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (linkClickDialog)
                       writeTextToClipboard(linkClickDialog.url);
-                      setLinkClickDialog(null);
-                    }}
-                  >
-                    {t("terminal.linkDialogCopy")}
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => {
+                    setLinkClickDialog(null);
+                  }}
+                >
+                  {t("terminal.linkDialogCopy")}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-accent-brand/40 text-accent-brand hover:bg-accent-brand/10 hover:text-accent-brand"
+                  onClick={() => {
+                    if (linkClickDialog)
                       window.open(
                         linkClickDialog.url,
                         "_blank",
                         "noopener,noreferrer",
                       );
-                      setLinkClickDialog(null);
-                    }}
-                  >
-                    {t("terminal.linkDialogOpen")}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setLinkClickDialog(null)}
-                  >
-                    {t("common.cancel")}
-                  </Button>
-                </div>
-              </div>
-            </div>,
-            document.body,
-          )}
+                    setLinkClickDialog(null);
+                  }}
+                >
+                  {t("terminal.linkDialogOpen")}
+                </Button>
+              </>
+            }
+          />
+        </div>
+        {!toolbarOnTop && toolbar}
       </div>
     );
   },

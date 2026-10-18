@@ -8,7 +8,7 @@ import {
 } from "../../src/shared/terminal-settings";
 
 describe("hostSettingsFromTerminalConfig", () => {
-  it("keeps behavior and leaves a look-less host following the user", () => {
+  it("keeps behavior and drops what is not a terminal setting", () => {
     expect(
       hostSettingsFromTerminalConfig({
         autoMosh: true,
@@ -21,7 +21,7 @@ describe("hostSettingsFromTerminalConfig", () => {
   it("drops values a select field would refuse", () => {
     expect(
       hostSettingsFromTerminalConfig({ bellStyle: "loud", cursorStyle: "bar" }),
-    ).toEqual({ inheritAppearance: false, cursorStyle: "bar" });
+    ).toEqual({ cursorStyle: "bar" });
   });
 
   it("reads nothing from garbage", () => {
@@ -37,18 +37,17 @@ describe("resolveTerminalSettings", () => {
     expect(resolved.autoTmux).toBe(true);
   });
 
-  it("ignores the old follow-the-user switch", () => {
-    const host = readHostTerminalSettings({
-      inheritAppearance: true,
-      fontSize: 22,
-    });
-    expect(resolveTerminalSettings(host).fontSize).toBe(22);
-  });
-
   it("defaults echo and link clicks to concrete modes", () => {
     const resolved = resolveTerminalSettings(readHostTerminalSettings({}));
     expect(resolved.localEcho).toBe("auto");
     expect(resolved.linkClickBehavior).toBe("confirm");
+  });
+
+  it("closes the tab on exit unless the host keeps it open", () => {
+    expect(DEFAULT_HOST_TERMINAL_SETTINGS.keepOpenOnExit).toBe(false);
+    expect(hostSettingsFromTerminalConfig({ keepOpenOnExit: true })).toEqual({
+      keepOpenOnExit: true,
+    });
   });
 
   it("falls back to the built-in defaults", () => {
@@ -56,22 +55,31 @@ describe("resolveTerminalSettings", () => {
       DEFAULT_HOST_TERMINAL_SETTINGS.theme,
     );
   });
+
+  it("drops placeholder objects like { set: true } for cloudflareTunnelClientSecret and preserves strings", () => {
+    expect(
+      readHostTerminalSettings({
+        cloudflareTunnelClientSecret: { set: true },
+      }).cloudflareTunnelClientSecret,
+    ).toBe("");
+    expect(
+      readHostTerminalSettings({
+        cloudflareTunnelClientSecret: "actual-secret",
+      }).cloudflareTunnelClientSecret,
+    ).toBe("actual-secret");
+  });
 });
 
 describe("readUserSettings", () => {
   it("types what it reads and drops broken saved themes", () => {
     expect(
       readUserSettings({
-        terminalDefaults: { fontSize: "16", junk: 1 },
         customThemes: [{ id: "a", name: "A", colors: {} }, { id: 1 }],
-        localEcho: "sideways",
-        linkClickBehavior: "direct",
+        commandAutocomplete: "yes",
       }),
     ).toEqual({
       customThemes: [{ id: "a", name: "A", colors: {} }],
       commandAutocomplete: false,
-      localEcho: "auto",
-      linkClickBehavior: "direct",
     });
   });
 });

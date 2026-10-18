@@ -15,6 +15,7 @@ import {
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
+  useConfirm,
 } from "@termix-ssh/plugin-sdk/ui";
 import {
   useSettings,
@@ -44,6 +45,7 @@ import {
   type SavedCustomTheme,
 } from "../../shared/terminal-settings";
 import { invalidateTerminalClientSettings } from "../terminal-settings";
+import { docsUrl } from "../docs";
 
 const PLUGIN_ID = "ssh-terminal";
 const CUSTOM_FONT_OPTION = "__custom__";
@@ -60,6 +62,8 @@ export function HostTerminalSettings({
   updateForm,
 }: Pick<HostEditorSectionProps, "form" | "setField" | "updateForm" | "host">) {
   const { t } = useTranslation();
+  const confirm = useConfirm();
+  const [themeName, setThemeName] = useState("");
   const userSettings = useSettings("user");
   // The preview ends when the editor section goes away.
   useEffect(() => () => setThemePreview(null), []);
@@ -104,8 +108,8 @@ export function HostTerminalSettings({
   const handleSaveAsGlobalTheme = async () => {
     const colors = form.customThemeColors;
     if (!colors) return;
-    const name = window.prompt(t("hosts.saveGlobalThemeNamePrompt"));
-    if (!name || !name.trim()) return;
+    const name = themeName;
+    if (!name.trim()) return;
     setSavingTheme(true);
     try {
       await saveThemes([
@@ -121,6 +125,7 @@ export function HostTerminalSettings({
         },
       ]);
       toast.success(t("hosts.saveGlobalThemeSuccess"));
+      setThemeName("");
     } catch {
       toast.error(t("hosts.saveGlobalThemeError"));
     } finally {
@@ -129,6 +134,11 @@ export function HostTerminalSettings({
   };
 
   const handleDeleteGlobalTheme = async (id: string) => {
+    const theme = savedThemes.find((entry) => entry.id === id);
+    const ok = await confirm({
+      title: t("hosts.deleteGlobalThemeConfirm", { name: theme?.name ?? "" }),
+    });
+    if (!ok) return;
     try {
       await saveThemes(savedThemes.filter((theme) => theme.id !== id));
     } catch {
@@ -361,16 +371,33 @@ export function HostTerminalSettings({
           {form.theme === "custom" && (
             <div className="flex flex-col gap-3">
               <div className="flex flex-col gap-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                <div className="flex items-center gap-2">
+                  <label className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
                     {t("hosts.savedThemesLabel")}
                   </label>
+                  <Input
+                    value={themeName}
+                    onChange={(e) => setThemeName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void handleSaveAsGlobalTheme();
+                      }
+                    }}
+                    placeholder={t("hosts.saveGlobalThemeNamePrompt")}
+                    disabled={!form.customThemeColors}
+                    className="h-7 min-w-0 flex-1 text-xs"
+                  />
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
                     className="h-7 text-[10px]"
-                    disabled={savingTheme || !form.customThemeColors}
+                    disabled={
+                      savingTheme ||
+                      !form.customThemeColors ||
+                      !themeName.trim()
+                    }
                     onClick={handleSaveAsGlobalTheme}
                   >
                     {t("hosts.saveAsGlobalTheme")}
@@ -549,6 +576,16 @@ export function HostTerminalSettings({
             />
           </SettingRow>
           <SettingRow
+            label={t("hosts.wheelZoomLabel")}
+            defaultKey="wheelZoom"
+            description={t("hosts.wheelZoomShortDesc")}
+          >
+            <FakeSwitch
+              checked={form.wheelZoom}
+              onChange={(v) => setField("wheelZoom", v)}
+            />
+          </SettingRow>
+          <SettingRow
             label={t("hosts.macOptionIsMetaLabel")}
             defaultKey="macOptionIsMeta"
             description={t("hosts.macOptionIsMetaShortDesc")}
@@ -685,7 +722,7 @@ export function HostTerminalSettings({
               <>
                 {t("hosts.enableAutoTmuxDesc")}{" "}
                 <a
-                  href="https://docs.termix.site/features/terminal/tmux"
+                  href={docsUrl("", "sessions-that-survive")}
                   target="_blank"
                   rel="noreferrer"
                   className="text-accent-brand hover:underline"
@@ -731,6 +768,16 @@ export function HostTerminalSettings({
             />
           </SettingRow>
           <SettingRow
+            label={t("hosts.keepOpenOnExitLabel")}
+            defaultKey="keepOpenOnExit"
+            description={t("hosts.keepOpenOnExitDesc")}
+          >
+            <FakeSwitch
+              checked={form.keepOpenOnExit}
+              onChange={(v) => setField("keepOpenOnExit", v)}
+            />
+          </SettingRow>
+          <SettingRow
             label={t("hosts.passwordPromptAutoFillLabel")}
             defaultKey="passwordPromptAutoFill"
             description={t("hosts.passwordPromptAutoFillDesc")}
@@ -769,7 +816,7 @@ export function HostTerminalSettings({
             <p className="text-[10px] text-muted-foreground">
               {t("hosts.localEchoDesc")}{" "}
               <a
-                href="https://docs.termix.site/features/terminal/appearance"
+                href={docsUrl("appearance")}
                 target="_blank"
                 rel="noreferrer"
                 className="text-accent-brand hover:underline"

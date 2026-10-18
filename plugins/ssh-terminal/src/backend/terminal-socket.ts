@@ -35,6 +35,13 @@ import {
 } from "./helpers.js";
 import { SSHAuthManager } from "./keyboard-prompt.js";
 import { HOST_KEYS } from "./settings.js";
+import { tmuxScrollCommand } from "./tmux-scroll.js";
+import { SHELL_CWD_COMMAND } from "./shell-cwd.js";
+import {
+  createCloudflareTunnelStream,
+  normalizeCloudflareEndpoint,
+  resolveTunnelSettings,
+} from "./cloudflare-tunnel.js";
 import {
   isMessageAllowedForParticipant,
   type TerminalSessionManager,
@@ -329,6 +336,9 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
     });
 
     let currentSessionId: string | null = null;
+    // Set once this socket joins someone else's session. It never becomes the
+    // owner of anything after that, even with no participant row.
+    let isJoiner = false;
     let sshConn: SSHClientType | null = null;
     let sshStream: ClientChannel | null = null;
     let lastJumpClient: SSHClientType | null = null;
@@ -337,7 +347,6 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
     let totpPromptSent = false;
     let totpTimeout: NodeJS.Timeout | null = null;
     let isKeyboardInteractive = false;
-    let keyboardInteractiveResponded = false;
     let isConnecting = false;
     let isConnected = false;
     let isCleaningUp = false;
@@ -347,6 +356,10 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
     let browserSignInId: string | null = null;
     let browserSignInTimeout: NodeJS.Timeout | null = null;
     let isAwaitingAuthCredentials = false;
+    let lastConnectOptions: Pick<
+      ConnectToHostData,
+      "initialPath" | "executeCommand" | "tmuxAttachSession"
+    > = {};
 
     let wsAlive = true;
 
@@ -418,7 +431,6 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
       isConnecting = false;
       isConnected = false;
       isKeyboardInteractive = false;
-      keyboardInteractiveResponded = false;
       keyboardInteractiveFinish = null;
       totpPromptSent = false;
       browserSignInId = null;
@@ -465,6 +477,7 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
           const gateParticipant = gateSession
             ? sessionManager.getParticipantForWs(gateSession, ws)
             : null;
+          if (isJoiner && !gateParticipant) return;
           if (!isMessageAllowedForParticipant(gateParticipant, type)) {
             return;
           }
@@ -484,6 +497,11 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
                 break;
               }
               connectData.hostConfig.userId = userId;
+              lastConnectOptions = {
+                initialPath: connectData.initialPath,
+                executeCommand: connectData.executeCommand,
+                tmuxAttachSession: connectData.tmuxAttachSession,
+              };
               handleConnectToHost(connectData).catch((error) => {
                 const errMsg = getErrorMessage(error);
                 if (
@@ -640,11 +658,19 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
               const disconnectParticipant = disconnectSession
                 ? sessionManager.getParticipantForWs(disconnectSession, ws)
                 : null;
-              if (disconnectParticipant && !disconnectParticipant.isOwner) {
+              if (
+                isJoiner ||
+                (disconnectParticipant && !disconnectParticipant.isOwner)
+              ) {
                 if (currentSessionId) {
                   sessionManager.removeParticipant(currentSessionId, ws);
                   currentSessionId = null;
                 }
+                // Drop the owner's channel too, or the old references would
+                // still reach their shell.
+                sshStream = null;
+                sshConn = null;
+                isConnected = false;
                 break;
               }
               if (currentSessionId) {
@@ -664,7 +690,7 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
                 ws.send(JSON.stringify({ type: "cwd", path: "/" }));
                 break;
               }
-              activeConn.exec("pwd", (err, execStream) => {
+              activeConn.exec(SHELL_CWD_COMMAND, (err, execStream) => {
                 if (err) {
                   ws.send(JSON.stringify({ type: "cwd", path: "/" }));
                   return;
@@ -860,6 +886,27 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
               break;
             }
 
+            case "tmux_scroll": {
+              const scroll = asObject(data);
+              const session = currentSessionId
+                ? sessionManager.getSession(currentSessionId)
+                : null;
+              const name =
+                asString(scroll.sessionName) || session?.tmuxSessionName;
+              const direction = scroll.direction === "down" ? "down" : "up";
+              const conn = session?.sshConn ?? sshConn;
+              if (!conn || !name || name === "(active)") break;
+              conn.exec(
+                tmuxScrollCommand(name, direction, Number(scroll.lines)),
+                (err, execStream) => {
+                  if (err) return;
+                  execStream.on("data", () => {});
+                  execStream.stderr.on("data", () => {});
+                },
+              );
+              break;
+            }
+
             case "totp_response": {
               const totpData = data as TOTPResponseData;
               if (keyboardInteractiveFinish && totpData?.code) {
@@ -894,7 +941,11 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
 
             case "password_response": {
               const passwordData = data as TOTPResponseData;
-              if (keyboardInteractiveFinish && passwordData?.code) {
+              // A push-confirm prompt is answered with an empty string.
+              if (
+                keyboardInteractiveFinish &&
+                typeof passwordData?.code === "string"
+              ) {
                 if (totpTimeout) {
                   clearTimeout(totpTimeout);
                   totpTimeout = null;
@@ -942,6 +993,7 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
                 );
                 break;
               }
+              credentialsData.hostConfig.userId = userId;
 
               if (credentialsData.password) {
                 credentialsData.hostConfig.password = credentialsData.password;
@@ -969,6 +1021,7 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
               sshStream = null;
 
               const reconnectData: ConnectToHostData = {
+                ...lastConnectOptions,
                 cols: credentialsData.cols,
                 rows: credentialsData.rows,
                 hostConfig: credentialsData.hostConfig,
@@ -1087,6 +1140,7 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
                 }
 
                 currentSessionId = share.sessionId;
+                isJoiner = true;
                 sshStream = joinedSession.sshStream;
                 sshConn = joinedSession.sshConn;
                 isConnecting = false;
@@ -1389,6 +1443,7 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
 
       isConnecting = true;
       sshConn = new Client();
+      const pendingConn = sshConn;
 
       sendLog("dns", "info", `Starting address resolution of ${ip}`);
       sendLog("tcp", "info", `Connecting to ${ip} port ${port}`);
@@ -1573,6 +1628,18 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
         }
       }
 
+      const tunnel = await resolveTunnelSettings(
+        serverHostId != null
+          ? (key) => ctx.settings.getHost(serverHostId, key)
+          : null,
+        (hostConfig as Record<string, unknown>).pluginSettings,
+      );
+      const cloudflareTunnelEnabled = tunnel.enabled;
+      const cfTunnelHostname = tunnel.hostname;
+      const cfTunnelPort = tunnel.port;
+      const cfTunnelClientId = tunnel.clientId;
+      const cfTunnelClientSecret = tunnel.clientSecret;
+
       // Resolve credentials server-side when frontend doesn't provide them
       let resolvedCredentials = {
         username,
@@ -1659,28 +1726,40 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
       );
 
       let connectHost = ip;
-      /*
-       * Looking the address up here is a diagnostic, not the connection.
-       *
-       * An address can be one this machine cannot resolve and still be
-       * perfectly good: a mesh name, or anything that exists only on the far
-       * side of a tunnel, is the network's to resolve, and the tunnel is not
-       * built yet. So a failure is reported and the connection goes ahead:
-       * either the host's network places the name when its tunnel opens, or
-       * the connection itself fails with the real reason. The retries that
-       * matter for a transient failure already happened here.
-       *
-       * It refused the connection twice before, each time because it decided
-       * from a field that said whether a host was reached directly, and each
-       * time that field moved.
-       */
       if (connectsViaJumpHosts) {
+        // The target is only reachable through the jump host's network (e.g. a
+        // VPN-only address), so DNS must be resolved there, not on this host.
         sendLog(
           "dns",
           "info",
           `Skipping local address resolution of ${ip} (resolved by jump host)`,
         );
+      } else if (cloudflareTunnelEnabled) {
+        const cfEndpoint = normalizeCloudflareEndpoint(
+          cfTunnelHostname || ip,
+          cfTunnelPort || 443,
+        );
+        sendLog(
+          "dns",
+          "info",
+          `Routing connection through Cloudflare Tunnel (${cfEndpoint.hostname})`,
+        );
       } else {
+        /*
+         * Looking the address up here is a diagnostic, not the connection.
+         *
+         * An address can be one this machine cannot resolve and still be
+         * perfectly good: a mesh name, or anything that exists only on the
+         * far side of a tunnel, is the network's to resolve, and the tunnel
+         * is not built yet. So a failure is reported and the connection goes
+         * ahead: either the host's network places the name when its tunnel
+         * opens, or the connection itself fails with the real reason. The
+         * retries that matter for a transient failure already happened here.
+         *
+         * Upstream refuses here, and did so again in 1.0.3. Carried across
+         * every time this plugin is taken from upstream: without it a
+         * NetBird host reached by name cannot be opened at all.
+         */
         sendLog("dns", "info", `Starting address resolution of ${ip}`);
         try {
           const resolution = await resolveHostForSshConnect(ip);
@@ -1711,7 +1790,19 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
           );
         }
       }
-      sendLog("tcp", "info", `Connecting to ${ip} port ${port}`);
+      if (!cloudflareTunnelEnabled) {
+        sendLog("tcp", "info", `Connecting to ${ip} port ${port}`);
+      } else {
+        const cfEndpoint = normalizeCloudflareEndpoint(
+          cfTunnelHostname || ip,
+          cfTunnelPort || 443,
+        );
+        sendLog(
+          "tcp",
+          "info",
+          `Connecting via Cloudflare Tunnel to ${cfEndpoint.hostname}:${cfEndpoint.port}`,
+        );
+      }
 
       // A provider can hold the handshake open pending an out-of-band step
       // (Tailscale SSH check mode delivers its re-auth URL as an auth banner,
@@ -1760,6 +1851,13 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
       sshConn.on(
         "ready",
         bind(() => {
+          // The tab closed during the handshake: nobody will attach, so
+          // don't open a shell that would sit detached until the timeout.
+          if (ws.readyState !== WebSocket.OPEN) {
+            clearTimeout(connectionTimeout);
+            pendingConn.end();
+            return;
+          }
           if (serverHostId != null) {
             clearOnlineStatus ??= ctx.hosts.trackSession(serverHostId);
           }
@@ -2084,6 +2182,7 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
                       type: "data",
                       data: utf8String,
                     });
+                    sessionManager.applyBackpressure(boundSessionId!, stream);
                   }
                 } catch (error) {
                   sshLogger.error("Error encoding terminal data", error, {
@@ -2324,7 +2423,6 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
             browserSignInId,
             isKeyboardInteractive,
             hasKeyboardInteractiveFinish: !!keyboardInteractiveFinish,
-            keyboardInteractiveResponded,
           });
 
           // The provider decides what an auth failure means: clear a cached
@@ -2449,8 +2547,7 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
             err.message.includes(
               "All configured authentication methods failed",
             ) &&
-            !isKeyboardInteractive &&
-            !keyboardInteractiveResponded
+            !isKeyboardInteractive
           ) {
             isAwaitingAuthCredentials = true;
             if (currentSessionId) {
@@ -2638,7 +2735,6 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
         ws,
         hostId: id || 0,
         isKeyboardInteractive,
-        keyboardInteractiveResponded,
         keyboardInteractiveFinish,
         totpPromptSent,
         browserSignInId,
@@ -2677,8 +2773,6 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
 
             isKeyboardInteractive =
               sshAuthManager.context.isKeyboardInteractive;
-            keyboardInteractiveResponded =
-              sshAuthManager.context.keyboardInteractiveResponded;
             keyboardInteractiveFinish =
               sshAuthManager.context.keyboardInteractiveFinish;
             totpPromptSent = sshAuthManager.context.totpPromptSent;
@@ -2742,8 +2836,7 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
         log: (level, message) => sendLog("auth", level, message),
       });
       const connectConfig = built.config;
-      // What resolution above produced, or the address unchanged. Ignored
-      // once a gateway or a jump host hands the transport a socket.
+      // DNS was resolved above, and skipped when jump hosts do it instead.
       connectConfig.host = connectHost;
       prepared = built;
 
@@ -2859,6 +2952,7 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
                   type: "password_required",
                   prompt: request.prompt,
                   echo: request.echo,
+                  isPush: request.isPush,
                 }),
               );
             }
@@ -2867,6 +2961,26 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
 
       let transport: Awaited<ReturnType<typeof ctx.ssh.openTransport>>;
       try {
+        if (cloudflareTunnelEnabled) {
+          const cfEndpoint = normalizeCloudflareEndpoint(
+            cfTunnelHostname || ip,
+            cfTunnelPort || 443,
+          );
+          sendLog(
+            "handshake",
+            "info",
+            `Connecting to Cloudflare Zero Trust Tunnel for ${cfEndpoint.hostname}:${cfEndpoint.port}`,
+          );
+          const cfStream = await createCloudflareTunnelStream({
+            hostname: cfEndpoint.hostname,
+            port: cfEndpoint.port,
+            clientId: cfTunnelClientId,
+            clientSecret: cfTunnelClientSecret,
+            log: (level, message) => sendLog("handshake", level, message),
+          });
+          connectConfig.sock = cfStream;
+        }
+
         transport = await ctx.ssh.openTransport(connectTarget, connectConfig, {
           // Resolved above, or deliberately left to the jump host.
           resolveDns: false,
@@ -2879,6 +2993,7 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
           hostId: id,
           ip,
           port,
+          cloudflareTunnel: cloudflareTunnelEnabled,
         });
         ws.send(
           JSON.stringify({
@@ -2896,17 +3011,31 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
         cleanupAuthState(connectionTimeout);
         return;
       }
+      if (ws.readyState !== WebSocket.OPEN) {
+        (transport.jumpClient as SSHClientType | null)?.end();
+        (
+          connectConfig.sock as { destroy?: () => void } | undefined
+        )?.destroy?.();
+        clearTimeout(connectionTimeout);
+        return;
+      }
       lastJumpClient = transport.jumpClient as SSHClientType | null;
+
+      const viaType = cloudflareTunnelEnabled
+        ? "cloudflare_tunnel"
+        : transport.via;
 
       sendLog(
         "handshake",
         "info",
-        transport.via === "jump"
-          ? "Starting SSH session through jump host" +
+        cloudflareTunnelEnabled
+          ? "Starting SSH session over Cloudflare Tunnel"
+          : transport.via === "jump"
+            ? "Starting SSH session through jump host" +
               (viaProxy ? " (via proxy)" : "")
-          : transport.via === "proxy"
-            ? "Starting SSH session (via proxy)"
-            : "Starting SSH session",
+            : transport.via === "proxy"
+              ? "Starting SSH session (via proxy)"
+              : "Starting SSH session",
       );
       sendLog("auth", "info", `Authenticating as ${username}`);
       sshLogger.info("Initiating SSH connection", {
@@ -2918,7 +3047,7 @@ export function createTerminalSocket(deps: TerminalSocketDeps) {
         port,
         username,
         authType: resolvedCredentials.authType,
-        via: transport.via,
+        via: viaType,
       });
       sshConn.connect(connectConfig);
     }

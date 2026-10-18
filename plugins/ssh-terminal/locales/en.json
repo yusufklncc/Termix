@@ -25,15 +25,23 @@
     "tab": "Tab"
   },
   "terminal": {
-    "autoTmuxEnableFailed": "Failed to enable Auto-Tmux",
-    "autoTmuxEnabled": "Auto-Tmux enabled for {{host}}. It applies from the next connection.",
+    "cloudflareTunnelTitle": "Cloudflare Tunnel (Zero Trust)",
+    "cloudflareTunnelDesc": "Connect to hosts behind a Cloudflare Tunnel using native WebSocket transport without opening raw port 22 to the public internet.",
+    "enableCloudflareTunnel": "Enable Cloudflare Tunnel",
+    "enableCloudflareTunnelDesc": "Route SSH traffic through Cloudflare Zero Trust (WSS) using the host's main address instead of direct TCP sockets.",
+    "cloudflareTunnelHostname": "Tunnel Hostname",
+    "cloudflareTunnelHostnameDesc": "Public domain routed to your SSH origin service in Cloudflare Tunnel (leave empty to use the host's main address).",
+    "cloudflareTunnelPort": "Tunnel Port",
+    "cloudflareTunnelPortDesc": "Edge HTTPS/WSS port on Cloudflare (default is 443).",
+    "cloudflareTunnelClientId": "Service Token Client ID",
+    "cloudflareTunnelClientIdDesc": "Optional CF-Access-Client-Id header. Required only if Cloudflare Access Zero Trust policy enforces Service Tokens.",
+    "cloudflareTunnelClientSecret": "Service Token Client Secret",
+    "cloudflareTunnelClientSecretDesc": "Optional CF-Access-Client-Secret header for Cloudflare Access authentication.",
     "clipboardHttpWarning": "Couldn't read the clipboard. Some browsers restrict clipboard access outside HTTPS - try Ctrl+V instead, or serve Termix over HTTPS.",
-    "closeTab": "Close",
     "connecting": "Connecting...",
     "connectionLost": "Connection lost",
     "connectionRejected": "Connection rejected by server. Please check your authentication and network configuration.",
     "connectionTimeout": "Connection timeout",
-    "enableAutoTmuxAction": "Enable Auto-Tmux",
     "hostKeyRejected": "SSH host key verification rejected. Connection cancelled.",
     "linkDialogCopy": "Copy",
     "linkDialogOpen": "Open",
@@ -54,11 +62,10 @@
     "searchRegex": "Use Regular Expression",
     "searchResultCount": "{{index}} of {{count}}",
     "searchWholeWord": "Match Whole Word",
-    "sessionExpiredNotice": "Your previous session on {{host}} expired after {{minutes}} minutes disconnected; the shell and anything running in it are gone. Enable Auto-Tmux on this host to keep sessions alive.",
-    "sessionExpiredNoticeNoMinutes": "Your previous session on {{host}} expired while disconnected; the shell and anything running in it are gone. Enable Auto-Tmux on this host to keep sessions alive.",
     "sessionTakenOver": "Session was opened in another tab. Reconnecting...",
     "tmuxAttached": "Attached clients",
-    "tmuxAttachedCount": "{{count}} attached",
+    "tmuxAttachedCount_one": "{{count}} attached",
+    "tmuxAttachedCount_other": "{{count}} attached",
     "tmuxCopyHint": "Adjust selection and press Enter to copy to clipboard",
     "tmuxCreateNew": "Start new session",
     "tmuxDetached": "Detached from tmux session",
@@ -72,7 +79,8 @@
     "tmuxTimeJustNow": "just now",
     "tmuxTimeMinutes": "{{count}}m ago",
     "tmuxUnavailable": "tmux is not installed on the remote host, falling back to standard shell",
-    "tmuxWindowCount": "{{count}} window",
+    "tmuxWindowCount_one": "{{count}} window",
+    "tmuxWindowCount_other": "{{count}} windows",
     "tmuxWindows": "Windows",
     "unknownError": "Unknown error occurred",
     "websocketAbnormalClose": "Connection closed unexpectedly. This may be due to a reverse proxy or SSL configuration issue. Please check server logs.",
@@ -89,27 +97,26 @@
     "localShell": "Local terminal shell",
     "autocompleteHintComplete": "Tab or Enter to complete",
     "autocompleteHintNavigate": "↑↓ to navigate",
-    "autocompleteHintClose": "Esc to close"
+    "autocompleteHintClose": "Esc to close",
+    "cloudflareTunnelClientSecretPlaceholder": "Optional service token secret",
+    "cloudflareTunnelClientSecretPlaceholderNew": "New service token secret",
+    "secretSaved": "Saved",
+    "secretReplace": "Replace",
+    "secretClear": "Clear",
+    "secretCancel": "Cancel",
+    "hideSecret": "Hide secret",
+    "showSecret": "Show secret",
+    "sessionEndedKeepOpen": "Session ended. Press Enter to reconnect."
   },
   "terminalToolbar": {
     "detachTmux": "Detach tmux",
-    "detachTmuxDescription": "Detach tmux session",
-    "dismissError": "Dismiss image error",
-    "hideToolbar": "Hide toolbar",
-    "image": "Image actions (images only)",
-    "imageActionFailed": "Image action failed",
-    "layout": "Toolbar display mode",
-    "layoutExpanded": "Expanded with metrics",
-    "layoutIcon": "Icon only",
-    "layoutLabeled": "Icons and labels",
-    "moveToolbar": "Move toolbar",
-    "moveToolbarHint": "Drag to reposition the toolbar",
+    "detachTmuxDescription": "Detach from the tmux session",
+    "image": "Image",
+    "label": "Terminal toolbar",
+    "more": "More",
     "paste": "Paste image",
-    "pasteImage": "Paste image from clipboard (images only)",
-    "retry": "Retry",
-    "showToolbar": "Expand toolbar",
+    "settingsTitle": "Toolbar",
     "upload": "Upload image",
-    "uploadImage": "Upload an image to the host",
     "uploadingImage": "Uploading..."
   },
   "history": {
@@ -121,7 +128,9 @@
     "trackingDisabled": "History tracking is disabled",
     "trackingDisabledHint": "Turn on Command History in this host's SSH Terminal tab.",
     "commandCount_one": "{{count}} command",
-    "commandCount_other": "{{count}} commands"
+    "commandCount_other": "{{count}} commands",
+    "deleteConfirm": "Remove this command from history?",
+    "settingsTitle": "History settings"
   },
   "touchInput": {
     "enabled": "Enable Touch Input",
@@ -161,8 +170,7 @@
       "group": {
         "touch": "Touch Input",
         "images": "Image Storage",
-        "sessions": "Sessions",
-        "newHosts": "New Hosts"
+        "sessions": "Sessions"
       },
       "sessionTimeoutMinutes": {
         "label": "Terminal Session Persistence",
@@ -171,10 +179,6 @@
       "commandHistoryEnabled": {
         "label": "Command History",
         "description": "Allow command history recording. When disabled, history is not saved regardless of per-host settings."
-      },
-      "commandHistoryForNewHosts": {
-        "label": "Command history for new hosts",
-        "description": "Whether new hosts start with command history on."
       },
       "imageStorageMode": {
         "label": "Storage Mode",
@@ -206,77 +210,50 @@
       "sessionPersistence": {
         "label": "Keep sessions after disconnect",
         "description": "Keep a disconnected terminal alive on the server for the time above, so reopening its tab picks up where it left off."
-      },
-      "newHostAutoTmux": {
-        "label": "Auto-Tmux",
-        "description": "Run new hosts' terminals inside tmux so sessions survive disconnects (needs tmux on the host)"
-      },
-      "newHostTheme": {
-        "label": "Theme for new hosts",
-        "description": "The terminal theme a new host starts with."
-      },
-      "newHostFontFamily": {
-        "label": "Font for new hosts",
-        "description": "The terminal font a new host starts with."
-      },
-      "newHostFontSize": {
-        "label": "Font size for new hosts",
-        "description": "The terminal font size a new host starts with, in pixels."
-      },
-      "newHostCursorStyle": {
-        "label": "Cursor style for new hosts"
-      },
-      "newHostCursorBlink": {
-        "label": "Blinking cursor for new hosts"
       }
     },
     "host": {
       "enableTerminalToolbar": {
-        "label": "Enable Terminal Toolbar",
-        "description": "Show a quick-access toolbar docked to the active terminal for this host's tools and live stats"
+        "label": "Show toolbar",
+        "description": "A bar along the edge of the terminal with this host's tools and live stats."
       },
       "terminalToolbarPosition": {
-        "label": "Toolbar Position",
-        "description": "Where the toolbar sits in the terminal. You can still drag it from there.",
-        "bottom": "Bottom center",
-        "bottomLeft": "Bottom left",
-        "bottomRight": "Bottom right",
-        "top": "Top center",
-        "topLeft": "Top left",
-        "topRight": "Top right"
-      },
-      "terminalToolbarStartState": {
-        "label": "Toolbar Start State",
-        "description": "Whether the toolbar opens expanded or minimized when the terminal connects",
-        "expanded": "Expanded",
-        "collapsed": "Minimized"
-      },
-      "terminalToolbarDisplay": {
-        "label": "Toolbar Display Mode",
-        "description": "How toolbar buttons are shown. Last used keeps whatever you picked in the toolbar.",
-        "remember": "Last used",
-        "icon": "Icon only",
-        "labeled": "Icons and labels",
-        "expanded": "Expanded with stats"
+        "label": "Position",
+        "description": "Which edge of the terminal the toolbar sits on.",
+        "bottom": "Bottom",
+        "top": "Top"
       },
       "terminalToolbarShowStatus": {
-        "label": "Show Live Stats",
-        "description": "Show live host stats above the toolbar buttons in expanded mode"
-      },
-      "terminalToolbarFade": {
-        "label": "Fade When Idle",
-        "description": "Fade the toolbar out until you hover over it"
+        "label": "Live stats",
+        "description": "Show live host stats on the right side of the toolbar."
       },
       "enableCommandHistory": {
         "label": "Command History",
         "description": "Record commands run in this terminal for history and autocomplete"
       },
+      "cloudflareTunnelEnabled": {
+        "label": "Cloudflare Tunnel",
+        "description": "Route SSH traffic over Cloudflare Zero Trust via WebSocket"
+      },
+      "cloudflareTunnelHostname": {
+        "label": "Tunnel Hostname",
+        "description": "Cloudflare Tunnel public hostname"
+      },
+      "cloudflareTunnelPort": {
+        "label": "Tunnel Port",
+        "description": "Cloudflare edge HTTPS/WSS port"
+      },
+      "cloudflareTunnelClientId": {
+        "label": "CF-Access-Client-Id",
+        "description": "Cloudflare Access Service Token Client ID"
+      },
+      "cloudflareTunnelClientSecret": {
+        "label": "CF-Access-Client-Secret",
+        "description": "Cloudflare Access Service Token Client Secret"
+      },
       "enableTerminal": {
         "label": "Enable Terminal",
         "description": "Offer an SSH terminal for this host."
-      },
-      "inheritAppearance": {
-        "label": "Use user defaults"
       },
       "theme": {
         "label": "Theme"
@@ -319,6 +296,9 @@
       },
       "rightClickSelectsWord": {
         "label": "Right click selects word"
+      },
+      "wheelZoom": {
+        "label": "Zoom with Ctrl or Cmd and scroll"
       },
       "macOptionIsMeta": {
         "label": "Option is Meta"
@@ -364,6 +344,23 @@
       },
       "autoReconnect": {
         "label": "Reconnect automatically"
+      },
+      "terminalToolbarLabels": {
+        "label": "Button labels",
+        "description": "Narrow terminals drop to icons on their own.",
+        "labeled": "Icons and labels",
+        "icons": "Icons only"
+      },
+      "terminalToolbarButtons": {
+        "label": "Buttons",
+        "description": "Turn buttons on or off and change their order.",
+        "reset": "Reset",
+        "moveUp": "Move up",
+        "moveDown": "Move down",
+        "tmuxHint": "Only shows while tmux is attached"
+      },
+      "keepOpenOnExit": {
+        "label": "Keep tab open on exit"
       }
     },
     "user": {
@@ -371,17 +368,18 @@
         "label": "Command Autocomplete",
         "description": "Show autocomplete while typing if you press tab"
       },
-      "localEcho": {
-        "label": "Local Echo",
-        "description": "Reduce perceived input latency using safe local keystroke prediction"
-      },
-      "linkClickBehavior": {
-        "label": "Terminal Link Click",
-        "description": "Default behavior when clicking links in the terminal"
-      },
       "customThemes": {
         "label": "Saved themes"
-      }
+      },
+      "macrosAlwaysShowActions": {
+        "label": "Always show macro buttons",
+        "description": "Keep the run and delete buttons under each macro visible. Turn off to show them only on hover."
+      },
+      "historyAlwaysShowActions": {
+        "label": "Always show history buttons",
+        "description": "Keep the copy and delete buttons under each command visible. Turn off to show them only on hover."
+      },
+      "displayTitle": "Display"
     }
   },
   "palette": {
@@ -496,6 +494,8 @@
     "rightClickSelectsWord": "Right Click Selects Word",
     "rightClickSelectsWordLabel": "Right-click Selects Word",
     "rightClickSelectsWordShortDesc": "Select the word under cursor on right-click",
+    "wheelZoomLabel": "Zoom With Ctrl/Cmd + Scroll",
+    "wheelZoomShortDesc": "Change the font size by scrolling while holding Ctrl or Cmd",
     "saveAsGlobalTheme": "Save as Global Theme",
     "saveGlobalThemeError": "Failed to save theme",
     "saveGlobalThemeNamePrompt": "Enter a name for this theme",
@@ -525,38 +525,15 @@
     "themePreview": "Theme Preview",
     "useSSHTitleDesc": "Update the tab title from the shell's window title instead of the host name",
     "useSSHTitleLabel": "Use SSH Window Title",
-    "enableTunnel": "Enable Tunnel",
-    "enableFileManager": "Enable File Manager",
-    "enableDocker": "Enable Docker",
-    "startupSnippet": "Startup Snippet",
-    "quickActions": "Quick Actions",
     "proxmoxLastSyncStatus": {
       "success": "Success"
     },
-    "proxmoxResultSkippedNoIp": "{{count}} skipped (no IP found)",
-    "proxmoxStatsUrlCopied": "Proxmox Stats URL copied to clipboard",
-    "rdpUrlCopied": "RDP URL copied",
-    "vncUrlCopied": "VNC URL copied",
-    "filterAuthStepca": "Step CA",
     "guac": {
-      "noCredential": "No credential (direct credentials below)",
-      "authTypeDirect": "Direct",
-      "authTypeCredential": "Credential",
-      "authTypeNone": "None",
-      "recordingPath": "Recording Path",
-      "recordingName": "Recording Name",
-      "saveHostFirst": "Save the host first.",
-      "sharingOptionsAfterSave": "Sharing options are available after the host has been saved.",
-      "permissionLevel": "Permission Level",
-      "typeHeader": "Type",
-      "targetHeader": "Target",
-      "permissionHeader": "Permission",
-      "cancelBtn": "Cancel",
-      "savingBtn": "Saving...",
-      "updateHostBtn": "Update Host",
-      "addHostBtn": "Add Host"
+      "permissionLevel": "Permission Level"
     },
-    "filterAuthVault": "Vault"
+    "deleteGlobalThemeConfirm": "Delete the theme {{name}}?",
+    "keepOpenOnExitLabel": "Keep tab open on exit",
+    "keepOpenOnExitDesc": "When the shell exits or the connection closes, keep the tab and its output. Press Enter to reconnect."
   },
   "nav": {
     "history": "History",
@@ -569,9 +546,12 @@
     "broadcastInputPlaceholder": "Type here to broadcast keystrokes...",
     "copyOnSelect": "Copy selected text automatically",
     "enableRightClickCopyPaste": "Enable right-click copy/paste",
+    "ctrlVPaste": "Ctrl+V pastes (turn off to send Ctrl+V to the shell)",
     "fillPassword": "Fill password",
-    "fillPasswordMissing": "No saved password for {{count}} selected terminal(s)",
-    "fillPasswordSuccess": "Filled password into {{count}} terminal(s)",
+    "fillPasswordMissing_one": "No saved password for {{count}} selected terminal",
+    "fillPasswordMissing_other": "No saved password for {{count}} selected terminals",
+    "fillPasswordSuccess_one": "Filled password into {{count}} terminal",
+    "fillPasswordSuccess_other": "Filled password into {{count}} terminals",
     "keyRecordingTitle": "Key Recording",
     "noTerminalTabsOpen": "No terminal tabs open",
     "recordToTerminals": "Record to terminals",
@@ -583,6 +563,7 @@
     "stopRecording": "Stop Recording"
   },
   "keybindings": {
+    "openLocalTerminal": "Open new Local Terminal",
     "copy": "Copy selection",
     "paste": "Paste",
     "sendControlCode": "Send Ctrl+letter signal",
@@ -612,13 +593,15 @@
     "empty": "No macros yet",
     "emptyHint": "Create a macro to automate a terminal flow, like logging in, restarting a service, or answering prompts.",
     "create": "New macro",
+    "noMatches": "No macros match.",
+    "stepCount_one": "{{count}} step",
+    "stepCount_other": "{{count}} steps",
     "back": "Back to macros",
     "name": "Name",
     "namePlaceholder": "Restart web server",
     "nameRequired": "Give the macro a name before saving",
     "descriptionLabel": "Description",
     "descriptionPlaceholder": "What this macro does (optional)",
-    "unsaved": "Unsaved changes",
     "save": "Save",
     "saved": "Macro saved",
     "saveFailed": "Could not save the macro",
@@ -632,11 +615,9 @@
     "running": "Running...",
     "completed": "Macro finished",
     "failed": "Macro failed",
-    "loadFailed": "Could not load macros",
     "needTerminal": "Open and connect a terminal first",
     "noSteps": "This macro has no steps yet. Add one below.",
     "addStep": "Add step",
-    "stepNumber": "Step {{number}}",
     "removeStep": "Remove step",
     "confirmRunTitle": "Run this macro?",
     "confirmRunBody": "\"{{name}}\" will send commands to {{host}}.",
@@ -666,8 +647,7 @@
     "send": {
       "text": "Command or text",
       "textPlaceholder": "systemctl restart nginx",
-      "pressEnter": "Press Enter after sending",
-      "pressEnterHelp": "Turn this off to type text without submitting it."
+      "pressEnter": "Press Enter after sending"
     },
     "wait": {
       "pattern": "Wait until the output contains",
@@ -684,8 +664,7 @@
       "pattern": "If the output contains",
       "patternPlaceholder": "Active: active (running)",
       "then": "Then do this",
-      "else": "Otherwise do this",
-      "emptyBranch": "No steps"
+      "else": "Otherwise do this"
     },
     "repeat": {
       "count": "Number of times",
@@ -693,16 +672,17 @@
     },
     "match": {
       "useRegex": "Match with a regular expression",
-      "useRegexHelp": "Leave this off to match the text exactly as written.",
       "invalidRegex": "Not a valid regular expression, it will be matched as plain text"
     },
     "seconds": "seconds",
-    "secondsShort": "{{count}}s"
+    "search": "Search macros",
+    "settingsTitle": "Macro settings"
   },
   "errors": {
     "remoteServerRequired": "Remote server required. Connect a remote server in Settings to use this connection type."
   },
   "plugin": {
-    "name": "SSH Terminal"
+    "name": "SSH Terminal",
+    "description": "SSH terminal sessions with tabs, split screen, history, macros and a local terminal in the desktop app."
   }
 }

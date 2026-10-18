@@ -12,15 +12,15 @@ import {
   type PanelProps,
 } from "@termix-ssh/plugin-sdk/frontend";
 import {
-  ArrowLeft,
   Braces,
   ChevronDown,
   Clock,
   CornerDownRight,
+  ExternalLink,
   GitBranch,
   Plus,
   Repeat,
-  Save,
+  SlidersHorizontal,
   Square,
   Terminal as TerminalIcon,
   Trash2,
@@ -28,19 +28,23 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import {
+  AddButton,
   Button,
   Input,
   Textarea,
   Checkbox,
   EmptyState,
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
+  Facts,
+  FormFooter,
+  InlineView,
+  ListBadge,
+  ListRow,
+  ListRowAction,
+  PanelList,
+  TextAreaField,
+  TextField,
+  useConfirm,
+  PanelSearch,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -58,6 +62,8 @@ import {
   sessionsSnapshot,
   subscribeSessions,
 } from "../session-registry";
+import { docsUrl } from "../docs";
+import { PanelSettings, rowActionProps } from "../panel-settings";
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "";
@@ -378,8 +384,8 @@ function StepList({
                       onChange={(then) => update(index, { ...step, then })}
                     />
                   </div>
-                  <div className="border-l-2 border-amber-500/40 pl-2">
-                    <div className="mb-1 text-[11px] font-medium text-amber-500">
+                  <div className="border-l-2 border-warning/40 pl-2">
+                    <div className="mb-1 text-[11px] font-medium text-warning">
                       {t("macros.ifStep.else")}
                     </div>
                     <StepList
@@ -450,10 +456,18 @@ function StepList({
  * working in, waiting for and branching on what the server sends back.
  * They are the user's own setting, so they follow them to every browser.
  */
-export function MacrosPanel({ targetTab }: PanelProps) {
+export function MacrosPanel({ targetTab, active, setEditing }: PanelProps) {
   const { t } = useTranslation();
   const settings = useSettings("user");
   const [draft, setDraft] = useState<TerminalMacro | null>(null);
+  const [search, setSearch] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const alwaysShowActions = settings.values.macrosAlwaysShowActions === true;
+  const editing = draft !== null;
+  useEffect(() => {
+    if (active) setEditing?.(editing);
+  }, [active, editing, setEditing]);
+  useEffect(() => () => setEditing?.(false), [setEditing]);
   const [dirty, setDirty] = useState(false);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<TerminalMacro | null>(
@@ -537,6 +551,40 @@ export function MacrosPanel({ targetTab }: PanelProps) {
     }
   };
 
+  const confirm = useConfirm();
+  useEffect(() => {
+    if (!pendingDelete) return;
+    void confirm({
+      title: t("macros.deleteTitle"),
+      description: t("macros.deleteBody", { name: pendingDelete.name }),
+      confirmLabel: t("macros.delete"),
+    }).then((ok) => {
+      if (ok) void confirmDelete();
+      else setPendingDelete(null);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingDelete]);
+  useEffect(() => {
+    if (!pendingRun) return;
+    const macro = pendingRun;
+    void confirm({
+      title: t("macros.confirmRunTitle"),
+      description: t("macros.confirmRunBody", {
+        name: macro.name,
+        host: targetLabel,
+      }),
+      confirmLabel: t("macros.confirmRunAction"),
+      destructive: false,
+    }).then((ok) => {
+      setPendingRun(null);
+      if (ok) {
+        confirmedRef.current.add(macro.id);
+        void execute(macro);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingRun]);
+
   const confirmDelete = async () => {
     if (!pendingDelete) return;
     const next = macros.filter((macro) => macro.id !== pendingDelete.id);
@@ -597,152 +645,188 @@ export function MacrosPanel({ targetTab }: PanelProps) {
 
   const targetLabel = target?.label ?? t("macros.noTerminal");
 
+  const query = search.trim().toLowerCase();
+  const shown = macros.filter((macro) =>
+    [macro.name, macro.description ?? ""]
+      .join(" ")
+      .toLowerCase()
+      .includes(query),
+  );
+  const closeDraft = () => {
+    setDraft(null);
+    setDirty(false);
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-2 border-b border-border p-3">
-        {draft ? (
+      <div className="flex shrink-0 flex-col gap-1.5 border-b border-border px-3 py-2">
+        <PanelSearch
+          value={search}
+          onChange={setSearch}
+          placeholder={t("macros.search")}
+          fill
+        />
+        <div className="flex items-center gap-2">
+          <AddButton
+            label={t("macros.create")}
+            onClick={createMacro}
+            className="flex-1"
+          />
           <Button
+            variant="outline"
             size="icon"
-            variant="ghost"
-            className="size-7 rounded-none"
-            aria-label={t("macros.back")}
-            onClick={() => {
-              setDraft(null);
-              setDirty(false);
-            }}
+            onClick={() => setSettingsOpen(true)}
+            title={t("macros.settingsTitle")}
+            aria-label={t("macros.settingsTitle")}
           >
-            <ArrowLeft className="size-4" />
+            <SlidersHorizontal className="size-3.5" />
           </Button>
-        ) : (
-          <Braces className="size-4 shrink-0" />
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold">{t("macros.title")}</div>
-          <div className="truncate text-[11px] text-muted-foreground">
-            {t("macros.target")}: {targetLabel}
-          </div>
-          {!draft && (
+          <Button variant="outline" size="icon" asChild>
             <a
-              href="https://docs.termix.site/features/terminal/macros"
+              href={docsUrl("macros")}
               target="_blank"
               rel="noreferrer"
-              className="text-[10px] text-accent-brand hover:underline"
+              title={t("hosts.docsLink")}
+              aria-label={t("hosts.docsLink")}
             >
-              {t("hosts.docsLink")}
+              <ExternalLink className="size-3.5" />
             </a>
-          )}
-        </div>
-        {!draft && (
-          <Button
-            size="icon"
-            variant="outline"
-            className="size-7 rounded-none"
-            aria-label={t("macros.create")}
-            onClick={createMacro}
-          >
-            <Plus className="size-3.5" />
           </Button>
-        )}
+        </div>
+        <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+          <TerminalIcon className="size-3 shrink-0" />
+          <span className="truncate">
+            {t("macros.target")}: {targetLabel}
+          </span>
+        </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {!draft ? (
-          macros.length === 0 ? (
-            <EmptyState
-              icon={Braces}
-              title={t("macros.empty")}
-              hint={t("macros.emptyHint")}
-              action={
+      <PanelList
+        empty={
+          <EmptyState
+            icon={Braces}
+            title={t(macros.length === 0 ? "macros.empty" : "macros.noMatches")}
+            hint={macros.length === 0 ? t("macros.emptyHint") : undefined}
+          />
+        }
+      >
+        {shown.map((macro, index) => {
+          const isRunning = runningId === macro.id;
+          return (
+            <ListRow
+              key={macro.id}
+              stripe={index}
+              tone={isRunning ? "success" : "brand"}
+              icon={<Braces />}
+              title={macro.name}
+              meta={
+                <Facts>
+                  {macro.description ? <span>{macro.description}</span> : null}
+                  <span>
+                    {t("macros.stepCount", { count: macro.steps.length })}
+                  </span>
+                </Facts>
+              }
+              onClick={() => {
+                setDraft(structuredClone(macro));
+                setDirty(false);
+              }}
+              trailing={
+                isRunning ? (
+                  <ListBadge tone="success">{t("macros.running")}</ListBadge>
+                ) : undefined
+              }
+              {...rowActionProps(
+                alwaysShowActions,
+                <>
+                  <ListRowAction
+                    label={isRunning ? t("macros.stop") : t("macros.run")}
+                    tone="brand"
+                    onClick={() =>
+                      isRunning ? abortRef.current?.abort() : requestRun(macro)
+                    }
+                  >
+                    {isRunning ? <Square /> : <Play />}
+                  </ListRowAction>
+                  <ListRowAction
+                    label={t("macros.delete")}
+                    tone="destructive"
+                    onClick={() => setPendingDelete(macro)}
+                  >
+                    <Trash2 />
+                  </ListRowAction>
+                </>,
+              )}
+            />
+          );
+        })}
+      </PanelList>
+
+      {settingsOpen && (
+        <PanelSettings
+          settings={settings}
+          settingKey="macrosAlwaysShowActions"
+          title={t("macros.settingsTitle")}
+          onBack={() => setSettingsOpen(false)}
+        />
+      )}
+
+      <InlineView
+        open={!!draft}
+        onOpenChange={(open) => !open && closeDraft()}
+        icon={<Braces className="size-4" />}
+        title={draft?.name || t("macros.title")}
+        status={targetLabel}
+        footer={
+          draft && (
+            <FormFooter
+              dirty={dirty}
+              onDelete={() => setPendingDelete(draft)}
+              deleteLabel={t("macros.delete")}
+              onCancel={closeDraft}
+              onSave={() => void save()}
+              saveLabel={t("macros.save")}
+              extra={
                 <Button
-                  size="sm"
                   variant="outline"
-                  className="mt-1 rounded-none"
-                  onClick={createMacro}
+                  size="sm"
+                  onClick={() =>
+                    runningId === draft.id
+                      ? abortRef.current?.abort()
+                      : requestRun(draft)
+                  }
                 >
-                  <Plus className="mr-1 size-3" />
-                  {t("macros.create")}
+                  {runningId === draft.id ? (
+                    <>
+                      <Square className="size-3" />
+                      {t("macros.stop")}
+                    </>
+                  ) : (
+                    <>
+                      <Play className="size-3" />
+                      {t("macros.run")}
+                    </>
+                  )}
                 </Button>
               }
             />
-          ) : (
-            <div className="flex flex-col gap-1">
-              {macros.map((macro) => {
-                const isRunning = runningId === macro.id;
-                return (
-                  <div
-                    key={macro.id}
-                    className="group flex items-center gap-2 border border-border bg-muted/20 px-2 py-1.5 hover:bg-muted/40"
-                  >
-                    <button
-                      type="button"
-                      className="min-w-0 flex-1 text-left"
-                      onClick={() => {
-                        setDraft(structuredClone(macro));
-                        setDirty(false);
-                      }}
-                    >
-                      <div className="truncate text-xs font-medium">
-                        {macro.name}
-                      </div>
-                      {macro.description && (
-                        <div className="truncate text-[11px] text-muted-foreground">
-                          {macro.description}
-                        </div>
-                      )}
-                    </button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="size-6 shrink-0 rounded-none"
-                      aria-label={
-                        isRunning ? t("macros.stop") : t("macros.run")
-                      }
-                      onClick={() =>
-                        isRunning
-                          ? abortRef.current?.abort()
-                          : requestRun(macro)
-                      }
-                    >
-                      {isRunning ? (
-                        <Square className="size-3" />
-                      ) : (
-                        <Play className="size-3" />
-                      )}
-                    </Button>
-                  </div>
-                );
-              })}
-            </div>
           )
-        ) : (
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <div className="text-xs text-muted-foreground">
-                {t("macros.name")}
-              </div>
-              <Input
-                className="h-8 rounded-none text-xs"
-                value={draft.name}
-                placeholder={t("macros.namePlaceholder")}
-                onChange={(event) =>
-                  updateDraft({ ...draft, name: event.target.value })
-                }
-              />
-            </div>
-            <div className="space-y-1.5">
-              <div className="text-xs text-muted-foreground">
-                {t("macros.descriptionLabel")}
-              </div>
-              <Textarea
-                className="min-h-14 rounded-none text-xs"
-                value={draft.description ?? ""}
-                placeholder={t("macros.descriptionPlaceholder")}
-                onChange={(event) =>
-                  updateDraft({ ...draft, description: event.target.value })
-                }
-              />
-            </div>
-
+        }
+      >
+        {draft && (
+          <>
+            <TextField
+              label={t("macros.name")}
+              value={draft.name}
+              placeholder={t("macros.namePlaceholder")}
+              onChange={(name) => updateDraft({ ...draft, name })}
+            />
+            <TextAreaField
+              label={t("macros.descriptionLabel")}
+              value={draft.description ?? ""}
+              placeholder={t("macros.descriptionPlaceholder")}
+              onChange={(description) => updateDraft({ ...draft, description })}
+            />
             {draft.steps.length === 0 && (
               <div className="border border-dashed border-border px-3 py-4 text-center text-[11px] text-muted-foreground">
                 {t("macros.noSteps")}
@@ -752,113 +836,9 @@ export function MacrosPanel({ targetTab }: PanelProps) {
               steps={draft.steps}
               onChange={(steps) => updateDraft({ ...draft, steps })}
             />
-
-            <div className="flex items-center gap-2 border-t border-border pt-3">
-              <Button
-                size="sm"
-                variant="destructive"
-                className="rounded-none"
-                onClick={() => setPendingDelete(draft)}
-              >
-                <Trash2 className="mr-1 size-3" />
-                {t("macros.delete")}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="rounded-none"
-                onClick={save}
-              >
-                <Save className="mr-1 size-3" />
-                {t("macros.save")}
-              </Button>
-              <Button
-                size="sm"
-                className="ml-auto rounded-none"
-                onClick={() =>
-                  runningId === draft.id
-                    ? abortRef.current?.abort()
-                    : requestRun(draft)
-                }
-              >
-                {runningId === draft.id ? (
-                  <>
-                    <Square className="mr-1 size-3" />
-                    {t("macros.stop")}
-                  </>
-                ) : (
-                  <>
-                    <Play className="mr-1 size-3" />
-                    {t("macros.run")}
-                  </>
-                )}
-              </Button>
-            </div>
-            {dirty && (
-              <div className="text-[11px] text-amber-500">
-                {t("macros.unsaved")}
-              </div>
-            )}
-          </div>
+          </>
         )}
-      </div>
-
-      <AlertDialog
-        open={pendingDelete !== null}
-        onOpenChange={(open) => !open && setPendingDelete(null)}
-      >
-        <AlertDialogContent className="rounded-none">
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("macros.deleteTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("macros.deleteBody", { name: pendingDelete?.name ?? "" })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel className="rounded-none">
-              {t("macros.cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction className="rounded-none" onClick={confirmDelete}>
-              {t("macros.delete")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <AlertDialog
-        open={pendingRun !== null}
-        onOpenChange={(open) => !open && setPendingRun(null)}
-      >
-        <AlertDialogContent className="rounded-none">
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("macros.confirmRunTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("macros.confirmRunBody", {
-                name: pendingRun?.name ?? "",
-                host: targetLabel,
-              })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel className="rounded-none">
-              {t("macros.cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              className="rounded-none"
-              onClick={() => {
-                const macro = pendingRun;
-                setPendingRun(null);
-                if (macro) {
-                  confirmedRef.current.add(macro.id);
-                  void execute(macro);
-                }
-              }}
-            >
-              {t("macros.confirmRunAction")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      </InlineView>
     </div>
   );
 }

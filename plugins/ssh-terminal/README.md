@@ -1,60 +1,98 @@
-# SSH Terminal
+<div align="center">
 
-SSH terminal sessions with jump hosts, host key checks, command history and a local terminal in the desktop app.
+<img src="https://termix.site/img/logo.svg" width="120" alt="Termix Logo" />
+
+<h1>SSH Terminal</h1>
+
+<p>SSH terminal sessions with tabs, split screen, history, macros and a local terminal in the desktop app</p>
+
+<!-- VIDEO:START -->
+
+<a href="https://www.youtube.com/watch?v=rpUYOa-n9YI"><img src="https://img.shields.io/badge/Watch_the_demo-f59145?style=for-the-badge&logo=youtube&logoColor=white" alt="Watch the demo on YouTube" /></a>
+
+<!-- VIDEO:END -->
+
+</div>
+
+<br />
+
+## Overview
+
+SSH Terminal is the terminal in Termix. It opens SSH sessions in tabs and split screen, and the desktop app also gets a local terminal.
+
+Read the [docs](https://docs.termix.site/plugins/ssh-terminal) to set it up and use it.
+
+<br />
 
 ## Features
 
-- SSH terminal sessions with jump hosts and host key checks.
-- Keeps a session alive on the server after a disconnect, so reopening the tab picks up where you left off.
-- Command history with autocomplete.
-- A toolbar docked to the terminal with host tools and live stats.
-- Paste or upload images to the host from the terminal.
-- A local terminal in the desktop app.
-- Attaches to tmux sessions when Tmux Monitor is on.
+- Tabs and split screen
+- Jump hosts and host key verification
+- Sessions stay alive after a disconnect and reconnect on their own
+- Tmux and Mosh support
+- Themes, fonts and syntax highlighting
+- A toolbar with live stats and quick links to the host's other tools
+- Command history with autocomplete
+- Macros that automate logins and prompts
+- Send keystrokes to several terminals at once
+- A local terminal in the desktop app
 
-## Settings
+<br />
 
-### Admin
+## Sponsors
 
-- Keep sessions after disconnect and Terminal Session Persistence: keep a disconnected terminal alive, and for how long.
-- Command History and Command history for new hosts: allow history, and whether new hosts start with it on.
-- Touch Input: options for using the terminal on a touch screen.
-- Image Storage: where pasted and uploaded images are kept, and how many and how large.
+For a paid sponsor spot, email [mail@termix.site](mailto:mail@termix.site).
 
-### Host
+<!-- SPONSORS:START -->
 
-- Enable Terminal: offer an SSH terminal for this host.
-- Enable Terminal Toolbar: show the toolbar for this host.
-- Command History: record commands run on this host.
+<div align="center">
 
-## Permissions
+<br />
 
-- `ssh-terminal.sessions`: Let other features, like session sharing and recording, reach your live terminal sessions. Admins and users have it by default.
-- `ssh-terminal.history`: Read command history. Admins and users have it by default.
+<a href="https://www.blacksmith.sh/">
+  <img src="https://termix.site/img/sponsors/blacksmith.svg" height="40" alt="Blacksmith" />
+</a>
+&nbsp;&nbsp;&nbsp;
+<a href="https://www.cloudflare.com/">
+  <img src="https://termix.site/img/sponsors/cloudflare.png" height="40" alt="Cloudflare" />
+</a>
+&nbsp;&nbsp;&nbsp;
+<a href="https://akamai.com/">
+  <img src="https://termix.site/img/sponsors/akamai.svg" height="40" alt="Akamai" />
+</a>
+&nbsp;&nbsp;&nbsp;
+<a href="https://aws.amazon.com/">
+  <img src="https://termix.site/img/sponsors/aws.png" height="40" alt="AWS" />
+</a>
+&nbsp;&nbsp;&nbsp;
+<a href="https://rackgenius.com/">
+  <img src="https://termix.site/img/sponsors/rackgenius.png" height="40" alt="Rack Genius" />
+</a>
+&nbsp;&nbsp;&nbsp;
+<a href="https://ginernet.com/">
+  <img src="https://termix.site/img/sponsors/ginernet.png" height="40" alt="Ginernet" />
+</a>
+&nbsp;&nbsp;&nbsp;
+<a href="https://www.hetzner.com/?mtm_campaign=termix&mtm_medium=referral&mtm_content=sponsoring_link">
+  <img src="https://termix.site/img/sponsors/hetzner.png" height="40" alt="Hetzner" />
+</a>
 
-## Services
+</div>
 
-Provides to other plugins:
+<!-- SPONSORS:END -->
 
-- `sessions.live` as `ssh`: find a live terminal session so it can be shared.
-- `terminal.history`: read a user's command history.
+<br />
 
-Uses from other plugins:
+## Support
 
-- `tmux.sessions` to attach to tmux. Optional.
-- `sessions.sharing` for shared sessions. Optional.
-- `recordings.writer` to record sessions. Optional.
+Bugs and ideas for SSH Terminal go in this repo: [report a bug](https://github.com/Termix-SSH/Plugin-SSH-Terminal/issues/new?template=bug_report.yml) or [request a feature](https://github.com/Termix-SSH/Plugin-SSH-Terminal/issues/new?template=feature_request.yml). Report an issue on the plugin's page in the Plugins tab fills in your versions for you.
 
-## Development
+Problems with Termix itself (login, hosts, credentials, sharing, sync) go in the [Termix repo](https://github.com/Termix-SSH/Termix/issues/new/choose). Not sure where it goes? Open it there and it will be moved.
 
-```bash
-npm run build      # build into dist/
-npm run test       # run this plugin's tests
-npm run typecheck  # type-check this plugin
-```
+Add as much detail as you can, in English if possible. For questions, join the [Discord](https://discord.gg/jVQGdvHDrf) server.
 
-## Reconnecting a workspace
+<br />
 
-Use **Reconnect all disconnected terminals** from a tab's context menu or the command palette after a network interruption. It retries mounted SSH terminal tabs, including hidden tabs and split panes, through their existing manual reconnect flow. Connected terminals and terminals already connecting or waiting for an automatic retry are skipped. Invoking the action again does not interrupt an in-flight connection; failures in one tab do not stop the others. The notification counts reconnect attempts started, not successful connections.
+## License
 
-This is a manual workspace action. It does not add automatic SSH-error retries, resume/network listeners, tmux-session restoration or scrollback preservation. Existing authentication prompts, host-key validation and manual-reconnect behavior still apply. Other session plugins participate only if they expose the SDK's optional `reconnectIfDisconnected` handle method.
+Apache License 2.0. See [LICENSE](LICENSE).

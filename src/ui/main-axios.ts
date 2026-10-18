@@ -65,6 +65,8 @@ import { getDeviceId } from "@/lib/device-id";
 export type ServerStatus = {
   status: "online" | "offline";
   lastChecked: string;
+  /** An i18n key explaining the status, where the backend gave one. */
+  reason?: string;
 };
 
 export type SSHHostWithStatus = SSHHost & {

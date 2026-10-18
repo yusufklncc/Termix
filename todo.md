@@ -528,21 +528,28 @@ Kurulum: [`docs/jenkins-ci.md`](docs/jenkins-ci.md)
 
 ### Canlıda bulunan, kapanmamış (2026-10-16/17)
 
-- [ ] **netmgr kapıları kimliksiz dinliyor.** `openDoorway` 0.0.0.0:20000+id'de
-      açık; aynı Docker ağındaki herhangi bir konteyner kurum VPN'ine
-      girebiliyor ve bağlanmak tüneli de açıyor. Geçici önlem: netmgr ayrı bir
-      ağa (`termix-internal`) alındı. Kalıcısı: kapıda SOCKS kimliği
-      (`NET_MANAGER_TOKEN`) ya da kaynak adresi kısıtı. **Önceliklisi bu**
+- [x] **netmgr kapıları kimliksiz dinliyordu.** Kapı artık SOCKS5
+      kullanıcı/şifre istiyor; iki taraf da şifreyi `NET_MANAGER_TOKEN`'dan
+      HKDF ile türetiyor, kimse saklamıyor. Kimlik doğrulama `raiseTunnel`'dan
+      **önce**: kimliksiz bağlantı artık tünel kaldırmıyor (`7265977b`)
 - [ ] netmgr imajında kök sertifika deposu eksik görünüyor: `vpn.tim.org.tr`
       için "signer not found", aynı zincir başka makinede doğruluyor. Şimdilik
       profilde pin-sha256 sabitlendi
 - [ ] RDP'de hosta hiç ulaşılamazsa asıl sebep yalnızca Termix günlüğünde
       kalıyor, ekrana "transport layer failed" düşüyor. Sebep ekrana
       taşınabilir (notice ya da ERRR)
-- [ ] Durum yoklaması (host-status / tcpPing) VPN'li hostlarda VPN'den değil
-      doğrudan gidiyor: hepsi yanlışlıkla çevrimdışı görünüyor ve ev
-      bağlantısından kurum IP'lerine paket çıkıyor. TİM hostlarında yoklama
-      kapatılarak geçiştirildi
+- [x] Durum yoklaması VPN'li hostlarda VPN'den gidiyor. `host.gateway`
+      servisine `isUp` eklendi: tünel ayaktaysa yoklama SOCKS5'ten geçiyor
+      (`tcpPingThroughProxy`), değilse host **hiç** yoklanmıyor — kapıya
+      bağlanmak tüneli kaldırırdı ve dot her 30 saniyede her tüneli ayakta
+      tutardı. O durumda dot "offline" ama gerekçesiyle: entry'de
+      `reason: hosts.status.gatewayDown`, tooltip "bu hostun çıktığı ağ bağlı
+      değil" diyor. TİM hostlarında yoklama tekrar açılabilir
+- [ ] Aynı sızıntının çekirdek tarafı açık: host'un **kendi** SOCKS5 alanı
+      (`useSocks5`) kullanılıyorsa yoklama hâlâ doğrudan gidiyor.
+      `listStatusTargets` o kolonları seçmiyor ve `socks5Password`
+      kullanıcı anahtarıyla şifreli, yani satırı çözmeden proxy'den
+      geçilemiyor
 - [ ] Çöken bir eklenti kalıcı olarak kapanıyor (`enabled=false`) ve düzelmiş
       imaj gelse de kendiliğinden açılmıyor; arayüzden de açılamıyor.
       `PATCH /plugins/<id>/state` ile elle açmak gerekti

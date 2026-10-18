@@ -369,6 +369,7 @@
       "offline": "Offline",
       "checking": "Checking",
       "monitoringDisabled": "Status checks off",
+      "gatewayDown": "Not checked: the network this host is reached through is not connected",
       "label": "Status"
     },
     "folderRenamed": "Folder \"{{oldName}}\" renamed to \"{{newName}}\" successfully",

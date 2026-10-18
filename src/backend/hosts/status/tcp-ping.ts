@@ -1,5 +1,7 @@
 import net from "net";
 import type { Client } from "ssh2";
+import { createSocks5Connection } from "../../utils/socks5-helper.js";
+import type { SOCKS5Config } from "../../utils/socks5-helper.js";
 
 /**
  * Opens a TCP connection and closes it again. SSH probes exchange banners,
@@ -114,4 +116,53 @@ export async function tcpPingThroughJumpHost(
       keepOpen,
     )) === "ok"
   );
+}
+
+/**
+ * The same check made from the far side of a SOCKS5 proxy.
+ *
+ * A host reached through a VPN was probed directly until now: the dot said
+ * offline for a machine that was up, and the packets left by the server's own
+ * route -- an address that only exists inside a customer's network, dialled
+ * from wherever Termix happens to run.
+ *
+ * No banner is read. The proxy answering "connected" already means the
+ * target port accepted, and a reply of any other kind is a refusal; reading
+ * further would only keep someone else's network open for longer.
+ */
+export async function tcpPingThroughProxy(
+  config: SOCKS5Config,
+  host: string,
+  port: number,
+  timeoutMs = 5000,
+): Promise<boolean> {
+  const connecting = createSocks5Connection(host, port, config);
+  /*
+   * The connection that loses the race still finishes, and a socket nobody
+   * holds keeps the tunnel's idle timer from ever firing.
+   */
+  const discardLate = () => {
+    void connecting.then((late) => late?.destroy()).catch(() => undefined);
+  };
+
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const socket = await Promise.race([
+      connecting,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("proxy probe timed out")),
+          timeoutMs,
+        );
+        timer.unref();
+      }),
+    ]);
+    socket?.destroy();
+    return socket !== null;
+  } catch {
+    discardLate();
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }

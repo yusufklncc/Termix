@@ -4,6 +4,7 @@ import {
   managedDoorPassword,
   managedDoorPort,
   MANAGED_DOORWAY_USER,
+  listManagedNetworks,
   resolveInManagedNetwork,
   resolveNetManagerOptions,
 } from "./net-manager-client.js";
@@ -72,6 +73,33 @@ export function profileToConfig(profile: VpnProfileRecord): Socks5Config {
     socks5Username: profile.gatewayUsername ?? undefined,
     socks5Password: profile.gatewayPassword ?? undefined,
   };
+}
+
+/**
+ * Which managed networks are up, asked once for a burst of questions.
+ *
+ * The status dot asks for every host at the same moment, every interval, and
+ * the answer is the same for all of them. A second is short enough that a
+ * tunnel raised for a session is seen on the next poll.
+ */
+const STATE_TTL_MS = 1000;
+let stateCache: { at: number; networks: Promise<Set<number>> } | null = null;
+
+function networksUp(): Promise<Set<number>> {
+  const now = Date.now();
+  if (stateCache && now - stateCache.at < STATE_TTL_MS) {
+    return stateCache.networks;
+  }
+  const networks = listManagedNetworks().then(
+    (states) =>
+      new Set(
+        (states ?? [])
+          .filter((state) => state.state === "up")
+          .map((state) => state.id),
+      ),
+  );
+  stateCache = { at: now, networks };
+  return networks;
 }
 
 /**
@@ -159,6 +187,28 @@ export function createGatewayService(
     }): Promise<Socks5Config | null> {
       const profile = await resolveProfile(host);
       return profile ? profileToConfig(profile) : null;
+    },
+
+    /**
+     * Whether this host's doorway can be dialled without raising anything.
+     *
+     * Only the status dot asks. Connecting to a managed doorway is what
+     * raises the tunnel, and the dot asks every thirty seconds for every
+     * host -- so answering "yes" while the tunnel is down would hold every
+     * customer's network open for as long as somebody leaves the app open,
+     * and the manager's idle timer would never fire.
+     *
+     * A gateway somebody else runs is always dialable: nothing of ours
+     * raises it, and it is up or it is not.
+     */
+    async isUp(host: {
+      id?: number | string;
+      userId?: string | null;
+    }): Promise<boolean> {
+      const profile = await resolveProfile(host).catch(() => null);
+      if (!profile) return true;
+      if (profile.kind !== "managed") return true;
+      return (await networksUp()).has(profile.id);
     },
 
     /**

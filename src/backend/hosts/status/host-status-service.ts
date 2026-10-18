@@ -24,7 +24,7 @@ import {
 import type { HostStatusTargetRow } from "../../database/repositories/host-resolution-repository.js";
 import type { HostStatus } from "./host-status.js";
 import { ConcurrentLimiter } from "./limiter.js";
-import { tcpPing } from "./tcp-ping.js";
+import { tcpPing, tcpPingThroughProxy } from "./tcp-ping.js";
 import { JumpProbePool } from "./jump-probe-pool.js";
 
 export const GLOBAL_STATUS_INTERVAL_KEY = "global_status_check_interval";
@@ -33,10 +33,23 @@ export const DEFAULT_STATUS_INTERVAL = 30;
 const FIRST_CHECK_WAIT_MS = 6_000;
 /** A status younger than this is fresh enough for check(). */
 const FRESH_MS = 30_000;
+/**
+ * The host leaves through something that is not up, so it was not asked.
+ *
+ * Not a verdict about the host: dialling it anyway would raise whatever the
+ * route is -- every thirty seconds, for every host behind it -- and send the
+ * packets out by the route the host was configured to avoid.
+ */
+export const GATEWAY_DOWN_REASON = "hosts.status.gatewayDown";
 
 export interface HostStatusEntry {
   status: HostStatus;
   lastChecked: string;
+  /**
+   * Why, as an i18n key, when "offline" would be read as a verdict about the
+   * host. Absent whenever the host itself was actually asked.
+   */
+  reason?: string;
 }
 
 export interface HostStatusPayload {
@@ -75,6 +88,18 @@ export interface HostStatusDeps {
     target: StatusTarget,
     port: number,
   ) => Promise<boolean>;
+  /**
+   * Probes through whatever the host leaves by, instead of dialling its
+   * address from here.
+   *
+   * Null means the host leaves directly and core probes it itself. A
+   * reachable of null means the route exists but is not up, and the host was
+   * deliberately not asked.
+   */
+  probeThroughGateway?: (
+    target: StatusTarget,
+    port: number,
+  ) => Promise<{ reachable: boolean | null } | null>;
   hasActiveSession?: (hostId: number) => boolean;
   globalInterval: () => number;
   emit: (payload: HostStatusPayload) => void;
@@ -135,6 +160,32 @@ const defaultDeps: HostStatusDeps = {
   ping: (host, port) => tcpPing(host, port, 5000),
   pingThroughJumpHosts: (target, port) =>
     jumpProbes.ping(target.jumpHosts, target.userId, target.ip, port, 5000),
+  probeThroughGateway: async (target, port) => {
+    // Imported here for the same reason the jump host chain is: the connect
+    // path pulls in a good deal that a status check has no use for.
+    const { resolveHostGateway } = await import("../connect/host-gateway.js");
+    let gateway: Awaited<ReturnType<typeof resolveHostGateway>>;
+    try {
+      gateway = await resolveHostGateway({
+        id: target.id,
+        userId: target.userId,
+      } as never);
+    } catch {
+      /*
+       * "This host's VPN is disabled", "that profile is gone". The route was
+       * meant to be used and cannot be, which is not the same as the host
+       * having none -- answering null here would probe it directly.
+       */
+      return { reachable: null };
+    }
+    if (!gateway) return null;
+    if (!(await gateway.isUp())) return { reachable: null };
+    // A name that only exists inside that network is resolved by it.
+    const address = (await gateway.resolveName(target.ip)) ?? target.ip;
+    return {
+      reachable: await tcpPingThroughProxy(gateway.config, address, port, 5000),
+    };
+  },
   globalInterval: () => {
     const value = Number(getCurrentSettingValue(GLOBAL_STATUS_INTERVAL_KEY));
     return Number.isInteger(value) && value >= 5
@@ -429,13 +480,18 @@ export class HostStatusService {
     return target.port;
   }
 
-  private async pingOnce(target: StatusTarget): Promise<boolean> {
+  /** Null when the host was not asked at all. See GATEWAY_DOWN_REASON. */
+  private async pingOnce(target: StatusTarget): Promise<boolean | null> {
     try {
       if (this.deps.hasActiveSession?.(target.id)) return true;
       const port = await this.portFor(target);
-      return target.jumpHosts.length > 0
-        ? await this.deps.pingThroughJumpHosts(target, port)
-        : await this.deps.ping(target.ip, port);
+      // Jump hosts first, the way the connect path prefers them: a chain
+      // reaches the host from inside, and the gateway is then moot.
+      if (target.jumpHosts.length > 0)
+        return await this.deps.pingThroughJumpHosts(target, port);
+      const through = await this.deps.probeThroughGateway?.(target, port);
+      if (through) return through.reachable;
+      return await this.deps.ping(target.ip, port);
     } catch {
       return false;
     }
@@ -444,11 +500,21 @@ export class HostStatusService {
   private async probeNow(target: StatusTarget): Promise<void> {
     this.owners.set(target.id, target.userId);
     let reachable = await this.pingOnce(target);
-    if (!reachable) {
+    if (reachable === false) {
       // One lost packet should not flip the dot.
       const delay = this.deps.retryDelayMs ?? 1000;
       if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
       reachable = await this.pingOnce(target);
+    }
+    if (reachable === null) {
+      // Offline, because that is what the dot has and the host cannot be
+      // reached right now either way -- but said with its reason, so it
+      // does not read as a machine that is down.
+      this.set(target.id, {
+        status: "offline",
+        reason: GATEWAY_DOWN_REASON,
+      });
+      return;
     }
     this.set(target.id, { status: reachable ? "online" : "offline" });
   }

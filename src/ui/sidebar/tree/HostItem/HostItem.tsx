@@ -63,7 +63,7 @@ import {
   useStatusColorScheme,
   getStatusClasses,
 } from "@/hooks/use-status-color-scheme";
-import { useHostStatus } from "@/lib/ServerStatusContext";
+import { useHostStatus, useHostStatusReason } from "@/lib/ServerStatusContext";
 import {
   Tooltip,
   TooltipContent,
@@ -103,14 +103,19 @@ export function buildStatusTooltip(
   host: Host,
   status: "online" | "offline" | "unknown",
   t: (key: string) => string = (k) => k,
+  reason?: string | null,
 ): string {
   if (!statusCheckEnabled(host)) return t("hosts.status.monitoringDisabled");
+  // A host behind a network that is not connected was not asked, and
+  // "Offline" on its own reads as a machine that is down.
   const statusLabel =
-    status === "online"
-      ? t("hosts.status.online")
-      : status === "offline"
-        ? t("hosts.status.offline")
-        : t("hosts.status.checking");
+    reason && status !== "online"
+      ? t(reason)
+      : status === "online"
+        ? t("hosts.status.online")
+        : status === "offline"
+          ? t("hosts.status.offline")
+          : t("hosts.status.checking");
   const protocols: string[] = [];
   if (host.enableSsh) protocols.push("SSH");
   for (const protocol of enabledHostProtocols(host)) {
@@ -305,6 +310,7 @@ export function HostItem({
   // Per-host subscription, so a poll only re-renders rows that flipped.
   const availability =
     useHostStatus(Number(host.id), statusCheckOn) ?? "offline";
+  const statusReason = useHostStatusReason(Number(host.id));
   const statusLoading = availability === "unknown";
   const isOnline = availability === "online";
   const previousAvailability = useRef(availability);
@@ -1149,7 +1155,7 @@ export function HostItem({
                 </span>
               </TooltipTrigger>
               <TooltipContent side="right">
-                {buildStatusTooltip(host, availability, t)}
+                {buildStatusTooltip(host, availability, t, statusReason)}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>

@@ -84,6 +84,8 @@ export function ServerStatusProvider({
           next.set(id, {
             status: entry?.status === "online" ? "online" : "offline",
             lastChecked: entry?.lastChecked || now,
+            reason:
+              typeof entry?.reason === "string" ? entry.reason : undefined,
           });
         }
         store.applyStatuses(next);
@@ -197,6 +199,21 @@ export function useHostStatus(
     () => store.getStatus(hostId),
   );
   return statusCheckEnabled ? status : null;
+}
+
+/**
+ * Why one host's status is what it is, where the backend said.
+ *
+ * An i18n key, not a sentence: "offline" alone reads as a machine that is
+ * down, and a host behind a network that is not connected was never asked.
+ */
+export function useHostStatusReason(hostId: number): string | null {
+  const store = useStatusStore();
+  return useSyncExternalStore(
+    (onChange) => store.subscribeHost(hostId, onChange),
+    () => store.getReason(hostId),
+    () => store.getReason(hostId),
+  );
 }
 
 /** Meta flags without depending on the full status map. */

@@ -37,6 +37,23 @@ export interface HostGatewayService {
     name: string,
   ): Promise<string | null>;
   /**
+   * Whether that doorway can be dialled without bringing anything up.
+   *
+   * A mesh Termix raises itself is down between sessions, and connecting to
+   * its doorway is what raises it. The status dot asks every thirty seconds,
+   * for every host, so a probe that dialled anyway would hold every tunnel
+   * of every customer open for as long as the app is left running -- and the
+   * idle timer that drops them would never fire. False means "do not dial
+   * this one", not "the host is down".
+   *
+   * Absent, or true, keeps what happened before this existed.
+   */
+  isUp?(host: {
+    id?: number | string;
+    userId?: string | null;
+  }): Promise<boolean>;
+
+  /**
    * How to word a failure to reach the host through what forHost returned.
    *
    * Core no longer knows what kind of thing that is, and "Proxy connection
@@ -78,6 +95,8 @@ export interface ResolvedGateway {
   config: SOCKS5Config;
   /** What a name means inside it, where the network keeps its own list. */
   resolveName(name: string): Promise<string | null>;
+  /** False while the route exists but is not up. See HostGatewayService. */
+  isUp(): Promise<boolean>;
   /** Words a failure to connect through it, for whoever reads the error. */
   describeFailure(error: unknown): string;
 }
@@ -102,6 +121,7 @@ export async function resolveHostGateway(
       config: fromProvider,
       resolveName: (name) =>
         provider?.resolveName?.(host as never, name) ?? Promise.resolve(null),
+      isUp: () => provider?.isUp?.(host as never) ?? Promise.resolve(true),
       describeFailure: (error) =>
         provider?.describeFailure?.(error) ?? proxyFailure(error),
     };
@@ -113,6 +133,8 @@ export async function resolveHostGateway(
         config: own,
         // A proxy someone else runs keeps no list of names for us to read.
         resolveName: async () => null,
+        // Nothing of ours raises it, so there is nothing to wait for.
+        isUp: async () => true,
         describeFailure: proxyFailure,
       }
     : null;

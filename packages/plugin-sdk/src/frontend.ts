@@ -1263,8 +1263,14 @@ export interface ActivityTargetInfo {
  */
 export interface HostStatusInfo {
   status: "online" | "reachable" | "offline" | "unknown";
-  /** @deprecated No longer sent. */
-  reason?: "host_key_changed";
+  /**
+   * Why the status is what it is, as an i18n key, where saying so matters:
+   * a host reached through a network that is not connected was not asked,
+   * and "offline" alone reads as a machine that is down.
+   *
+   * Carried the string "host_key_changed" until 26.10, and nothing sent it.
+   */
+  reason?: string;
 }
 
 let host: PluginHostBridge | null = null;

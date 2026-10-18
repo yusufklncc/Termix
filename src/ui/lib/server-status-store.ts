@@ -3,6 +3,11 @@ export type StatusValue = "online" | "offline" | "unknown";
 export interface ServerStatusEntry {
   status: "online" | "offline";
   lastChecked: string;
+  /**
+   * Why, as an i18n key, when "offline" is not a verdict about the host --
+   * it leaves through a network that is not connected, so it was not asked.
+   */
+  reason?: string;
 }
 
 type Listener = () => void;
@@ -21,6 +26,11 @@ export class ServerStatusStore {
   /** "unknown" until the host has been checked. */
   getStatus(hostId: number): StatusValue {
     return this.statuses.get(hostId)?.status ?? "unknown";
+  }
+
+  /** The key explaining a status, where there is one. */
+  getReason(hostId: number): string | null {
+    return this.statuses.get(hostId)?.reason ?? null;
   }
 
   getStatuses(): Map<number, ServerStatusEntry> {
@@ -79,7 +89,9 @@ export class ServerStatusStore {
     const changedIds: number[] = [];
 
     for (const [id, entry] of next) {
-      if (this.statuses.get(id)?.status !== entry.status) changedIds.push(id);
+      const current = this.statuses.get(id);
+      if (current?.status !== entry.status || current?.reason !== entry.reason)
+        changedIds.push(id);
     }
     for (const id of this.statuses.keys()) {
       if (!next.has(id)) changedIds.push(id);

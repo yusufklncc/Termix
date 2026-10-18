@@ -31,6 +31,8 @@ const t = (key: string): string =>
     "hosts.status.checking": "Checking",
     "hosts.status.offline": "Offline",
     "hosts.status.monitoringDisabled": "Monitoring disabled",
+    "hosts.status.gatewayDown":
+      "Not checked: the network this host is reached through is not connected",
   })[key] ?? key;
 
 describe("buildStatusTooltip", () => {
@@ -105,5 +107,41 @@ describe("statusCheckEnabled", () => {
   it("returns false when statusCheckEnabled is explicitly false", () => {
     const host = makeHost({ statusCheckEnabled: false });
     expect(statusCheckEnabled(host)).toBe(false);
+  });
+});
+
+/**
+ * A host behind a VPN that is not connected was never asked. "Offline" on its
+ * own reads as a machine that is down, and someone would go looking at the
+ * machine.
+ */
+describe("a status with a reason", () => {
+  it("says why instead of just 'Offline'", () => {
+    const tooltip = buildStatusTooltip(
+      makeHost(),
+      "offline",
+      t,
+      "hosts.status.gatewayDown",
+    );
+    expect(tooltip).toContain("is not connected");
+    expect(tooltip).not.toContain("Offline");
+    expect(tooltip).not.toContain("hosts.status.");
+  });
+
+  it("is still 'Online' when the host answered", () => {
+    // A reason left over from the poll before should not outlive it.
+    const tooltip = buildStatusTooltip(
+      makeHost(),
+      "online",
+      t,
+      "hosts.status.gatewayDown",
+    );
+    expect(tooltip).toContain("Online");
+  });
+
+  it("falls back to the plain label with no reason", () => {
+    expect(buildStatusTooltip(makeHost(), "offline", t, null)).toContain(
+      "Offline",
+    );
   });
 });

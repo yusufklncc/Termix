@@ -107,7 +107,7 @@ import {
   useAppTheme as useTheme,
   globalShortcutHandler,
   isTabJumpHotkey,
-  useConfirmation,
+  useConfirm,
   ComponentSlot,
   ConnectionLogProvider,
   useConnectionLog,
@@ -209,7 +209,7 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
     const api = usePluginApi();
     const { instance: terminal, ref: xtermRef } = useXTerm();
     const commandHistoryContext = useCommandHistory();
-    const { confirmWithToast } = useConfirmation();
+    const confirm = useConfirm();
     const { theme: appTheme } = useTheme();
     const { addLog } = useConnectionLog();
     // An embedded terminal (a widget, another plugin's window) gets only a
@@ -1332,30 +1332,38 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
       passwordPromptShownRef.current = true;
       passwordPromptBufferRef.current = "";
 
-      confirmWithToast(
-        t("terminal.passwordPromptFillTitle"),
-        async () => {
-          const passwordToFill = await resolvePasswordForPrompt(isSudoPrompt);
-          if (
-            passwordToFill &&
-            webSocketRef.current &&
-            webSocketRef.current.readyState === WebSocket.OPEN
-          ) {
-            webSocketRef.current.send(
-              JSON.stringify({
-                type: "input",
-                data: passwordToFill + "\n",
-              }),
-            );
-          }
-          setTimeout(() => {
-            passwordPromptShownRef.current = false;
-          }, 3000);
-        },
-        t("common.confirm"),
-        t("common.cancel"),
-        { confirmOnEnter: true },
-      );
+      /*
+       * Asked over this surface rather than as a toast: Enter confirms and
+       * Esc cancels before the terminal under it can see the key, which is
+       * the whole point of asking while a password prompt is waiting.
+       */
+      void confirm({
+        title: t("terminal.passwordPromptFillTitle"),
+        confirmLabel: t("common.confirm"),
+        cancelLabel: t("common.cancel"),
+        // Filling in a password is not the deleting kind.
+        destructive: false,
+      }).then(async (filled) => {
+        // Declining leaves the 15 second timer below to clear the flag, the
+        // way it did when the toast was simply ignored.
+        if (!filled) return;
+        const passwordToFill = await resolvePasswordForPrompt(isSudoPrompt);
+        if (
+          passwordToFill &&
+          webSocketRef.current &&
+          webSocketRef.current.readyState === WebSocket.OPEN
+        ) {
+          webSocketRef.current.send(
+            JSON.stringify({
+              type: "input",
+              data: passwordToFill + "\n",
+            }),
+          );
+        }
+        setTimeout(() => {
+          passwordPromptShownRef.current = false;
+        }, 3000);
+      });
       setTimeout(() => {
         passwordPromptShownRef.current = false;
       }, 15000);
@@ -3779,7 +3787,6 @@ const TerminalInner = forwardRef<TerminalHandle, SSHTerminalProps>(
           attempt={reconnectAttempts.current}
           maxAttempts={maxReconnectAttempts}
           disconnectedMessage={t("terminal.connectionLost")}
-          retryLabel={t("terminal.reconnect")}
           onManualRetry={() => {
             setShowDisconnectedOverlay(false);
             isUnmountingRef.current = false;

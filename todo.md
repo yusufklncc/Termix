@@ -521,7 +521,14 @@ Kurulum: [`docs/jenkins-ci.md`](docs/jenkins-ci.md)
 - [x] SDK paketi `@termix/plugin-sdk` → `@termix-ssh/plugin-sdk` olarak
       yeniden adlandırıldı; beş eklentide 107 dosya çevrildi
 - [ ] Yamaladığımız iki eklentinin kaynağı 2.9.2'de donmuş durumda;
-      upstream'in yeni sürümleriyle elle tazelenmesi gerekecek
+      upstream'in yeni sürümleriyle elle tazelenmesi gerekecek. **Bunun
+      bedeli 26.10.1'de ödendi:** `ssh-terminal` artık var olmayan
+      `useConfirmation`'ı import ediyordu, ön yüz modülü tarayıcıda hiç
+      çalışmadı, host'a tıklamak hiçbir şey açmadı — backend "Running"
+      görünürken. Düzeltildi (`useConfirm`, `retryLabel` kaldırıldı) ve
+      `scripts/check-plugin-types.cjs` ile `npm run type-check`'e bağlandı:
+      `tsc -b` kökte `plugins/`'e bakmıyordu, esbuild tip denetlemiyor,
+      eklenti testleri de yalnızca import ettikleri dosyaları görüyor
 - [x] İmaj derlemesi `plugins/` dizinini göremiyordu: upstream'in
       `.dockerignore`'u onu dışlıyor ve `npm ci`'ye manifest besleyen aşamayı
       kaldırmışlar. İkisi de geri kondu; yayın `26.10.1-rdp.22` ile çıktı

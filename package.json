@@ -21,7 +21,7 @@
     "prebuild": "node scripts/write-electron-build-info.cjs",
     "lint": "node scripts/generate-dialect-schema.cjs --check && npm run plugin:validate-manifest && eslint . && node scripts/check-importmap-csp.cjs && node scripts/check-core-plugin-ids.cjs && node scripts/check-sdk-ui-exports.cjs && node scripts/check-sdk-guide.cjs && node scripts/generate-settings-search-index.cjs --check && node scripts/check-plugin-locales.cjs && node scripts/check-plugin-uses.cjs && node scripts/check-test-locations.cjs && node scripts/check-changelog.cjs && node scripts/check-env-catalog.cjs",
     "lint:fix": "eslint --fix .",
-    "type-check": "npm run build:sdk && tsc -b --force",
+    "type-check": "npm run build:sdk && tsc -b --force && node scripts/check-plugin-types.cjs",
     "test": "vitest run",
     "test:plugins": "node scripts/run-plugin-tests.cjs",
     "verify:dialect": "tsx scripts/verify-dialects.mjs",

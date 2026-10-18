@@ -17,7 +17,7 @@ import {
   certificateComplaint,
   certificateUnverified,
   pinnedCertificateChanged,
-  // @ts-expect-error -- plain JS that ships in the manager image, no types
+  // Plain JS, the file that ships in the manager image.
 } from "../../../../docker/net-manager/certificate-complaint.js";
 
 /** openconnect --protocol=fortinet --non-inter https://self-signed.badssl.com/ */

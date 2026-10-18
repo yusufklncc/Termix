@@ -50,6 +50,33 @@ export function managedDoorPort(profileId: number): number {
   return Number(process.env.NET_MANAGER_DOOR_BASE ?? 20000) + profileId;
 }
 
+/** The account a doorway asks for. Mirrors DOORWAY_USER in manager.js. */
+export const MANAGED_DOORWAY_USER = "termix";
+
+/**
+ * What this profile's doorway will ask for.
+ *
+ * Derived, not stored, from the same token the manager's own credentials
+ * travel under -- so Termix can work it out and nothing else sharing the
+ * Docker network can. The doorway used to take any connection at all, which
+ * put a customer's VPN one `nc` away for any container beside it, and raised
+ * the tunnel for whoever knocked. Mirrors doorwayPassword() in manager.js;
+ * the two have to agree or every managed profile stops connecting.
+ */
+export function managedDoorPassword(profileId: number, token: string): string {
+  // hkdfSync answers an ArrayBuffer, and "[object ArrayBuffer]" is what
+  // .toString("hex") makes of one: the same string for every profile.
+  return Buffer.from(
+    crypto.hkdfSync(
+      "sha256",
+      Buffer.from(token, "utf8"),
+      Buffer.from("termix-net-manager", "utf8"),
+      Buffer.from(`doorway:${profileId}`, "utf8"),
+      32,
+    ),
+  ).toString("hex");
+}
+
 export function resolveNetManagerOptions(): NetManagerOptions | null {
   const token = process.env.NET_MANAGER_TOKEN?.trim();
   // Without a secret there is no manager to speak to. Managed profiles then

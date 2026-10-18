@@ -94,6 +94,32 @@ const sealKey = crypto.hkdfSync(
   32,
 );
 
+/*
+ * What a doorway asks for before it lets anyone through.
+ *
+ * The doorway used to be a bare pipe on 0.0.0.0:20000+id: connecting was
+ * enough to reach a customer's VPN, and enough to raise the tunnel for it,
+ * so any container sharing the Docker network had both. The port is derived
+ * from the profile's id and so is this, from the same token the credentials
+ * already travel under -- Termix can work it out, and nothing else on the
+ * network can.
+ */
+const DOORWAY_USER = "termix";
+
+function doorwayPassword(id) {
+  // hkdfSync answers an ArrayBuffer, and "[object ArrayBuffer]" is what
+  // .toString("hex") makes of one: the same string for every profile.
+  return Buffer.from(
+    crypto.hkdfSync(
+      "sha256",
+      Buffer.from(TOKEN, "utf8"),
+      Buffer.from("termix-net-manager", "utf8"),
+      Buffer.from(`doorway:${id}`, "utf8"),
+      32,
+    ),
+  ).toString("hex");
+}
+
 function unseal(sealed) {
   const iv = Buffer.from(sealed.iv, "base64");
   const tag = Buffer.from(sealed.tag, "base64");
@@ -1066,12 +1092,104 @@ function noteIdle(id) {
  * the tunnel follows it after a while. Nothing else has to know when a
  * session starts or ends -- being connected to is what "in use" means.
  */
+/** Reads exactly n bytes, or rejects when the socket ends first. */
+function readExactly(socket, n) {
+  return new Promise((resolve, reject) => {
+    if (n === 0) return resolve(Buffer.alloc(0));
+    const chunks = [];
+    let have = 0;
+    const onReadable = () => {
+      let chunk;
+      while ((chunk = socket.read(Math.min(n - have, 1 << 14))) !== null) {
+        chunks.push(chunk);
+        have += chunk.length;
+        if (have >= n) {
+          cleanup();
+          return resolve(Buffer.concat(chunks, n));
+        }
+      }
+    };
+    const fail = (error) => {
+      cleanup();
+      reject(error ?? new Error("closed"));
+    };
+    const cleanup = () => {
+      socket.removeListener("readable", onReadable);
+      socket.removeListener("end", fail);
+      socket.removeListener("error", fail);
+    };
+    socket.on("readable", onReadable);
+    socket.once("end", fail);
+    socket.once("error", fail);
+    onReadable();
+  });
+}
+
+/**
+ * SOCKS5 username/password, RFC 1929, terminated here.
+ *
+ * The doorway answers it rather than passing it on, because what is upstream
+ * is a plain SOCKS server with no accounts: microsocks in a namespace, or a
+ * mesh daemon's own. So this greets upstream itself afterwards, and the
+ * client's CONNECT request is the first thing that actually flows through.
+ */
+async function authenticateDoorway(client, id) {
+  const greeting = await readExactly(client, 2);
+  if (greeting[0] !== 0x05) return false;
+  const methods = await readExactly(client, greeting[1]);
+  if (!methods.includes(0x02)) {
+    // No acceptable method. Said in the protocol's own terms, so a client
+    // reports something better than a closed socket.
+    client.end(Buffer.from([0x05, 0xff]));
+    return false;
+  }
+  client.write(Buffer.from([0x05, 0x02]));
+
+  const head = await readExactly(client, 2);
+  if (head[0] !== 0x01) return false;
+  const user = await readExactly(client, head[1]);
+  const passwordLength = (await readExactly(client, 1))[0];
+  const password = await readExactly(client, passwordLength);
+
+  const expected = Buffer.from(doorwayPassword(id), "utf8");
+  const ok =
+    user.toString("utf8") === DOORWAY_USER &&
+    password.length === expected.length &&
+    crypto.timingSafeEqual(password, expected);
+
+  client.write(Buffer.from([0x01, ok ? 0x00 : 0x01]));
+  if (!ok) client.end();
+  return ok;
+}
+
+/** Greets the upstream SOCKS server, which takes no credentials. */
+async function greetUpstream(upstream) {
+  upstream.write(Buffer.from([0x05, 0x01, 0x00]));
+  const reply = await readExactly(upstream, 2);
+  return reply[0] === 0x05 && reply[1] === 0x00;
+}
+
 function openDoorway(id) {
   const port = DOOR_BASE + id;
 
   const server = net.createServer(async (client) => {
     const entry = networks.get(id);
     if (!entry) return client.destroy();
+
+    client.on("error", () => client.destroy());
+
+    /*
+     * Before the tunnel, not after. Raising one costs a gateway login and a
+     * setup key use, and an unauthenticated connection used to be enough to
+     * spend both.
+     */
+    let allowed = false;
+    try {
+      allowed = await authenticateDoorway(client, id);
+    } catch {
+      allowed = false;
+    }
+    if (!allowed) return client.destroy();
 
     entry.live += 1;
     clearTimeout(entry.idleTimer);
@@ -1084,7 +1202,6 @@ function openDoorway(id) {
     };
 
     client.once("close", finish);
-    client.on("error", () => client.destroy());
 
     try {
       await raiseTunnel(id);
@@ -1105,7 +1222,14 @@ function openDoorway(id) {
       upstream.destroy();
     };
     upstream.on("error", drop);
-    client.pipe(upstream).pipe(client);
+    upstream.once("connect", () => {
+      greetUpstream(upstream)
+        .then((ready) => {
+          if (!ready) return drop();
+          client.pipe(upstream).pipe(client);
+        })
+        .catch(drop);
+    });
   });
 
   return new Promise((resolve, reject) => {

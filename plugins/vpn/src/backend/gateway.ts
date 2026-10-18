@@ -1,7 +1,9 @@
 import net from "node:net";
 import type { PluginContext } from "@termix-ssh/plugin-sdk/backend";
 import {
+  managedDoorPassword,
   managedDoorPort,
+  MANAGED_DOORWAY_USER,
   resolveInManagedNetwork,
   resolveNetManagerOptions,
 } from "./net-manager-client.js";
@@ -54,6 +56,10 @@ export function profileToConfig(profile: VpnProfileRecord): Socks5Config {
       useSocks5: true,
       socks5Host: manager.host,
       socks5Port: managedDoorPort(profile.id),
+      // The doorway asks for these before it raises anything. Both sides
+      // derive them from the manager's token, so neither stores them.
+      socks5Username: MANAGED_DOORWAY_USER,
+      socks5Password: managedDoorPassword(profile.id, manager.token),
       // So a name that only exists inside this network can be asked about.
       managedNetworkId: profile.id,
     };

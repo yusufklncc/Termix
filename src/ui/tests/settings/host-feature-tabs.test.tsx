@@ -68,6 +68,60 @@ afterEach(() => {
   resetHostEditorSections();
 });
 
+/**
+ * A plugin whose host fields are gated on its protocol's switch, which is
+ * how a connection type declares its own settings: one hidden boolean the
+ * Protocols switch writes, and `requires` on everything else.
+ */
+function gatedPlugin(): PluginSummary {
+  return plugin({
+    id: "rdp-direct",
+    name: "Direct RDP",
+    contributes: {
+      settings: {
+        host: {
+          fields: [
+            {
+              key: "enableRdpDirect",
+              type: "boolean",
+              labelKey: "enable.label",
+              hidden: true,
+            },
+            {
+              key: "port",
+              type: "number",
+              labelKey: "port.label",
+              requires: "enableRdpDirect",
+            },
+          ],
+        },
+      },
+    },
+  } as Partial<PluginSummary>);
+}
+
+describe("a tab whose fields are gated on a protocol", () => {
+  it("is offered while the protocol is on", () => {
+    syncHostFeatureTabs([gatedPlugin()]);
+    const section = getHostEditorSection(hostFeatureTabId("rdp-direct"));
+    expect(section?.visible?.({ enableRdpDirect: true })).toBe(true);
+  });
+
+  it("is not offered while it is off, rather than being an empty card", () => {
+    syncHostFeatureTabs([gatedPlugin()]);
+    const section = getHostEditorSection(hostFeatureTabId("rdp-direct"));
+    expect(section?.visible?.({ enableRdpDirect: false })).toBe(false);
+    expect(section?.visible?.({})).toBe(false);
+  });
+
+  it("leaves a plugin whose fields carry no requires always offered", () => {
+    // Upstream's own host settings are all ungated; none of this applies.
+    syncHostFeatureTabs([plugin()]);
+    const section = getHostEditorSection(hostFeatureTabId("docker"));
+    expect(section?.visible?.({})).toBe(true);
+  });
+});
+
 describe("syncHostFeatureTabs", () => {
   it("registers one tab per feature, labelled with its name", () => {
     const other = plugin({ id: "warpgate", name: "Warpgate" });

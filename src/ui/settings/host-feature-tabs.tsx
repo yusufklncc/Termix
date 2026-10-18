@@ -17,7 +17,7 @@ import {
   HostPluginSections,
   type HostPluginSettings,
 } from "./HostPluginSections";
-import { hasVisibleFields } from "./settings-fields-util";
+import { hasVisibleFields, isFieldShown } from "./settings-fields-util";
 import { isDefaultableField } from "@/sidebar/host-defaults/catalog";
 
 const TAB_PREFIX = "feature:";
@@ -99,6 +99,21 @@ export function syncHostFeatureTabs(plugins: PluginSummary[]): string[] {
       label: plugin.name,
       // Nothing but the plugin's host settings, so it works for defaults too.
       defaults: ownSections.has(plugin.id) ? "only" : true,
+      /*
+       * Offered only while it would have something in it.
+       *
+       * A plugin that gates its host fields on its protocol's switch -- the
+       * point of `requires` -- has nothing to show while that protocol is
+       * off, and the generated tab was still listed with an empty card under
+       * it. A plugin whose fields carry no `requires` is unaffected: those
+       * are always active, so this is always true for them.
+       *
+       * The defaults editor skips this, which is right: a default is set
+       * before any host turns the protocol on.
+       */
+      visible: (protocols) =>
+        !!host.enableKey ||
+        host.fields.some((field) => isFieldShown(field, protocols)),
       icon: icon
         ? ({ className }: { className?: string }) => (
             <PluginIcon name={icon} className={className} />

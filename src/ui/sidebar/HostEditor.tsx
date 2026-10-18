@@ -632,13 +632,36 @@ export function HostEditor({
   ) => {
     onDirtyChange?.(true);
     onProtocolChange({ [proto]: value });
+
+    const before = protocols as unknown as Record<string, boolean>;
+    const after = { ...before, [proto]: value };
+    /*
+     * The switch and the plugin's own fields have to agree while editing.
+     *
+     * A protocol's switch is this editor's own state, and it only reached
+     * pluginSettings when the host was saved. A plugin that gates its host
+     * fields on that key -- which is what `requires` is for -- therefore
+     * showed an empty section until the host had been saved and reopened:
+     * the switch said on, and the fields it turns on were still reading the
+     * saved value. Merged here instead, so one state answers both. Saving
+     * merges again, which changes nothing.
+     */
+    updateForm((current) => ({
+      ...current,
+      pluginSettings: withProtocolSettings(
+        (current.pluginSettings ?? {}) as Record<
+          string,
+          Record<string, unknown>
+        >,
+        after as unknown as HostProtocols,
+      ),
+    }));
+
     if (!value) return;
     if (proto === "enableSsh") {
       setPendingReveal("ssh");
       return;
     }
-    const before = protocols as unknown as Record<string, boolean>;
-    const after = { ...before, [proto]: value };
     const visibleBefore = new Set(
       makeHostTabs((k) => k, before).map((tab) => tab.id),
     );

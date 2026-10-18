@@ -30,7 +30,11 @@
     },
     {
       "id": "desktop-stream",
-      "source": "workspace"
+      "source": "workspace",
+      "onboarding": {
+        "recommended": true,
+        "consent": false
+      }
     },
     {
       "id": "docker",
@@ -100,7 +104,11 @@
     },
     {
       "id": "rdp-direct",
-      "source": "workspace"
+      "source": "workspace",
+      "onboarding": {
+        "recommended": true,
+        "consent": false
+      }
     },
     {
       "id": "remote-desktop",
@@ -229,7 +237,11 @@
     },
     {
       "id": "vpn",
-      "source": "workspace"
+      "source": "workspace",
+      "onboarding": {
+        "recommended": true,
+        "consent": false
+      }
     },
     {
       "id": "wake-on-lan",

@@ -39,12 +39,22 @@ export async function openBridgeTunnel({
   host,
   target,
   bridgeHost,
+  onUnreachable,
 }: {
   ctx: PluginContext;
   host: PluginSshHost;
   target: { host: string; port: number };
   /** Where the bridge runs, which decides what the listener may bind to. */
   bridgeHost: string;
+  /**
+   * Core's own reason, the first time a connection cannot be made.
+   *
+   * The bridge only ever sees its connection close, and what FreeRDP reports
+   * for that is "transport layer failed" -- so "this host's VPN is disabled"
+   * reached the log while the screen named nothing and sent the operator
+   * looking at the network.
+   */
+  onUnreachable?: (reason: string) => void;
 }): Promise<BridgeTunnel> {
   const endpoint = resolveTunnelEndpoint(bridgeHost);
   const open = new Set<Duplex>();
@@ -63,12 +73,12 @@ export async function openBridgeTunnel({
           resolveDns: false,
         });
       } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
         ctx.log.warn(
-          `Direct RDP could not reach ${target.host}:${target.port}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `Direct RDP could not reach ${target.host}:${target.port}: ${reason}`,
         );
         socket.destroy();
+        onUnreachable?.(reason);
         return;
       }
 
@@ -78,6 +88,18 @@ export async function openBridgeTunnel({
         const direct = net.createConnection(target.port, target.host);
         open.add(direct);
         direct.on("close", () => open.delete(direct));
+        /*
+         * A socket with no error listener throws out of the event loop, and
+         * a refused port is the ordinary case here -- a host that is simply
+         * off would have taken the backend down with it.
+         */
+        direct.on("error", (error: Error) => {
+          ctx.log.warn(
+            `Direct RDP could not reach ${target.host}:${target.port}: ${error.message}`,
+          );
+          socket.destroy();
+          onUnreachable?.(error.message);
+        });
         socket.pipe(direct).pipe(socket);
         return;
       }

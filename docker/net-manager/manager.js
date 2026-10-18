@@ -2,6 +2,7 @@ import net from "node:net";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { spawn, execFile } from "node:child_process";
+import { certificateComplaint } from "./certificate-complaint.js";
 
 /*
  * Termix's network manager.
@@ -441,28 +442,6 @@ function watcher() {
   };
 }
 
-/**
- * Did the gateway's certificate stop matching the one this VPN pinned?
- *
- * Worth telling apart, because openconnect's last word for it is "Failed to
- * complete authentication" -- the same thing it says when a password is
- * refused, and nothing a person could act on. A renewed certificate is fixed
- * by updating the profile, not by checking the password.
- *
- * openconnect prints the certificate's current pin when it rejects one, so
- * the value needed to fix it is carried along rather than left to be worked
- * out with openssl.
- */
-function pinnedCertificateChanged(said) {
-  for (const line of said ?? []) {
-    const match = /match server's certificate:\s*(pin-sha256:\S+)/i.exec(line);
-    if (match) {
-      return `the gateway's certificate no longer matches this VPN's pinned fingerprint. Its current pin is ${match[1]} -- update the profile's trusted fingerprint if this change was expected`;
-    }
-  }
-  return null;
-}
-
 async function raiseFortinet({ id, profile, credentials, watch, procs }) {
   const { peer } = addresses(id);
   const host = profile.serverHost;
@@ -505,10 +484,10 @@ async function raiseFortinet({ id, profile, credentials, watch, procs }) {
   try {
     await waitForInterface(id, "tun0", vpn, 60000, watch.said);
   } catch (error) {
-    // A pinned certificate that changed says so plainly, rather than through
+    // A certificate it would not accept says so plainly, rather than through
     // openconnect's parting words about authentication.
-    const changed = pinnedCertificateChanged(watch.said);
-    throw changed ? new Error(changed) : error;
+    const complaint = certificateComplaint(watch.said);
+    throw complaint ? new Error(complaint) : error;
   }
   await applyStrictRoutes(id, "tun0", gatewayIps);
 

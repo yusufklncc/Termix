@@ -532,12 +532,19 @@ Kurulum: [`docs/jenkins-ci.md`](docs/jenkins-ci.md)
       kullanıcı/şifre istiyor; iki taraf da şifreyi `NET_MANAGER_TOKEN`'dan
       HKDF ile türetiyor, kimse saklamıyor. Kimlik doğrulama `raiseTunnel`'dan
       **önce**: kimliksiz bağlantı artık tünel kaldırmıyor (`7265977b`)
-- [ ] netmgr imajında kök sertifika deposu eksik görünüyor: `vpn.tim.org.tr`
-      için "signer not found", aynı zincir başka makinede doğruluyor. Şimdilik
-      profilde pin-sha256 sabitlendi
-- [ ] RDP'de hosta hiç ulaşılamazsa asıl sebep yalnızca Termix günlüğünde
-      kalıyor, ekrana "transport layer failed" düşüyor. Sebep ekrana
-      taşınabilir (notice ya da ERRR)
+- [x] "netmgr imajında kök sertifika deposu eksik" — **teşhis yanlıştı.**
+      Ölçüm: `ca-certificates` ilk gününden beri kurulu, imajın içinde 150 kök
+      var, `DigiCert_Global_Root_G2` dahil, ve openconnect'in kullandığı aynı
+      GnuTLS ile `gnutls-cli` zinciri **doğruluyor** ("The certificate is
+      trusted"). Sebep üretilemedi. Yapılan: hata okunur hale getirildi —
+      openconnect'in doğrulama reddi artık kendi sebebini ve kabul edeceği
+      pin'i taşıyor (`certificate-complaint.js`). Eskiden son söz "Failed to
+      complete authentication"dı, yani şifre hatasıyla aynı
+- [x] RDP'de asıl sebep ekrana taşındı. `tunnel.ts` çekirdeğin sebebini
+      (`onUnreachable`) oturuma veriyor, oturum da bridge'in genel hatasını
+      beklemeden `ERRR` ile bitiriyor. Ararken çıkan ikinci hata da düzeldi:
+      düz bağlanma yolundaki socket'in `error` dinleyicisi yoktu, kapalı bir
+      port backend'i uncaught exception ile düşürüyordu
 - [x] Durum yoklaması VPN'li hostlarda VPN'den gidiyor. `host.gateway`
       servisine `isUp` eklendi: tünel ayaktaysa yoklama SOCKS5'ten geçiyor
       (`tcpPingThroughProxy`), değilse host **hiç** yoklanmıyor — kapıya
@@ -551,9 +558,20 @@ Kurulum: [`docs/jenkins-ci.md`](docs/jenkins-ci.md)
       sahibin anahtarıyla çözülüyor (`socks5Password` şifreli) ve zincir
       JSON'u ayrıştırılıyor. Satır çözülemiyorsa (sahibi oturumda değil)
       host **hiç** yoklanmıyor: `reason: hosts.status.gatewayUnreadable`
-- [ ] Çöken bir eklenti kalıcı olarak kapanıyor (`enabled=false`) ve düzelmiş
-      imaj gelse de kendiliğinden açılmıyor; arayüzden de açılamıyor.
-      `PATCH /plugins/<id>/state` ile elle açmak gerekti
+- [ ] "Çöken eklenti kalıcı kapanıyor (`enabled=false`)" — kodda üretilemedi.
+      `enabled` diye kolon yok (`plugins.state`: enabled|disabled|blocked|
+      failed), çöken eklenti `failed` yazılıyor ve `startablePluginIds`
+      açılışta `failed`/`blocked`'ı yeniden deniyor. Elimde kanıt yok:
+      hangi eklenti olduğu + `select id,state,last_error from plugins`
+      satırı gerekiyor
+- [x] Ararken bulunan gerçek hata: fork'un kendi eklentileri (`vpn`,
+      `rdp-direct`, `desktop-stream`) `bundled-plugins.json`'da onboarding
+      kaydı taşımıyordu. `initialPluginState` taze kurulumda yalnızca
+      `recommended && !consent` olanı açıyor, gerisi `disabled` giriyor ve
+      seçiciye de düşmüyor — yani sıfırdan kurulan bir Termix bu fork'un
+      varlık sebebi olan üç eklentiyle **kapalı** açılıyordu. Üçü de
+      eklendi, testle korunuyor (`session-recording` upstream'de de
+      önerilmiyor, ona dokunulmadı)
 
 ---
 

@@ -35,6 +35,7 @@ COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscale
 COPY --from=netbird /usr/local/bin/netbird /usr/local/bin/netbird
 
 COPY manager.js /app/manager.js
+COPY certificate-complaint.js /app/certificate-complaint.js
 COPY vpnc-script-no-dns /app/vpnc-script-no-dns
 RUN chmod +x /app/vpnc-script-no-dns
 

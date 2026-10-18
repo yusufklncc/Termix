@@ -114,12 +114,31 @@ export async function runSession({
     userId: target.host.ownerUserId,
   } as unknown as PluginSshHost;
 
+  /*
+   * The bridge dials the listener, not the host, so a host core cannot reach
+   * reaches it as a closed connection -- and what FreeRDP reports for that is
+   * "transport layer failed". Said once, before the bridge gets that far, so
+   * the screen carries the reason instead of the symptom.
+   */
+  let unreachableReported = false;
+  const unreachable = (reason: string) => {
+    if (unreachableReported) return;
+    unreachableReported = true;
+    fail(
+      1011,
+      `Failed to reach the host the way it is configured to be reached: ${reason}`,
+    );
+    bridge?.destroy();
+    tunnel?.close();
+  };
+
   try {
     tunnel = await openBridgeTunnel({
       ctx,
       host,
       target: { host: connectRequest.host, port: connectRequest.port },
       bridgeHost,
+      onUnreachable: unreachable,
     });
     connectRequest.host = tunnel.host;
     connectRequest.port = tunnel.port;

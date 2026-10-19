@@ -21,7 +21,13 @@ FROM tailscale/tailscale:latest AS tailscale
 
 # Netbird's, for the same reason, pinned because this is the version the
 # provider's behaviour was measured against.
-FROM netbirdio/netbird:0.79.0 AS netbird
+#
+# 0.79.0 until 2026-10-19. Moved for its Go: everything this image was
+# reported for in the stdlib and x/* came from these binaries, and 0.81.2 is
+# built with go1.26.7. The flags the manager passes -- up, down, status -j,
+# status --check, service run -- are identical between the two, compared
+# rather than assumed.
+FROM netbirdio/netbird:0.81.2 AS netbird
 
 FROM node:22-trixie-slim
 

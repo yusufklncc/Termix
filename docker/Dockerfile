@@ -3,7 +3,15 @@
 # and a glob COPY flattens paths, so the tree is trimmed here instead. The
 # deps layer below stays cached until one of these files changes. Upstream
 # has no plugins in the tree and dropped this stage; this fork builds five.
-FROM node:24-slim AS workspace-manifests
+# trixie, not the default node:24-slim, which is still Debian 12.
+#
+# Bookworm's zlib is 1.2.13, and the critical CVE-2023-45853 against it has no
+# fix there -- trixie carries 1.3.1, where that one does not apply. Its
+# perl-base is current too, so the upgrade below finds nothing left to do and
+# stays only to catch what Debian ships next. Every stage moves together: the
+# native modules are built in one and copied into another, and they should be
+# built against the libc they run on.
+FROM node:24-trixie-slim AS workspace-manifests
 WORKDIR /src
 COPY plugins ./plugins
 RUN find plugins -mindepth 2 -maxdepth 2 ! -name package.json ! -name manifest.json -exec rm -rf {} +
@@ -11,7 +19,7 @@ RUN find plugins -mindepth 2 -maxdepth 2 ! -name package.json ! -name manifest.j
 # Stage 1: Install dependencies
 # The builders only produce JS, so they run on the build machine's own arch
 # once instead of under QEMU per target. Rolldown hangs under arm64 emulation.
-FROM --platform=$BUILDPLATFORM node:24-slim AS deps
+FROM --platform=$BUILDPLATFORM node:24-trixie-slim AS deps
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
@@ -50,11 +58,11 @@ RUN --mount=type=cache,target=/app/node_modules/.cache/termix-bundled-plugins \
     npm run build:backend
 
 # Stage 4: Download OPKSSH binary for the target platform so the image works offline
-FROM node:24-slim AS opkssh-downloader
+FROM node:24-trixie-slim AS opkssh-downloader
 ARG TARGETARCH
-ARG OPKSSH_VERSION=v0.16.0
-ARG OPKSSH_SHA256_AMD64=c018c3e7baf98612b923e742dd87be38650bf61e3b755fb2bc90de177568b1bf
-ARG OPKSSH_SHA256_ARM64=9dd10c2b6ce99cde18e52c054877ca014134b291fd82afe71741c68db4f83d44
+ARG OPKSSH_VERSION=v0.18.0
+ARG OPKSSH_SHA256_AMD64=7e23392ad7f908a69e4c4f543522794b83385dfdd8ef31b6888a5edb7afb3700
+ARG OPKSSH_SHA256_ARM64=0904be9ddf0c2c60dd1ed21412557bfe1e7b5274f9d9f159fddae008e51f9153
 WORKDIR /opkssh
 
 RUN apt-get update && apt-get install -y curl ca-certificates && rm -rf /var/lib/apt/lists/*
@@ -71,7 +79,7 @@ RUN case "$TARGETARCH" in \
     echo -n "$OPKSSH_VERSION" > version.txt
 
 # Stage 5: Production dependencies only
-FROM node:24-slim AS production-deps
+FROM node:24-trixie-slim AS production-deps
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
@@ -94,14 +102,14 @@ RUN npm ci --omit=dev --ignore-scripts && \
     npm cache clean --force
 
 # Stage 6: Final optimized image
-FROM node:24-slim
+FROM node:24-trixie-slim
 WORKDIR /app
 
 # The release the opkssh-downloader stage baked in, so the plugin trusts that
 # binary when the build picks a version other than its pinned one.
-ARG OPKSSH_VERSION=v0.16.0
-ARG OPKSSH_SHA256_AMD64=c018c3e7baf98612b923e742dd87be38650bf61e3b755fb2bc90de177568b1bf
-ARG OPKSSH_SHA256_ARM64=9dd10c2b6ce99cde18e52c054877ca014134b291fd82afe71741c68db4f83d44
+ARG OPKSSH_VERSION=v0.18.0
+ARG OPKSSH_SHA256_AMD64=7e23392ad7f908a69e4c4f543522794b83385dfdd8ef31b6888a5edb7afb3700
+ARG OPKSSH_SHA256_ARM64=0904be9ddf0c2c60dd1ed21412557bfe1e7b5274f9d9f159fddae008e51f9153
 
 ENV DATA_DIR=/app/data \
     OPKSSH_BUNDLED_DIR=/app/opkssh-bundled \

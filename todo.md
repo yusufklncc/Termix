@@ -592,7 +592,22 @@ Go yamalarını aylarca bekletiyordu. Bedeli: sürümleri kendiliğinden gelmiyo
       test takımı kararsız; tek koşuyla karşılaştırma yapılmamalı
 
 - [ ] `rdp-bridge`'in 330 bulgusunun 260'ı FFmpeg (libavcodec/libavutil/
-      libswscale/libswresample); hiçbirinin yayınlanmış düzeltmesi yok
+      libswscale/libswresample); hiçbirinin yayınlanmış düzeltmesi yok.
+      **FFmpeg kalıyor** (karar: 2026-10-19).
+
+      Akla gelen ilk soru "decode etmiyoruz, neden taşıyoruz" — cevap
+      `WITH_FFMPEG`'in H.264 **pazarlığını** açan şey olması; sunucuya
+      "H.264 konuşabiliyorum" diyebilmek için derlemede bir H.264
+      sağlayıcısı gerekiyor. Kaldırmak doğrudan fork'un varlık sebebini
+      kaldırır.
+
+      `-DWITH_OPENH264=ON` ile sağlayıcıyı değiştirmek teorik olarak 260
+      bulguyu ve ciddi bir imaj boyutunu götürürdü, ama denenmedi: ayrıca
+      `-DWITH_DSP_FFMPEG=ON` sesin yeniden örneklemesini yapıyor
+      (`rdpsnd_termix.c` kullanıyor), ve "H.264 hâlâ pazarlık ediliyor mu,
+      NAL'lar geçiyor mu, ses çalışıyor mu" ancak gerçek bir Windows
+      host'uyla doğrulanabilir. Bridge'in rozeti zaten Orta ve düzeltilebilir
+      bulgusu 0 — yani bu iş riski değil sayıyı düşürürdü
 
 ### Canlıda bulunan, kapanmamış (2026-10-16/17)
 

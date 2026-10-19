@@ -546,11 +546,29 @@ Go yamalarını aylarca bekletiyordu. Bedeli: sürümleri kendiliğinden gelmiyo
 
 ### Kapatılamayanlar
 
-- [ ] `netmgr` / `libxml2` CVE-2026-6653 (kritik, CVSS 9.8). Debian trixie'de
-      de backports'ta da yama yok; ikisi de aynı 2.9.14'ü veriyor. Paket
-      openconnect'in zorunlu bağımlılığı, kaldırmak Fortinet desteğini
-      götürür. Use-after-free, kötü niyetli XML ile servis dışı bırakma;
-      erişim yolu ağ geçidinden gelen XML. Debian yamalayana kadar bekliyoruz
+- [ ] `netmgr` / `libxml2` CVE-2026-6653 (kritik, CVSS 9.8). Use-after-free,
+      kötü niyetli XML ile servis dışı bırakma; erişim yolu ağ geçidinden
+      gelen XML. **Karar: beklemek** (2026-10-19). Düzeltme Debian trixie'ye
+      geldiğinde uygulanacak, o zamana kadar kabul ediliyor.
+
+      Gerekçe, ölçülerek: düzeltilmiş libxml2 **var** — forky/unstable'da
+      `2.15.4`. Ama **yeni SONAME** ile, `libxml2-16` paketi olarak
+      (`libxml2.so.16`). İmajda XML ayrıştıran her şey eski SONAME'e bağlı:
+      `libopenconnect.so.5`, `libxmlsec1.so.1`, `libxslt.so.1` → hepsi
+      `libxml2.so.2`. forky'de eski SONAME'li amd64 paketi yok, yani yerine
+      kurulacak bir şey yok. Kullanmak, openconnect + xmlsec + xslt'yi 2.15'e
+      karşı yeniden derlemek demek; Debian bu geçişi bitirmemiş, trixie'yi
+      2.12'den 2.9.14 tabanına geri çevirmelerinin sebebi de bu.
+
+      Upstream yamasını 2.9.14'e geriye taşımak da cerrahi değil: 956 satır,
+      `entities.c`/`SAX2.c`/`parser.c`'de entity işlemenin yeniden yazımı
+      (2.11.0). Üstelik Debian'ın izleyicisine göre bu UAF, onların **kendi**
+      CVE-2021-3541 geri taşımasıyla oluşmuş. Yamalı bir XML yığınının
+      bakımını üstlenmiyoruz.
+
+      Debian'ın kendi sınıflandırması: trixie için `<no-dsa> (Minor issue)`.
+      Takip: `https://security-tracker.debian.org/tracker/CVE-2026-6653`
+
 - [ ] `netmgr`'da kalan ~22 bulgu: netbird ve tailscale'in **bağımlılık**
       sürümleri (`x/net`, `grpc`, `gopacket`, `pion/*`, `cilium/ebpf`).
       Kapatmak iki VPN istemcisinin bağımlılık grafiğini yeniden çözmek

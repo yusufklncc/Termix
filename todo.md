@@ -569,13 +569,28 @@ Go yamalarını aylarca bekletiyordu. Bedeli: sürümleri kendiliğinden gelmiyo
       Debian'ın kendi sınıflandırması: trixie için `<no-dsa> (Minor issue)`.
       Takip: `https://security-tracker.debian.org/tracker/CVE-2026-6653`
 
-- [ ] `netmgr`'da kalan ~22 bulgu: netbird ve tailscale'in **bağımlılık**
-      sürümleri (`x/net`, `grpc`, `gopacket`, `pion/*`, `cilium/ebpf`).
-      Kapatmak iki VPN istemcisinin bağımlılık grafiğini yeniden çözmek
-      demek — `gopacket` ve `pion/dtls` tam olarak paket işleme katmanı.
-      opkssh'ta yapıldı çünkü orası kimlik doğrulama yardımcısıydı ve
-      upstream'in testleri geçiyordu; burada aynı kanıt toplanmadan
-      yapılmayacak
+- [ ] `netmgr`'da kalan 22 bulgu: netbird ve tailscale'in **bağımlılık**
+      sürümleri. **Denendi ve alınmadı** (2026-10-19), gerekçe ölçümle:
+
+      - **8'i derlenmiyor.** `pion/stun`'un yeni sürümü `pion/transport`'u
+        v3'ten v4'e taşımış; netbird'ün `client/internal/relay/relay.go`'su
+        v3 arayüzünü uyguluyor (`CreateDialer` imzası). Pin meselesi değil,
+        upstream'in portlaması gereken bir API kırılması. `gopacket`,
+        `pion/dtls`, `pion/stun`, `cilium/ebpf` bu gruptan
+      - **11'i derleniyor ama kanıt yetersiz.** `x/net 0.60` + `x/crypto
+        0.57` + `grpc 1.83.2` temiz derleniyor. Kontrollü karşılaştırmada
+        `client/netevents/sweep` yükseltilmiş ağaçta iki tam koşuda da
+        düşüyor, değiştirilmemiş ağaçta iki koşuda da geçiyor. Ama tek
+        başına çalıştırılınca yükseltilmiş ağaçta da 7/7 geçiyor — yani
+        zamanlamaya duyarlı bir test, tam takım altında takılıyor.
+        Bozulduğunun kesin kanıtı değil; **güvenli olduğunun da değil**, ve
+        paket yoluna dokunmak için eşik bu
+      - **5'i tailscale'in `x/net`'i.** netbird sonucundan sonra denenmedi
+
+      Not: `x/crypto`'yu 0.56'ya pinlemek işe yaramıyor —
+      `x/net@v0.60.0 requires golang.org/x/crypto@v0.57.0`. Ayrıca netbird'ün
+      test takımı kararsız; tek koşuyla karşılaştırma yapılmamalı
+
 - [ ] `rdp-bridge`'in 330 bulgusunun 260'ı FFmpeg (libavcodec/libavutil/
       libswscale/libswresample); hiçbirinin yayınlanmış düzeltmesi yok
 

@@ -57,26 +57,51 @@ COPY . .
 RUN --mount=type=cache,target=/app/node_modules/.cache/termix-bundled-plugins \
     npm run build:backend
 
-# Stage 4: Download OPKSSH binary for the target platform so the image works offline
-FROM node:24-trixie-slim AS opkssh-downloader
+# Stage 4: build OPKSSH, rather than download the release binary.
+#
+# That binary is where every Go finding in this image lives. Upstream builds a
+# release once, and the Go it was built with ages from that day: v0.18.0 ships
+# go1.26.6, so each stdlib CVE published afterwards sits in the image until
+# upstream happens to cut a new release. Building the same tag here with a
+# current toolchain settles that without waiting for anyone.
+#
+# The three golang.org/x modules move with it. Upstream's own test suite passes
+# with them -- checked against a build of the unmodified tag first, because one
+# of its tests fails on the absence of /etc/opk/providers either way and that
+# would have read as a regression.
+#
+# Everything is pinned: the toolchain by tag, the source by tag, each module by
+# version. The build has to come out the same twice, because the plugin trusts
+# the bundled binary by checksum.
+FROM golang:1.27.2 AS opkssh-builder
 ARG TARGETARCH
 ARG OPKSSH_VERSION=v0.18.0
-ARG OPKSSH_SHA256_AMD64=7e23392ad7f908a69e4c4f543522794b83385dfdd8ef31b6888a5edb7afb3700
-ARG OPKSSH_SHA256_ARM64=0904be9ddf0c2c60dd1ed21412557bfe1e7b5274f9d9f159fddae008e51f9153
-WORKDIR /opkssh
+ARG OPKSSH_X_CRYPTO=v0.58.0
+ARG OPKSSH_X_MOD=v0.42.0
+ARG OPKSSH_X_TEXT=v0.43.0
+WORKDIR /src
 
-RUN apt-get update && apt-get install -y curl ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 --branch "$OPKSSH_VERSION" \
+      https://github.com/openpubkey/opkssh.git .
 
-RUN case "$TARGETARCH" in \
-      amd64) OPKSSH_ARCH=amd64; OPKSSH_SHA256="$OPKSSH_SHA256_AMD64" ;; \
-      arm64) OPKSSH_ARCH=arm64; OPKSSH_SHA256="$OPKSSH_SHA256_ARM64" ;; \
-      *) echo "Unsupported architecture: $TARGETARCH" && exit 1 ;; \
-    esac && \
-    curl -fSL -o "opkssh-linux-${OPKSSH_ARCH}" \
-      "https://github.com/openpubkey/opkssh/releases/download/${OPKSSH_VERSION}/opkssh-linux-${OPKSSH_ARCH}" && \
-    echo "$OPKSSH_SHA256  opkssh-linux-${OPKSSH_ARCH}" | sha256sum -c - && \
-    chmod 755 "opkssh-linux-${OPKSSH_ARCH}" && \
-    echo -n "$OPKSSH_VERSION" > version.txt
+RUN go get "golang.org/x/crypto@$OPKSSH_X_CRYPTO" \
+           "golang.org/x/mod@$OPKSSH_X_MOD" \
+           "golang.org/x/text@$OPKSSH_X_TEXT" && \
+    go mod tidy
+
+# CGO_ENABLED=0 and these ldflags are what upstream's goreleaser uses.
+# -trimpath so the binary does not carry this builder's paths.
+RUN mkdir -p /opkssh && \
+    CGO_ENABLED=0 GOOS=linux GOARCH="$TARGETARCH" \
+      go build -trimpath -ldflags "-s -w -X main.Version=$OPKSSH_VERSION" \
+        -o "/opkssh/opkssh-linux-${TARGETARCH}" . && \
+    chmod 755 "/opkssh/opkssh-linux-${TARGETARCH}" && \
+    # Written beside the binary because it is this build's, not a release's.
+    # The entrypoint hands it to the plugin, which otherwise downloads
+    # upstream's -- the build this stage exists to avoid.
+    sha256sum "/opkssh/opkssh-linux-${TARGETARCH}" | cut -d" " -f1 \
+      > /opkssh/sha256.txt && \
+    printf %s "$OPKSSH_VERSION" > /opkssh/version.txt
 
 # Stage 5: Production dependencies only
 FROM node:24-trixie-slim AS production-deps
@@ -105,17 +130,15 @@ RUN npm ci --omit=dev --ignore-scripts && \
 FROM node:24-trixie-slim
 WORKDIR /app
 
-# The release the opkssh-downloader stage baked in, so the plugin trusts that
-# binary when the build picks a version other than its pinned one.
+# The release the opkssh-builder stage built, so the plugin knows which
+# version it has. Its checksum is not pinned here: the binary is built in this
+# image, so the sum belongs to the build and travels beside it, in
+# opkssh-bundled/sha256.txt, which the entrypoint exports.
 ARG OPKSSH_VERSION=v0.18.0
-ARG OPKSSH_SHA256_AMD64=7e23392ad7f908a69e4c4f543522794b83385dfdd8ef31b6888a5edb7afb3700
-ARG OPKSSH_SHA256_ARM64=0904be9ddf0c2c60dd1ed21412557bfe1e7b5274f9d9f159fddae008e51f9153
 
 ENV DATA_DIR=/app/data \
     OPKSSH_BUNDLED_DIR=/app/opkssh-bundled \
     OPKSSH_VERSION=$OPKSSH_VERSION \
-    OPKSSH_SHA256_AMD64=$OPKSSH_SHA256_AMD64 \
-    OPKSSH_SHA256_ARM64=$OPKSSH_SHA256_ARM64 \
     PORT=8080 \
     NODE_ENV=production
 
@@ -152,7 +175,7 @@ COPY --chown=node:node --from=backend-builder /app/packages/plugin-sdk/package.j
 COPY --chown=node:node --from=backend-builder /app/packages/plugin-sdk/dist ./packages/plugin-sdk/dist
 # Pre-baked OPKSSH binary. The opkssh plugin uses it when its checksum
 # matches, so an offline install never downloads one.
-COPY --chown=node:node --from=opkssh-downloader /opkssh /app/opkssh-bundled
+COPY --chown=node:node --from=opkssh-builder /opkssh /app/opkssh-bundled
 COPY --chown=node:node package.json ./
 # Schema for Postgres and MySQL. Unused by the default SQLite deployment, which
 # builds its tables at startup instead.

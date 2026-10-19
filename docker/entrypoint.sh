@@ -55,6 +55,16 @@ export SSL_CERT_PATH=${SSL_CERT_PATH:-/app/data/ssl/termix.crt}
 export SSL_KEY_PATH=${SSL_KEY_PATH:-/app/data/ssl/termix.key}
 export TERMIX_SSL_TERMINATED_BY_NGINX=true
 
+# The bundled opkssh is built in this image rather than downloaded, so its
+# checksum belongs to the build and is written beside it. The plugin needs one
+# to trust the binary; without it, it fetches upstream's release instead --
+# which is the older build this image exists to avoid. An operator who sets
+# the variable themselves keeps it.
+if [ -z "${OPKSSH_SHA256:-}" ] && [ -r /app/opkssh-bundled/sha256.txt ]; then
+    OPKSSH_SHA256="$(cat /app/opkssh-bundled/sha256.txt)"
+    export OPKSSH_SHA256
+fi
+
 echo "Configuring web UI to run on port: $PORT"
 
 if [ "$ENABLE_SSL" = "true" ]; then

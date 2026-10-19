@@ -19,15 +19,35 @@
 # so they are copied rather than installed.
 FROM tailscale/tailscale:latest AS tailscale
 
-# Netbird's, for the same reason, pinned because this is the version the
-# provider's behaviour was measured against.
+# Netbird's client, built here rather than copied out of their image.
 #
-# 0.79.0 until 2026-10-19. Moved for its Go: everything this image was
-# reported for in the stdlib and x/* came from these binaries, and 0.81.2 is
-# built with go1.26.7. The flags the manager passes -- up, down, status -j,
-# status --check, service run -- are identical between the two, compared
-# rather than assumed.
-FROM netbirdio/netbird:0.81.2 AS netbird
+# 0.79.0 until 2026-10-19, then 0.81.2. The version moved for its Go, and then
+# the build moved here for the same reason: a release is built once and the Go
+# it was built with ages from that day, so every stdlib CVE published
+# afterwards waits for upstream to cut a release. 0.81.2's own binary carries
+# go1.26.7 and half this image's findings with it.
+#
+# Only the dependencies are left exactly as the tag pins them. This is the VPN
+# data path -- x/net, grpc, gopacket, pion/dtls are the packet handling
+# itself -- and a toolchain is a safer thing to move than those are. opkssh,
+# an auth helper, had its modules moved; this one does not.
+#
+# The build is upstream's own, from the comment at the top of their
+# client/Dockerfile, with goreleaser's tag and version ldflag.
+FROM golang:1.27.2 AS netbird
+ARG TARGETARCH
+ARG NETBIRD_VERSION=0.81.2
+WORKDIR /src
+
+RUN git clone --depth 1 --branch "v$NETBIRD_VERSION" \
+      https://github.com/netbirdio/netbird.git .
+
+# GOTOOLCHAIN=local, or go.mod's own toolchain directive fetches go1.26.7 and
+# builds with it -- the Go this stage exists to leave behind.
+RUN GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=linux GOARCH="$TARGETARCH" \
+      go build -trimpath -tags load_wgnt_from_rsrc \
+        -ldflags "-s -w -X github.com/netbirdio/netbird/version.version=$NETBIRD_VERSION" \
+        -o /usr/local/bin/netbird ./client
 
 FROM node:22-trixie-slim
 

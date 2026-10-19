@@ -26,8 +26,6 @@ services:
     restart: unless-stopped
     networks:
       - termix-dev-net
-    networks:
-      - termix-dev-net
 
 volumes:
   termix-dev-data:

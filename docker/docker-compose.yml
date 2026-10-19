@@ -46,8 +46,6 @@ services:
     restart: unless-stopped
     networks:
       - termix-net
-    networks:
-      - termix-net
 
 volumes:
   termix-data:

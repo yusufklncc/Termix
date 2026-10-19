@@ -5,7 +5,7 @@
     "packages/*",
     "plugins/*"
   ],
-  "version": "26.10.1",
+  "version": "26.10.2",
   "description": "Self-hosted, plugin-based server management.",
   "author": "Karmaa",
   "main": "electron/main.cjs",

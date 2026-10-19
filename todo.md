@@ -533,6 +533,34 @@ Kurulum: [`docs/jenkins-ci.md`](docs/jenkins-ci.md)
       `.dockerignore`'u onu dışlıyor ve `npm ci`'ye manifest besleyen aşamayı
       kaldırmışlar. İkisi de geri kondu; yayın `26.10.1-rdp.22` ile çıktı
 
+### Elle takip gerektiren pinler (2026-10-19'dan beri)
+
+Üç Go ikilisini artık kendimiz derliyoruz, çünkü upstream'in yayın takvimi
+Go yamalarını aylarca bekletiyordu. Bedeli: sürümleri kendiliğinden gelmiyor.
+
+- [ ] `docker/Dockerfile` → `OPKSSH_VERSION`, `OPKSSH_X_CRYPTO/MOD/TEXT`
+- [ ] `docker/net-manager/Dockerfile` → `NETBIRD_VERSION`, `TAILSCALE_VERSION`
+- [ ] İkisinde de `FROM golang:<sürüm>` — stdlib bulguları doğrudan buna bağlı
+- [ ] tailscale eskiden `:latest`'ti, yani kendiliğinden tazeleniyordu; artık
+      pinli. Yeni sürümlerini ara sıra kontrol etmek lazım
+
+### Kapatılamayanlar
+
+- [ ] `netmgr` / `libxml2` CVE-2026-6653 (kritik, CVSS 9.8). Debian trixie'de
+      de backports'ta da yama yok; ikisi de aynı 2.9.14'ü veriyor. Paket
+      openconnect'in zorunlu bağımlılığı, kaldırmak Fortinet desteğini
+      götürür. Use-after-free, kötü niyetli XML ile servis dışı bırakma;
+      erişim yolu ağ geçidinden gelen XML. Debian yamalayana kadar bekliyoruz
+- [ ] `netmgr`'da kalan ~22 bulgu: netbird ve tailscale'in **bağımlılık**
+      sürümleri (`x/net`, `grpc`, `gopacket`, `pion/*`, `cilium/ebpf`).
+      Kapatmak iki VPN istemcisinin bağımlılık grafiğini yeniden çözmek
+      demek — `gopacket` ve `pion/dtls` tam olarak paket işleme katmanı.
+      opkssh'ta yapıldı çünkü orası kimlik doğrulama yardımcısıydı ve
+      upstream'in testleri geçiyordu; burada aynı kanıt toplanmadan
+      yapılmayacak
+- [ ] `rdp-bridge`'in 330 bulgusunun 260'ı FFmpeg (libavcodec/libavutil/
+      libswscale/libswresample); hiçbirinin yayınlanmış düzeltmesi yok
+
 ### Canlıda bulunan, kapanmamış (2026-10-16/17)
 
 - [x] **netmgr kapıları kimliksiz dinliyordu.** Kapı artık SOCKS5

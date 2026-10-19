@@ -15,9 +15,36 @@
 # second form with "user input required in non-interactive mode" -- the same
 # account and password that 9.12 signs in with. Phase 8's sidecar is on trixie
 # and works; this had no business being older than it.
-# Tailscale's own binaries: Debian does not carry them, and they are static,
-# so they are copied rather than installed.
-FROM tailscale/tailscale:latest AS tailscale
+# Tailscale's binaries, built here. Debian does not carry them.
+#
+# Copied from tailscale/tailscale:latest until 2026-10-19, which tracked their
+# releases for free but left this image on whatever Go they last built with --
+# 1.104.1's binaries carry go1.27.1, and thirteen findings with it. Built here
+# they follow the toolchain this image chooses instead.
+#
+# The cost of that is the pin: their releases no longer arrive on their own,
+# and TAILSCALE_VERSION has to be moved by hand. It is one line, and the
+# alternative was waiting on someone else's build schedule for every Go fix.
+#
+# build_dist.sh is their own script, the one they ask distributions to use. It
+# stamps the version the way their releases are stamped; a plain go build
+# leaves the binaries reporting an unknown version. Two binaries, separately,
+# because that is what their image ships -- not one --box binary with the CLI
+# folded in.
+#
+# Dependencies are left where the tag pins them, as with netbird: this is the
+# other VPN data path.
+FROM golang:1.27.2 AS tailscale
+ARG TARGETARCH
+ARG TAILSCALE_VERSION=v1.104.1
+WORKDIR /src
+
+RUN git clone --depth 1 --branch "$TAILSCALE_VERSION" \
+      https://github.com/tailscale/tailscale.git .
+
+RUN export GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=linux GOARCH="$TARGETARCH" && \
+    sh ./build_dist.sh -o /usr/local/bin/tailscaled ./cmd/tailscaled && \
+    sh ./build_dist.sh -o /usr/local/bin/tailscale ./cmd/tailscale
 
 # Netbird's client, built here rather than copied out of their image.
 #

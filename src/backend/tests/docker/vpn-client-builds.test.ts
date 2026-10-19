@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * The VPN manager's netbird client is built here, not copied from an image.
+ * The VPN manager's two clients are built here, not copied from images.
  *
  * A release is built once and the Go it was built with ages from that day,
  * so every stdlib CVE published afterwards waits for upstream to cut a new
@@ -22,8 +22,16 @@ const DOCKERFILE = fs.readFileSync(
   "utf8",
 );
 
+function stageNamed(name: string): string {
+  const start = DOCKERFILE.indexOf(`FROM golang:1.27.2 AS ${name}`);
+  expect(start, `the ${name} builder stage is gone`).toBeGreaterThan(-1);
+  const rest = DOCKERFILE.slice(start);
+  const next = rest.indexOf("\nFROM ", 1);
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
 function netbirdStage(): string {
-  const start = DOCKERFILE.indexOf("FROM golang:");
+  const start = DOCKERFILE.indexOf("FROM golang:1.27.2 AS netbird");
   expect(start, "the netbird builder stage is gone").toBeGreaterThan(-1);
   const rest = DOCKERFILE.slice(start);
   const next = rest.indexOf("\nFROM ", 1);
@@ -68,5 +76,49 @@ describe("the netbird stage", () => {
     expect(DOCKERFILE).toContain(
       "COPY --from=netbird /usr/local/bin/netbird /usr/local/bin/netbird",
     );
+  });
+});
+
+/**
+ * Tailscale's, for the same reason and with the same restraint.
+ *
+ * It was copied from their :latest image until 2026-10-19, which tracked
+ * their releases for free and left this image on whatever Go they last built
+ * with -- 1.104.1 carries go1.27.1, and thirteen findings with it. The cost
+ * of building it here is the pin, which has to be moved by hand.
+ */
+describe("the tailscale stage", () => {
+  it("builds from source instead of copying their image", () => {
+    expect(DOCKERFILE).toContain("github.com/tailscale/tailscale.git");
+    expect(DOCKERFILE).not.toContain("FROM tailscale/tailscale:");
+  });
+
+  it("pins the toolchain and the release", () => {
+    expect(stageNamed("tailscale")).toMatch(
+      /FROM golang:\d+\.\d+\.\d+ AS tailscale/,
+    );
+    expect(stageNamed("tailscale")).toMatch(
+      /ARG TAILSCALE_VERSION=v\d+\.\d+\.\d+/,
+    );
+  });
+
+  it("uses their own distribution script, which stamps the version", () => {
+    // A plain go build leaves the binaries reporting an unknown version, and
+    // the manager logs what tailscale reports.
+    expect(stageNamed("tailscale")).toContain("build_dist.sh");
+  });
+
+  it("builds the two binaries their image ships, separately", () => {
+    const stage = stageNamed("tailscale");
+    expect(stage).toContain("./cmd/tailscaled");
+    expect(stage).toContain("./cmd/tailscale\n");
+    // --box folds the CLI into tailscaled; their image keeps them apart.
+    expect(stage).not.toContain("--box");
+  });
+
+  it("holds the toolchain and leaves the dependencies alone", () => {
+    const stage = stageNamed("tailscale");
+    expect(stage).toContain("GOTOOLCHAIN=local");
+    expect(stage).not.toContain("go get ");
   });
 });

@@ -511,6 +511,21 @@ export interface PluginProtocolContribution {
    * while the host signs in to SSH with a password.
    */
   hostLoginFallback?: Array<"username" | "password">;
+  /**
+   * Another protocol whose saved login this one uses when it has none of
+   * its own.
+   *
+   * For a protocol that is a second way of reaching the same service -- a
+   * different renderer for the same RDP host -- so the account is entered
+   * once. Without it, the second protocol reads only its own login, which
+   * nothing may ever write, and falls back to the host's SSH login: the
+   * wrong user for a Windows machine, and no password at all when SSH signs
+   * in with a key.
+   *
+   * The protocol's own login still wins when it has one, and the host's SSH
+   * login is still the last resort when neither does.
+   */
+  loginFrom?: string;
 }
 
 /** Protocol ids core keeps for itself. */
@@ -1321,7 +1336,13 @@ function validateProtocols(value: unknown, errors: string[]): void {
     }
     rejectUnknown(
       raw,
-      ["id", "credentialFields", "defaultPort", "hostLoginFallback"],
+      [
+        "id",
+        "credentialFields",
+        "defaultPort",
+        "hostLoginFallback",
+        "loginFrom",
+      ],
       at,
       errors,
     );
@@ -1354,6 +1375,16 @@ function validateProtocols(value: unknown, errors: string[]): void {
         errors.push(
           `${at}.hostLoginFallback must list "username" and/or "password"`,
         );
+      }
+    }
+    if (raw.loginFrom !== undefined) {
+      if (
+        typeof raw.loginFrom !== "string" ||
+        !PROTOCOL_ID_PATTERN.test(raw.loginFrom)
+      ) {
+        errors.push(`${at}.loginFrom must be a protocol id`);
+      } else if (raw.loginFrom === raw.id) {
+        errors.push(`${at}.loginFrom cannot name the protocol itself`);
       }
     }
     if (raw.credentialFields === undefined) return;

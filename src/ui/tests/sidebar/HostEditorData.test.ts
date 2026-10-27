@@ -295,6 +295,97 @@ describe("plugin host settings", () => {
   });
 });
 
+/**
+ * A login another protocol borrows outlives its own switch.
+ *
+ * Direct RDP takes its login from RDP. Moving a host from RDP to Direct RDP
+ * switches RDP off, and the save that made the move sent RDP's login as null
+ * -- deleting the login Direct RDP was about to use, so it connected with the
+ * host's SSH user and no password. Reported from the field as "Direct RDP does
+ * not know which credential to use".
+ */
+describe("a borrowed login", () => {
+  const rdp = {
+    id: "rdp",
+    pluginId: "remote-desktop",
+    settingKey: "enableRdp",
+    defaultPort: 3389,
+    titleKey: "rdp",
+    icon: () => null,
+  };
+  const direct = {
+    id: "rdp-direct",
+    pluginId: "rdp-direct",
+    settingKey: "enableRdpDirect",
+    defaultPort: 3389,
+    titleKey: "direct",
+    icon: () => null,
+    loginFrom: "rdp",
+  };
+  const saved = {
+    protocolAuth: {
+      rdp: {
+        authType: "direct",
+        credentialId: null,
+        username: "yusuf",
+        fields: { domain: "LENOVO" },
+        hasPassword: true,
+      },
+    },
+  } as unknown as Host;
+
+  function withBoth<T>(run: () => T): T {
+    const a = registerHostProtocol(rdp);
+    const b = registerHostProtocol(direct);
+    try {
+      return run();
+    } finally {
+      a();
+      b();
+    }
+  }
+
+  it("is kept while the protocol that borrows it is on", () => {
+    // RDP off, Direct RDP on: the switch that used to delete it.
+    const payload = withBoth(() =>
+      buildHostEditorPayload(createHostEditorForm(saved), {
+        enableSsh: false,
+        enableRdp: false,
+        enableRdpDirect: true,
+      }),
+    );
+    expect(payload.protocolAuth?.rdp).toMatchObject({
+      username: "yusuf",
+      fields: { domain: "LENOVO" },
+    });
+    // The saved password stays where it is rather than being cleared.
+    expect(payload.protocolAuth?.rdp).not.toHaveProperty("password");
+  });
+
+  it("is still removed once nothing that uses it is on", () => {
+    const payload = withBoth(() =>
+      buildHostEditorPayload(createHostEditorForm(saved), {
+        enableSsh: true,
+        enableRdp: false,
+        enableRdpDirect: false,
+      }),
+    );
+    expect(payload.protocolAuth?.rdp).toBeNull();
+  });
+
+  it("does not keep the borrower's own empty login alive", () => {
+    // Only what is borrowed survives a switch that is off.
+    const payload = withBoth(() =>
+      buildHostEditorPayload(createHostEditorForm(saved), {
+        enableSsh: false,
+        enableRdp: true,
+        enableRdpDirect: false,
+      }),
+    );
+    expect(payload.protocolAuth?.["rdp-direct"]).toBeNull();
+  });
+});
+
 describe("plugin protocol logins", () => {
   const spice = {
     id: "spice",

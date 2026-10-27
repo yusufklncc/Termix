@@ -23,6 +23,8 @@ export interface HostProtocolDef {
   order?: number;
   /** Offer it in Quick Connect, optionally with a domain field. */
   quickConnect?: { showDomain?: boolean };
+  /** The protocol whose login this one uses. See the SDK's loginFrom. */
+  loginFrom?: string;
 }
 
 const protocols = createRegistry<HostProtocolDef>(byOrderThenId);

@@ -524,6 +524,12 @@ export interface HostProtocolContribution {
   order?: number;
   /** Offer it in Quick Connect, optionally with a domain field. */
   quickConnect?: { showDomain?: boolean };
+  /**
+   * The protocol whose login this one uses, as the manifest's loginFrom
+   * says. The editor needs it too: a login whose own switch is off is
+   * deleted when the host is saved, unless a protocol that is on borrows it.
+   */
+  loginFrom?: string;
 }
 
 export interface HostBadgeContribution {

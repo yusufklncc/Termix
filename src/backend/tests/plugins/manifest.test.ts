@@ -856,6 +856,21 @@ describe("contributes.protocols", () => {
     expect(errors.join("\n")).toMatch(/hostLoginFallback/);
     expect(errors.join("\n")).toMatch(/extra/);
   });
+
+  it("accepts loginFrom naming another protocol", () => {
+    // A second renderer for the same service takes its login from the
+    // first, so the account is entered once.
+    expect(withProtocols([{ id: "rdp-direct", loginFrom: "rdp" }])).toEqual([]);
+  });
+
+  it("refuses a loginFrom that is not a protocol id, or is itself", () => {
+    const errors = withProtocols([
+      { id: "spice", loginFrom: "Not An Id" },
+      { id: "x2go", loginFrom: "x2go" },
+    ]).join("\n");
+    expect(errors).toMatch(/loginFrom must be a protocol id/);
+    expect(errors).toMatch(/loginFrom cannot name the protocol itself/);
+  });
 });
 
 describe("manifest video", () => {

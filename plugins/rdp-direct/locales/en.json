@@ -40,5 +40,18 @@
   "protocol": {
     "title": "Direct RDP",
     "description": "Remote desktop, decoded in the browser"
+  },
+  "login": {
+    "title": "Direct RDP login",
+    "shared": "The same Windows account RDP signs in with. Changing it here changes it for RDP too.",
+    "authType": "Sign in with",
+    "direct": "Username and password",
+    "credential": "A saved credential",
+    "credentialPick": "Credential",
+    "credentialNone": "Choose a credential",
+    "username": "Username",
+    "password": "Password",
+    "passwordKept": "Saved. Type to replace it.",
+    "domain": "Domain"
   }
 }

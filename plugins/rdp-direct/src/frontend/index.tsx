@@ -1,11 +1,12 @@
 import { type Ref } from "react";
-import { MonitorPlay } from "lucide-react";
+import { KeyRound, MonitorPlay } from "lucide-react";
 import type {
   TermixApp,
   TabProps,
   PluginHostRecord,
 } from "@termix-ssh/plugin-sdk/frontend";
 import RdpDirectApp, { type RdpDirectAppHandle } from "./RdpDirectApp.js";
+import { RdpDirectLoginSection, loginSectionVisible } from "./LoginSection.js";
 
 const PLUGIN_ID = "rdp-direct";
 const ENABLE_KEY = "enableRdpDirect";
@@ -50,10 +51,25 @@ export function activate(app: TermixApp): void {
     settingKey: ENABLE_KEY,
     portKey: "port",
     defaultPort: 3389,
+    // The same Windows account RDP signs in with. Kept alive on save while
+    // this is on, even with RDP itself switched off.
+    loginFrom: "rdp",
     titleKey: "protocol.title",
     descriptionKey: "protocol.description",
     icon: MonitorPlay,
     order: 25,
+  });
+
+  // Somewhere to enter the login when only Direct RDP is on. See
+  // LoginSection.tsx for why it edits RDP's login rather than its own.
+  app.registerHostEditorSection({
+    id: "rdp-direct-login",
+    group: "top",
+    titleKey: "login.title",
+    icon: KeyRound,
+    order: 26,
+    visible: loginSectionVisible,
+    component: RdpDirectLoginSection,
   });
 
   app.registerHostAction({

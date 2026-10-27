@@ -42,7 +42,8 @@
             "key": "domain"
           }
         ],
-        "hostLoginFallback": ["username", "password"]
+        "hostLoginFallback": ["username", "password"],
+        "loginFrom": "rdp"
       }
     ],
     "tabs": [

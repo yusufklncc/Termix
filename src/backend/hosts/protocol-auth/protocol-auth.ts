@@ -527,11 +527,13 @@ export async function resolveOwnerProtocolLogin(
   const hostId = Number(host.id);
   const ownerId = String(host.userId);
   const dek = ownerKey(ownerId);
-  const login = await createCurrentHostProtocolAuthRepository().find(
-    hostId,
-    declared.id,
-    dek,
-  );
+  const logins = createCurrentHostProtocolAuthRepository();
+  // Its own login first, then the protocol it shares one with.
+  const login =
+    (await logins.find(hostId, declared.id, dek)) ??
+    (declared.loginFrom
+      ? await logins.find(hostId, declared.loginFrom, dek)
+      : null);
 
   const authType = login?.authType || "direct";
   let username = login?.username ?? "";
@@ -579,10 +581,16 @@ export async function resolveRecipientProtocolLogin(
   const hostId = Number(host.id);
   const { resolveRecipientSharedHostAuthentication } =
     await import("../../utils/shared-host-auth-resolver.js");
-  const row = await createCurrentHostProtocolAuthRepository().findRow(
-    hostId,
-    declared.id,
-  );
+  const logins = createCurrentHostProtocolAuthRepository();
+  // The same order as the owner's: its own login, then the protocol it
+  // shares one with. What the owner shared is keyed by that protocol too.
+  const own = await logins.findRow(hostId, declared.id);
+  const inherited =
+    !own && declared.loginFrom
+      ? await logins.findRow(hostId, declared.loginFrom)
+      : null;
+  const row = own ?? inherited;
+  const loginProtocol = inherited ? declared.loginFrom! : declared.id;
   const ownerFields = row ? summarize(row, null).fields : {};
 
   let resolution: Awaited<
@@ -593,7 +601,7 @@ export async function resolveRecipientProtocolLogin(
       { ...host, password: null } as never,
       hostId,
       userId,
-      declared.id,
+      loginProtocol,
     );
   } catch {
     resolution = { source: "required" };

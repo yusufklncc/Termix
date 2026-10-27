@@ -75,14 +75,27 @@ export function protocolAuthForm(
 /**
  * The logins a host save sends: one per plugin protocol the editor knows,
  * removed when its switch is off. A saved secret left alone is not sent.
+ *
+ * Unless a protocol that is on borrows it. Direct RDP takes its login from
+ * RDP, and switching a host over from RDP to Direct RDP turns RDP off -- so
+ * the save that made the switch deleted the very login the new protocol was
+ * about to use, and Direct RDP fell back to the host's SSH login.
  */
 export function protocolAuthPayload(
   form: Record<string, HostProtocolAuthForm>,
   protocols: HostProtocols,
 ): Record<string, HostProtocolAuthInput | null> {
   const payload: Record<string, HostProtocolAuthInput | null> = {};
-  for (const protocol of listHostProtocols()) {
-    if (!protocols[protocol.settingKey]) {
+  const all = listHostProtocols();
+  const borrowed = new Set(
+    all
+      .filter(
+        (protocol) => protocols[protocol.settingKey] && protocol.loginFrom,
+      )
+      .map((protocol) => protocol.loginFrom as string),
+  );
+  for (const protocol of all) {
+    if (!protocols[protocol.settingKey] && !borrowed.has(protocol.id)) {
       payload[protocol.id] = null;
       continue;
     }

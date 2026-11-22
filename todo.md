@@ -704,9 +704,18 @@ eklentisine. API 1 eklentisi artık hiç çalışmıyor; bizimkiler taşındı.
       test `getUserInfo`'yu taklit etmiyor, jsdom'da istek `localhost:3000`'e
       gidiyor ve bu makinede orada başka bir projenin ön yüzü yanıt veriyor.
       Ağı olmayan `node:24` konteynerinde 15/15 geçiyor
-- [ ] Gerçek donanımda: Windows host'a Direct RDP (doğrudan, jump, VPN),
-      VPN arkasındaki host'un durum noktası, RDP kapalıyken Direct RDP
-      girişinin kayıttan sağ çıkması
+- [x] Canlıda (`26.11.3-rdp.44`, 2026-11-22): Mac'ten Windows'a Direct RDP
+      bağlandı, sorunsuz
+- [x] Canlıda bulunup düzeltildi: Direct RDP'nin port/yazdırma/giriş
+      alanları düzenleyicide yoktu (26.11 çekirdeği, kendi bölümü olan
+      eklentinin manifest alanlarını host'ta çizmiyor) → tek "Direct RDP"
+      bölümü, rdp-direct 1.1.1
+- [x] Canlıda bulunup çözüldü: Pangolin çerezsiz çerçeve isteklerini 401'le
+      kesiyordu → `/plugin-assets/*`, `/plugin-api/*`, `/plugin-ws/*` için
+      kimlik doğrulamayı atlayan kurallar (öncelik 1-3)
+- [ ] Gerçek donanımda kalanlar: Direct RDP jump host ve VPN üzerinden,
+      VPN arkasındaki host'un durum noktası, Direct RDP oturum kaydı,
+      Desktop Stream alanlarının düzenleyicide görünmesi
 
 ---
 

@@ -1,7 +1,7 @@
 {
   "id": "vpn",
   "name": "VPNs",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Reach a host through a network Termix raises for it: a Fortinet gateway, a tailnet, a NetBird network.",
   "author": {
     "name": "Yusuf Ihsan Kilinc"
@@ -10,15 +10,16 @@
   "category": "Networking",
   "icon": "Waypoints",
   "engine": {
-    "termix": ">=2.9.0",
-    "api": "1"
+    "termix": ">=26.11.2-0",
+    "api": "^2.7.0"
   },
   "capabilities": [
     "db:own",
     "hosts:read",
     "network:outbound",
     "ui:surface",
-    "network:serve"
+    "network:serve",
+    "network:sockets"
   ],
   "provides": [
     {
@@ -66,5 +67,27 @@
     }
   },
   "locales": "locales",
-  "platforms": ["linux", "win32", "darwin"]
+  "platforms": ["linux", "win32", "darwin"],
+  "env": [
+    {
+      "name": "NET_MANAGER_URL",
+      "description": "Where the network manager container listens, as tcp://host:port.",
+      "default": "tcp://termix-netmgr:3392"
+    },
+    {
+      "name": "NET_MANAGER_TOKEN",
+      "description": "Shared secret with the network manager. Without it managed VPN profiles are not raised.",
+      "secret": true
+    },
+    {
+      "name": "NET_MANAGER_DOOR_BASE",
+      "description": "First port of the per-profile SOCKS doors on the network manager; profile N listens on base + N.",
+      "default": "20000"
+    },
+    {
+      "name": "NET_MANAGER_SYNC_INTERVAL_MS",
+      "description": "How often profiles are reconciled with the network manager, in milliseconds.",
+      "default": "60000"
+    }
+  ]
 }

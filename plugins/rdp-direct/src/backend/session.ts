@@ -160,14 +160,16 @@ export async function runSession({
    * Optional, in both senses -- without the session-recording plugin there
    * is no writer, and a host can have it switched off.
    */
+  // A Promise since plugin API 2: the writer lives in another plugin's
+  // process, so every call on it crosses one.
   const writer =
-    ctx.services.get<Partial<RecordingsWriter>>("recordings.writer");
+    await ctx.services.get<Partial<RecordingsWriter>>("recordings.writer");
   if (
     typeof writer.enabledFor === "function" &&
     typeof writer.createFinished === "function" &&
     (await writer.enabledFor(hostId))
   ) {
-    recorder = startRecording({
+    recorder = await startRecording({
       ctx,
       recordings: writer as RecordingsWriter,
       hostId,

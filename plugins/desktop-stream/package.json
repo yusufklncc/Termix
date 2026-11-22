@@ -1,7 +1,7 @@
 {
   "name": "@termix-plugin/desktop-stream",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "build": "termix-plugin build",
@@ -13,7 +13,7 @@
     "lucide-react": "^1.33.0"
   },
   "devDependencies": {
-    "@termix-ssh/plugin-sdk": "^1.0.0",
+    "@termix-ssh/plugin-sdk": "^2.7.0",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^26.2.0",
@@ -23,10 +23,11 @@
     "vitest": "^4.1.11"
   },
   "peerDependencies": {
-    "@termix-ssh/plugin-sdk": "^1.0.0",
+    "@termix-ssh/plugin-sdk": "^2.7.0",
     "express": "^5.2.1",
     "react": "^19.2.8",
     "react-i18next": "^17.0.14",
-    "sonner": "^2.0.8"
+    "sonner": "^2.0.8",
+    "ws": "^8.23.0"
   }
 }

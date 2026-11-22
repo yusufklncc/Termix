@@ -18,6 +18,12 @@ export interface RecordingsWriter {
     recordingPath: string;
     protocol: string;
     format: string;
+    /**
+     * Since Termix 26.11 each plugin runs in its own process and can open
+     * only its own folder, so session-recording copies the file through this
+     * rather than moving it. Bytes from an offset; an empty chunk at the end.
+     */
+    read?: (offset: number) => Promise<Uint8Array | null>;
   }) => Promise<{ id: number }>;
 }
 
@@ -40,13 +46,35 @@ export interface RecordingsWriter {
  * reader the live path uses, which is what reassembles frames either way.
  */
 
-const DATA_DIR = process.env.DATA_DIR || "./db/data";
+/**
+ * Where a recording is written while the session runs: this plugin's own
+ * folder, the only one it may write to since plugins run in their own
+ * process. session-recording copies it out when the session ends.
+ */
+export async function recordingDir(ctx: PluginContext): Promise<string> {
+  return path.join(
+    await ctx.files.dataDir(),
+    "session_recordings",
+    "rdp-direct",
+  );
+}
 
-export const RECORDING_DIR = path.join(
-  DATA_DIR,
-  "session_recordings",
-  "rdp-direct",
-);
+/** How much one read() hands session-recording at a time. */
+export const READ_CHUNK_BYTES = 1024 * 1024;
+
+/** A reader over a finished file, in the shape createFinished takes. */
+export function fileReader(file: string) {
+  return async (offset: number): Promise<Uint8Array | null> => {
+    const handle = await fs.promises.open(file, "r");
+    try {
+      const buffer = Buffer.alloc(READ_CHUNK_BYTES);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
+      return buffer.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
+  };
+}
 
 /** "TXRD", then a version, so a player can refuse a file it does not know. */
 export const RECORDING_MAGIC = "TXRD";
@@ -87,7 +115,7 @@ export interface RdpRecorder {
  * because a disk is full would be the wrong trade. It is logged and the
  * session continues without one.
  */
-export function startRecording({
+export async function startRecording({
   ctx,
   recordings,
   hostId,
@@ -97,12 +125,14 @@ export function startRecording({
   recordings: RecordingsWriter;
   hostId: number;
   userId: string;
-}): RdpRecorder | null {
+}): Promise<RdpRecorder | null> {
   let stream: fs.WriteStream;
-  const file = path.resolve(RECORDING_DIR, `${crypto.randomUUID()}.txrd`);
+  let file: string;
 
   try {
-    fs.mkdirSync(RECORDING_DIR, { recursive: true });
+    const dir = await recordingDir(ctx);
+    file = path.resolve(dir, `${crypto.randomUUID()}.txrd`);
+    fs.mkdirSync(dir, { recursive: true });
     stream = fs.createWriteStream(file);
     stream.write(encodeRecordingHeader());
   } catch (error) {
@@ -149,7 +179,11 @@ export function startRecording({
           recordingPath: file,
           protocol: "rdp",
           format: "rdp-direct",
+          read: fileReader(file),
         });
+        // session-recording has its own copy now; this one was only ever
+        // the working file.
+        await fs.promises.unlink(file).catch(() => {});
       } catch (error) {
         ctx.log.error(
           `Could not register a Direct RDP recording for host ${hostId}: ${

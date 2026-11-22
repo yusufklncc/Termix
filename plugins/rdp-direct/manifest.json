@@ -1,7 +1,7 @@
 {
   "id": "rdp-direct",
   "name": "Direct RDP",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Reach an RDP host without guacd: the server's own H.264 frames are passed to the browser and decoded there.",
   "author": {
     "name": "Yusuf Ihsan Kilinc"
@@ -10,8 +10,8 @@
   "category": "Terminal",
   "icon": "MonitorPlay",
   "engine": {
-    "termix": ">=2.9.0",
-    "api": "1"
+    "termix": ">=26.11.2-0",
+    "api": "^2.7.0"
   },
   "capabilities": [
     "hosts:read",
@@ -20,7 +20,9 @@
     "ssh:connect",
     "network:outbound",
     "network:serve",
-    "ui:surface"
+    "ui:surface",
+    "network:sockets",
+    "files:own"
   ],
   "optionalDependencies": {
     "session-recording": "^1.0.0"
@@ -98,5 +100,26 @@
     }
   },
   "locales": "locales",
-  "platforms": ["linux", "win32", "darwin"]
+  "platforms": ["linux", "win32", "darwin"],
+  "env": [
+    {
+      "name": "RDP_BRIDGE_URL",
+      "description": "Where the RDP bridge listens, as tcp://host:port. Overrides RDP_BRIDGE_HOST and RDP_BRIDGE_PORT."
+    },
+    {
+      "name": "RDP_BRIDGE_HOST",
+      "description": "Host of the RDP bridge.",
+      "default": "localhost"
+    },
+    {
+      "name": "RDP_BRIDGE_PORT",
+      "description": "Port of the RDP bridge.",
+      "default": "3390"
+    },
+    {
+      "name": "RDP_BRIDGE_TUNNEL_HOST",
+      "description": "Address the bridge dials back for hosts reached through SSH or a VPN, when it is not the Termix container's own name."
+    }
+  ],
+  "pageFrontend": true
 }

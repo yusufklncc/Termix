@@ -28,11 +28,27 @@ export const SHELL_PART_CAPABILITIES = [
 const LOOK_CAPABILITIES = ["ui:layout", "ui:theme"];
 
 export function frontendIsolation(plugin: {
-  manifest: Pick<PluginManifest, "engine" | "capabilities">;
+  manifest: Pick<PluginManifest, "engine" | "capabilities"> &
+    Partial<Pick<PluginManifest, "pageFrontend">>;
   source?: string;
   signedTier?: string;
 }): FrontendIsolation {
   if (isLegacyPluginApi(String(plugin.manifest.engine?.api ?? ""))) {
+    return "page";
+  }
+  /*
+   * Fork: a plugin of this fork's that a frame breaks (manifest
+   * pageFrontend). Direct RDP decodes in a worker started from its own
+   * assets, plays sound through an AudioWorklet and takes the keyboard in
+   * fullscreen; a frame allows blob: workers only, no blob: scripts, no
+   * fullscreen and no clipboard reads. Desktop stream shows the streamer's
+   * own page, which a frame may not load.
+   *
+   * Only for what came with the image, built from the same source as core:
+   * a plugin installed later is someone else's code and is framed whatever
+   * its manifest asks.
+   */
+  if (plugin.source === "bundled" && plugin.manifest.pageFrontend === true) {
     return "page";
   }
   const shellPart = (plugin.manifest.capabilities ?? []).some((capability) =>

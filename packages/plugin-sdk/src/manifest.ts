@@ -795,6 +795,14 @@ export interface PluginManifest {
    * never on a server. It implies desktop "local" and may declare desktop:local.
    */
   runtime?: PluginRuntime;
+  /**
+   * Fork extension: run the frontend in the app's page instead of a frame,
+   * for a plugin that needs what a frame withholds (fullscreen, clipboard
+   * reads, workers from its own assets, other sites' pages). Core honours it
+   * only for a plugin that came with the image; anything installed later is
+   * framed whatever it says.
+   */
+  pageFrontend?: boolean;
 }
 
 /**
@@ -882,6 +890,7 @@ const ALLOWED_TOP_LEVEL = new Set([
   "nativeDependencies",
   "desktop",
   "runtime",
+  "pageFrontend",
 ]);
 
 const ALLOWED_CONTRIBUTES = new Set([
@@ -1054,6 +1063,9 @@ export function validateManifest(manifest: unknown): string[] {
   validateCapabilities(m.capabilities, errors);
   validatePlatforms(m.platforms, errors);
   validateNativeDependencies(m.nativeDependencies, errors);
+  if (m.pageFrontend !== undefined && typeof m.pageFrontend !== "boolean") {
+    errors.push('Field "pageFrontend" must be a boolean when present');
+  }
   if (
     m.desktop !== undefined &&
     !PLUGIN_DESKTOP_MODES.includes(m.desktop as PluginDesktopMode)

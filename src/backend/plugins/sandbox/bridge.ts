@@ -1455,6 +1455,29 @@ export class PluginBridge {
         host: cfg.host,
         port: Number.isInteger(cfg.port) ? cfg.port : 22,
       };
+      /*
+       * Fork: a stream for something other than SSH -- Direct RDP reaching
+       * the host's RDP port by the route the host is configured to use.
+       * Only for a plugin that holds network:sockets, which can already dial
+       * any address itself and any port through ssh.jumpChain's forwardOut,
+       * so the greeting check would protect nothing there; it only stops a
+       * plugin without it from reaching other services by core's routes.
+       */
+      const raw = opts.raw === true;
+      if (
+        raw &&
+        !(await hasCapability(
+          this.pluginId,
+          "network:sockets",
+          this.manifest.capabilities,
+        ))
+      ) {
+        throw new SandboxError(
+          "ctx.ssh.openTransport with raw needs network:sockets",
+          "SANDBOX_CAPABILITY",
+          403,
+        );
+      }
       const opened = (await this.callCtx("ssh.openTransport", host, target, {
         ...(opts.resolveDns === false ? { resolveDns: false } : {}),
         ...(opts.portKnock === false ? { portKnock: false } : {}),
@@ -1486,8 +1509,12 @@ export class PluginBridge {
         );
       }
       const port = endpoint.openStream();
-      this.track(sock, port);
-      joinSshStream(sock, port);
+      if (raw) {
+        this.track(sock, port, joinStream(sock, port));
+      } else {
+        this.track(sock, port);
+        joinSshStream(sock, port);
+      }
       // A connect policy can end it: closing the socket ends the plugin's client.
       const opening = sock;
       const untrack = trackConnection(plainObject(host).id, () =>

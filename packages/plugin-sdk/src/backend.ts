@@ -2168,6 +2168,12 @@ export interface PluginSsh {
       log?: (level: "info" | "warning" | "error", message: string) => void;
       /** Answers a jump host asking for TOTP or other input. */
       prompt?: PluginSshPromptChannel;
+      /**
+       * Fork extension: the stream is for something other than SSH, so a
+       * plugin process gets its bytes without waiting for an SSH greeting.
+       * Needs network:sockets.
+       */
+      raw?: boolean;
     },
   ) => Promise<{ jumpClient: unknown | null; via: string }>;
 

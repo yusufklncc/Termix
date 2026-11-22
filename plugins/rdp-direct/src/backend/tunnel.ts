@@ -67,10 +67,18 @@ export async function openBridgeTunnel({
       // The target's address is already known, so there is nothing here for
       // core to look up -- and a name that only resolves on the far side
       // would fail if it tried.
-      const config: Record<string, unknown> = {};
+      // Names the target, which a plugin process must: core opens the
+      // socket there, not in here.
+      const config: Record<string, unknown> = {
+        host: target.host,
+        port: target.port,
+      };
       try {
         await ctx.ssh.openTransport({ ...host, ...target }, config, {
           resolveDns: false,
+          // RDP, not SSH: without this core holds every byte until the far
+          // end greets as an SSH server, which an RDP server never does.
+          raw: true,
         });
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);

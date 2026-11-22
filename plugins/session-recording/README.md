@@ -4,11 +4,11 @@
 
 <h1>Session Recording</h1>
 
-<p>Record terminal and remote desktop sessions and play them back or download them later</p>
+<p>Record terminal and remote desktop sessions, watch them live, and keep an audited, encrypted record of who did what</p>
 
 <!-- VIDEO:START -->
 
-<a href="https://www.youtube.com/watch?v=fmYg3wqMHC0"><img src="https://img.shields.io/badge/Watch_the_demo-f59145?style=for-the-badge&logo=youtube&logoColor=white" alt="Watch the demo on YouTube" /></a>
+<a href="https://www.youtube.com/watch?v=R2PFOM8eiQo"><img src="https://img.shields.io/badge/Watch_the_demo-f59145?style=for-the-badge&logo=youtube&logoColor=white" alt="Watch the demo on YouTube" /></a>
 
 <!-- VIDEO:END -->
 
@@ -18,7 +18,7 @@
 
 ## Overview
 
-Session Recording records your terminal and remote desktop sessions so you can watch them again later.
+Session Recording records your terminal and remote desktop sessions so you can watch them again later. For teams that need an audit trail, it can make recording required, encrypt recordings, show auditors every session live or recorded, log who opened each one, and alert on risky commands.
 
 Read the [docs](https://docs.termix.site/plugins/session-recording) to set it up and use it.
 
@@ -30,6 +30,12 @@ Read the [docs](https://docs.termix.site/plugins/session-recording) to set it up
 - Play recordings back at any speed
 - Download a recording as a file or plain text
 - Old recordings are removed after a number of days you choose
+- Make recording required on every host, or only on privileged ones
+- Recordings are encrypted on disk and can be checked for changes
+- Auditors see every recording, with a history of who watched each one
+- Watch and end anyone's live session
+- Alert on, or end, a session when a typed command matches a rule
+- A host's recordings and storage on the host page
 
 <br />
 
@@ -69,6 +75,10 @@ For a paid sponsor spot, email [mail@termix.site](mailto:mail@termix.site).
 &nbsp;&nbsp;&nbsp;
 <a href="https://www.hetzner.com/?mtm_campaign=termix&mtm_medium=referral&mtm_content=sponsoring_link">
   <img src="https://termix.site/img/sponsors/hetzner.png" height="40" alt="Hetzner" />
+</a>
+&nbsp;&nbsp;&nbsp;
+<a href="https://emberswan.com/">
+  <img src="https://termix.site/img/sponsors/emberswan.png" height="40" alt="Ember Swan" />
 </a>
 
 </div>

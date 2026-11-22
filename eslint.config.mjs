@@ -52,6 +52,14 @@ export default tseslint.config([
     },
   },
   {
+    // Fork: session-recording is vendored from upstream's plugin repository
+    // as it is, and its own lint allows a generator that only consumes a
+    // stream (a pipeline sink). Patching that here would be one more
+    // difference to carry on every re-vendor.
+    files: ["plugins/session-recording/src/**/*.ts"],
+    rules: { "require-yield": "off" },
+  },
+  {
     // MySQL has no RETURNING clause, and drizzle's mysql-core does not expose
     // the method at all. A bare .returning() is a TypeError there, not a bad
     // query, and it only fails on the engine no test in this repo runs against.

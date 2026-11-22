@@ -479,7 +479,7 @@ Notlar: [`docs/upstream-2.9-port-notes.md`](docs/upstream-2.9-port-notes.md)
       ad kazanıyor, ad hiç karşılık bulmazsa bağlantı reddediliyor (2026-10-10)
 - [ ] Direct RDP kaydının oynatılması — `session-recording` biçime göre
       oynatıcı seçiyor ve bunun bir genişletme noktası yok
-- [ ] Direct RDP gerçek bir Windows makinesinde (port sonrası hiç denenmedi)
+- [x] Direct RDP gerçek bir Windows makinesinde — 26.11.3'te Mac'ten denendi (2026-11-22)
 - [ ] Desktop Stream gerçek bir yayıncıya karşı (port sonrası hiç denenmedi)
 
 ## Faz 12 — Depo ve CI
@@ -495,8 +495,11 @@ Kurulum: [`docs/jenkins-ci.md`](docs/jenkins-ci.md)
 - [x] Jenkins CI: her push'ta lint, prettier, type-check, build ve testler.
       İlk iki koşusunda iki gerçek hata buldu — on iki biçimlenmemiş dosya ve
       temiz bir klondan derlenemeyen bir yapı
-- [ ] Jenkins webhook'u yok; 2 dakikalık tarama var. Doğru yol GitLab Branch
-      Source eklentisi (kuruldu, yapılandırılmadı)
+- [x] Jenkins webhook'u çalışıyor (GitLab hook 4, `gitlab-webhook/post`).
+      Ama sonradan eklenen hook 3 (`multibranch-webhook-trigger`) her itmede
+      403 "No valid crumb" alıyor — silinmeli ya da düzeltilmeli
+- [x] `main`'e itme artık **canlıya dağıtım** demek (Deploy aşaması,
+      22f308b7): console'a `termix-deploy`, sağlıksızsa geri alıyor
 - [ ] Dialect testleri CI'da değil — bilinçli karar (2026-10-10): şemaya
       dokunulduğunda elle koşturulacak, komutlar Faz 12 notlarında
 - [ ] `npm ci` her koşuda sıfırdan 1198 paket kuruyor (~33 sn); önbellek
@@ -520,7 +523,9 @@ Kurulum: [`docs/jenkins-ci.md`](docs/jenkins-ci.md)
       `check-test-locations`'ta `plugins/<id>/tests/`, ve silinen dört betik
 - [x] SDK paketi `@termix/plugin-sdk` → `@termix-ssh/plugin-sdk` olarak
       yeniden adlandırıldı; beş eklentide 107 dosya çevrildi
-- [ ] Yamaladığımız iki eklentinin kaynağı 2.9.2'de donmuş durumda;
+- [x] 26.11.3'te çözüldü: `ssh-terminal` ağaçtan çıktı (upstream 1.5.0),
+      `session-recording` 1.2.1'den yeniden alındı. Aşağısı tarihçe:
+      yamaladığımız iki eklentinin kaynağı 2.9.2'de donmuş durumdaydı;
       upstream'in yeni sürümleriyle elle tazelenmesi gerekecek. **Bunun
       bedeli 26.10.1'de ödendi:** `ssh-terminal` artık var olmayan
       `useConfirmation`'ı import ediyordu, ön yüz modülü tarayıcıda hiç

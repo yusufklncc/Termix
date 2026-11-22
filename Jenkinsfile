@@ -8,7 +8,8 @@
 // SDK's built output.
 //
 // A push to main that passes the checks is a release, the way the other
-// pipelines on this Jenkins publish; one that fails them publishes nothing.
+// pipelines on this Jenkins publish, and goes live on console; one that fails
+// them publishes nothing.
 // Every image of a release carries the same version, <upstream>-rdp.<build>:
 // upstream's version from package.json, then this branch's build number,
 // which only goes up. The application is published every time; the VPN
@@ -21,6 +22,8 @@
 //   harbor-flab-push        username/password for harbor.fatihk.tr, the push
 //                           robot of the flab project; the other fork
 //                           pipelines push with the same one
+//   console-deploy          SSH key of root on console, bound there to
+//                           /usr/local/sbin/termix-deploy and to this host
 //   termix-dockerhub        only when PUBLISH_DOCKER_HUB is turned on, which
 //                           it is not by default
 
@@ -174,6 +177,47 @@ pipeline {
                 always {
                     sh 'docker logout harbor.fatihk.tr || true'
                     sh 'docker logout || true'
+                }
+            }
+        }
+
+        stage('Deploy') {
+            // A release goes live on console (10.77.20.102) as soon as it is
+            // published, the way the other pipelines on this Jenkins deploy.
+            // The key can run nothing on console but termix-deploy, which is
+            // told the version and which images carry it; when the new
+            // version does not come up healthy it puts the old one back and
+            // fails this stage.
+            when { branch 'main' }
+            agent any
+            steps {
+                script {
+                    // The app is published every time; the VPN manager and the
+                    // bridge only when their directory changed, so only they
+                    // are asked for when Harbor has them under this version.
+                    def comps = ['app']
+                    def repos = [netmgr: 'termix%252Fnetmgr', bridge: 'termix%252Frdp-bridge']
+                    for (c in ['netmgr', 'bridge']) {
+                        String code = sh(
+                            script: "curl -s -o /dev/null -w '%{http_code}' https://harbor.fatihk.tr/api/v2.0/projects/flab/repositories/${repos[c]}/artifacts/${env.TERMIX_IMAGE_TAG}",
+                            returnStdout: true
+                        ).trim()
+                        if (code == '200') {
+                            comps << c
+                        } else if (code != '404') {
+                            error("Harbor answered ${code} looking for ${c} ${env.TERMIX_IMAGE_TAG}")
+                        }
+                    }
+                    env.DEPLOY_ARGS = "${env.TERMIX_IMAGE_TAG} ${comps.join(' ')}"
+                }
+                withCredentials([sshUserPrivateKey(credentialsId: 'console-deploy', keyFileVariable: 'DEPLOY_KEY')]) {
+                    sh '''
+                        KH="$(mktemp)"
+                        trap 'rm -f "$KH"' EXIT
+                        echo "10.77.20.102 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMHaYGpNC6g7GF8aguPY6sw2q/AS5Us4xZuKS2h/4MO9" > "$KH"
+                        ssh -i "$DEPLOY_KEY" -o UserKnownHostsFile="$KH" -o StrictHostKeyChecking=yes \
+                            -o BatchMode=yes -o ConnectTimeout=10 root@10.77.20.102 "$DEPLOY_ARGS"
+                    '''
                 }
             }
         }

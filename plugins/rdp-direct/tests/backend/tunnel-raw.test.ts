@@ -50,3 +50,44 @@ describe("the route core is asked for", () => {
     tunnel.close();
   });
 });
+
+describe("a route core opened that then fails", () => {
+  it("is reported, not thrown out of the process", async () => {
+    // Since 26.11 core's socket reaches the plugin as a stream, and its
+    // failures as an error event on it. Unheard, that killed the process.
+    const { PassThrough } = await import("node:stream");
+    const upstream = new PassThrough();
+    const openTransport = vi.fn(
+      async (_host: unknown, config: Record<string, unknown>) => {
+        config.sock = upstream;
+        return { jumpClient: null, via: "direct" };
+      },
+    );
+    const warn = vi.fn();
+    const ctx = {
+      log: { warn, info: vi.fn(), error: vi.fn() },
+      ssh: { openTransport },
+    } as unknown as PluginContext;
+    const onUnreachable = vi.fn();
+
+    const tunnel = await openBridgeTunnel({
+      ctx,
+      host,
+      target: { host: "10.9.0.1", port: 3389 },
+      bridgeHost: "127.0.0.1",
+      onUnreachable,
+    });
+    const socket = net.createConnection(tunnel.port, "127.0.0.1");
+    socket.on("error", () => {});
+    await vi.waitFor(() => expect(openTransport).toHaveBeenCalled());
+
+    upstream.destroy(new Error("getaddrinfo ENOTFOUND fakerdp"));
+    await vi.waitFor(() =>
+      expect(onUnreachable).toHaveBeenCalledWith(
+        "getaddrinfo ENOTFOUND fakerdp",
+      ),
+    );
+    socket.destroy();
+    tunnel.close();
+  });
+});

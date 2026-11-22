@@ -15,6 +15,8 @@
 
 - A session marked its host online and never let go, so the host read
   online for good after the first connection and was never asked again.
+- A host that could not be reached took the plugin's whole process down:
+  core's socket fails as a stream error since 26.11, and nothing heard it.
 
 ## 1.0.0
 

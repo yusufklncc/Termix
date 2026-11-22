@@ -62,6 +62,8 @@ export async function openBridgeTunnel({
   const server = net.createServer((socket) => {
     open.add(socket);
     socket.on("close", () => open.delete(socket));
+    // The bridge's end can reset too; unheard, that ends the whole process.
+    socket.on("error", () => socket.destroy());
 
     void (async () => {
       // The target's address is already known, so there is nothing here for
@@ -114,6 +116,19 @@ export async function openBridgeTunnel({
 
       open.add(upstream);
       upstream.on("close", () => open.delete(upstream));
+      /*
+       * Core opens this socket, and since 26.11 its failures -- a name that
+       * does not resolve, a refused port, a reset -- arrive here as an error
+       * on the stream. Unheard, one of them took the plugin's process down
+       * with every session in it.
+       */
+      upstream.on("error", (error: Error) => {
+        ctx.log.warn(
+          `Direct RDP could not reach ${target.host}:${target.port}: ${error.message}`,
+        );
+        socket.destroy();
+        onUnreachable?.(error.message);
+      });
       socket.pipe(upstream).pipe(socket);
     })();
   });

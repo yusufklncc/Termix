@@ -36,21 +36,28 @@ export function loginOf(login: unknown): HostProtocolAuthForm {
   };
 }
 
+/** Direct RDP's own protocol id, which the editor saves while it is on. */
+export const OWN_PROTOCOL = "rdp-direct";
+
 /**
  * The form patch that changes part of the shared RDP login.
  *
- * Written to protocolAuth.rdp rather than to a login of Direct RDP's own,
- * because that is the one the server reads for it and the one RDP's own form
- * edits: the two can never drift apart.
+ * Written to protocolAuth.rdp, the login the server reads for Direct RDP and
+ * the one RDP's own form edits, so the two never drift apart -- and the same
+ * login under Direct RDP's own id too. The host editors of Termix 26.11
+ * send null for every protocol whose switch is off, RDP's included, so that
+ * copy is what reaches the server while RDP is off. The server writes it to
+ * the RDP login (foldBorrowedLogins in core); it is never stored as one of
+ * its own.
  */
 export function patchRdpLogin(
   form: Record<string, unknown>,
   patch: Partial<HostProtocolAuthForm>,
 ): Record<string, unknown> {
   const all = (form.protocolAuth ?? {}) as Record<string, unknown>;
-  const current = loginOf(all[LOGIN_PROTOCOL]);
+  const next = { ...loginOf(all[LOGIN_PROTOCOL]), ...patch };
   return {
-    protocolAuth: { ...all, [LOGIN_PROTOCOL]: { ...current, ...patch } },
+    protocolAuth: { ...all, [LOGIN_PROTOCOL]: next, [OWN_PROTOCOL]: next },
   };
 }
 

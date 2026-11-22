@@ -78,10 +78,14 @@ describe("when the section is offered", () => {
 });
 
 describe("what it writes", () => {
-  it("writes RDP's login, not one of Direct RDP's own", () => {
+  it("writes RDP's login, and the same under Direct RDP's id", () => {
+    // The layouts send null for RDP while its switch is off; the copy under
+    // rdp-direct is what reaches the server then, which files it under RDP.
     const next = patchRdpLogin({}, { username: "yusuf" });
-    expect(next.protocolAuth).toMatchObject({ rdp: { username: "yusuf" } });
-    expect(next.protocolAuth).not.toHaveProperty("rdp-direct");
+    expect(next.protocolAuth).toMatchObject({
+      rdp: { username: "yusuf" },
+      "rdp-direct": { username: "yusuf" },
+    });
   });
 
   it("leaves the other logins, and the rest of this one, alone", () => {

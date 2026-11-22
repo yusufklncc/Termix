@@ -177,7 +177,47 @@ export function readProtocolAuthPayload(
       if (input !== undefined) patch.set(protocol.id, input);
     }
   }
+  foldBorrowedLogins(patch);
   return patch.size ? patch : null;
+}
+
+/**
+ * Fork: a login another protocol borrows (loginFrom) is one login, kept
+ * under the protocol that lends it.
+ *
+ * Since 26.11 the host editor lives in the layout plugins, and they send
+ * null for every protocol whose switch is off. With RDP off and Direct RDP
+ * on, that deleted the Windows login Direct RDP signs in with on every save
+ * -- and dropped whatever was typed into Direct RDP's own login section,
+ * which edits that same login. So:
+ *
+ * - a lender's null is ignored unless every borrower in the patch is null
+ *   too (all of them switched off, the login goes as upstream intends);
+ * - a login sent under the borrower's id is written to the lender, unless
+ *   the lender's own form sent one, which wins.
+ */
+export function foldBorrowedLogins(patch: ProtocolAuthPatch): void {
+  const borrowers = new Map<string, string[]>();
+  for (const protocol of listHostProtocols()) {
+    if (!protocol.loginFrom || protocol.loginFrom === protocol.id) continue;
+    borrowers.set(protocol.loginFrom, [
+      ...(borrowers.get(protocol.loginFrom) ?? []),
+      protocol.id,
+    ]);
+  }
+  for (const [lender, ids] of borrowers) {
+    const lent = patch.get(lender);
+    const borrowed = ids
+      .map((id) => patch.get(id))
+      .find((input): input is ProtocolAuthInput => !!input);
+    for (const id of ids) {
+      if (patch.get(id)) patch.delete(id);
+    }
+    if (lent === null && !ids.every((id) => patch.get(id) === null)) {
+      patch.delete(lender);
+    }
+    if (borrowed && !patch.get(lender)) patch.set(lender, borrowed);
+  }
 }
 
 /** Whether a patch holds a password or secret field to save. */

@@ -1018,7 +1018,9 @@ export function createPluginHosts({ manifest, bag, audit }: Deps): PluginHosts {
         throw new Error("ctx.hosts.probeTargets needs an acting user");
       }
       const ids = filter?.hostIds?.filter((id) => Number.isInteger(id));
-      const targets = await loadProbeTargets(actor, ids);
+      const targets = await loadProbeTargets(actor, ids, {
+        markGateways: true,
+      });
       const allowed = await probeAllowedHostIds(
         actor,
         targets.map((target) => Number(target.id)),

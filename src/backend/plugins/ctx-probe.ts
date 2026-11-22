@@ -14,6 +14,10 @@ import { assertCapability } from "./permissions.js";
 import { getActor } from "./actor.js";
 import { tcpPing } from "./probe/tcp-ping.js";
 import { sharedJumpProbes } from "./probe/jump-probe-pool.js";
+import {
+  markGatewayRoutes,
+  probeThroughGateway,
+} from "./probe/gateway-probe.js";
 import type { HostStatusTargetRow } from "../database/repositories/host-resolution-repository.js";
 
 type AuditFn = (
@@ -135,6 +139,11 @@ export function createPluginNetwork(deps: {
 export async function loadProbeTargets(
   actor: string,
   hostIds?: number[],
+  /**
+   * Fork: for a status plugin. Hosts behind a VPN or their own proxy are
+   * listed with a hop so it asks ctx.ssh.probe; see probe/gateway-probe.ts.
+   */
+  options?: { markGateways?: boolean },
 ): Promise<PluginHostProbeTarget[]> {
   const {
     createCurrentHostResolutionRepository,
@@ -171,7 +180,9 @@ export async function loadProbeTargets(
     sharedIds.length > 0
       ? await hosts.listStatusTargets({ hostIds: sharedIds })
       : [];
-  return [...own, ...shared].map(toTarget);
+  const rows = [...own, ...shared];
+  const targets = rows.map(toTarget);
+  return options?.markGateways ? markGatewayRoutes(rows, targets) : targets;
 }
 
 export async function probeHost(
@@ -199,6 +210,15 @@ export async function probeHost(
   const port = options?.port ?? target.port;
   if (!validPort(port)) throw new Error("A port from 1 to 65535 is required");
   const timeout = clampTimeout(options?.timeoutMs);
+  if (target.jumpHosts.length === 0) {
+    // Fork: a VPN or the host's own proxy, the way the connect path goes.
+    const through = await probeThroughGateway(row, {
+      ip: target.ip,
+      port,
+      timeoutMs: timeout,
+    });
+    if (through !== undefined) return through ?? false;
+  }
   return target.jumpHosts.length > 0
     ? sharedJumpProbes.ping(
         target.jumpHosts,

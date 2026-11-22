@@ -89,5 +89,8 @@
       "description": "How often profiles are reconciled with the network manager, in milliseconds.",
       "default": "60000"
     }
-  ]
+  ],
+  "sandbox": {
+    "alwaysOn": true
+  }
 }

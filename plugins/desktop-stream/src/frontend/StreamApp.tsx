@@ -110,6 +110,17 @@ const StreamWebRTCView = React.forwardRef<
   const [detail, setDetail] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
+  /*
+   * The tab hands a fresh getWsTarget on every render, and the shell
+   * re-renders a tab when someone switches back to it. Depended on directly,
+   * that tore the stream down and signalled a new one each time. The latest
+   * one is kept here instead, read when a session opens.
+   */
+  const getWsTargetRef = useRef(getWsTarget);
+  useEffect(() => {
+    getWsTargetRef.current = getWsTarget;
+  }, [getWsTarget]);
+
   useEffect(() => {
     const video = videoRef.current;
     const surface = surfaceRef.current;
@@ -123,7 +134,7 @@ const StreamWebRTCView = React.forwardRef<
     let opened: StreamWebRTCHandle | null = null;
 
     void (async () => {
-      const wsTarget = await getWsTarget().catch(() => null);
+      const wsTarget = await getWsTargetRef.current().catch(() => null);
       if (cancelled) return;
       if (!wsTarget) {
         setState("failed");
@@ -185,7 +196,7 @@ const StreamWebRTCView = React.forwardRef<
       opened = null;
       sessionRef.current = null;
     };
-  }, [hostId, hostName, attempt, getWsTarget]);
+  }, [hostId, hostName, attempt]);
 
   useImperativeHandle(ref, () => ({
     disconnect: () => {

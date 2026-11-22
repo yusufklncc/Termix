@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.1
+
+### Fixed
+
+- Switching to another tab and back started the stream over. The shell
+  re-renders a tab when it is shown again, the tab hands the app a fresh
+  connection callback each render, and the effect that opens the stream
+  depended on it.
+
 ## 1.1.0
 
 ### Changed

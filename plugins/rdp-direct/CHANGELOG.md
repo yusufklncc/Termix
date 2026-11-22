@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.2
+
+### Fixed
+
+- Switching to another tab and back started the session over. The shell
+  re-renders a tab when it is shown again, the tab hands the app a fresh
+  connection callback each render, and the effect that opens the session
+  depended on it.
+
 ## 1.1.1
 
 ### Fixed

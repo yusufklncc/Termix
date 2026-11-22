@@ -1,7 +1,7 @@
 {
   "id": "desktop-stream",
   "name": "Desktop Stream",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Open a WebRTC desktop stream (Selkies, neko) as a host. Termix relays the signaling; the video goes straight from the publisher to the browser.",
   "author": {
     "name": "Yusuf Ihsan Kilinc"

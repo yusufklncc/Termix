@@ -128,6 +128,17 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
 
     const numericHostId = hostId ? parseInt(hostId, 10) : NaN;
 
+    /*
+     * The tab hands a fresh getWsTarget on every render, and the shell
+     * re-renders a tab when someone switches back to it. Depended on
+     * directly, that closed the session and opened a new one each time.
+     * The latest one is kept here instead, read when a session opens.
+     */
+    const getWsTargetRef = useRef(getWsTarget);
+    useEffect(() => {
+      getWsTargetRef.current = getWsTarget;
+    }, [getWsTarget]);
+
     useEffect(() => {
       const surface = surfaceRef.current;
       if (!surface || !Number.isInteger(numericHostId)) return;
@@ -154,7 +165,7 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
       };
 
       void (async () => {
-        const wsTarget = await getWsTarget().catch(() => null);
+        const wsTarget = await getWsTargetRef.current().catch(() => null);
         if (cancelled) return;
         if (!wsTarget) {
           setState("failed");
@@ -227,7 +238,7 @@ const RdpDirectApp = React.forwardRef<RdpDirectAppHandle, RdpDirectAppProps>(
       })();
 
       return teardown;
-    }, [numericHostId, attempt, getWsTarget]);
+    }, [numericHostId, attempt]);
 
     const reconnect = useCallback(() => setAttempt((a) => a + 1), []);
 

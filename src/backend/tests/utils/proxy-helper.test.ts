@@ -152,11 +152,13 @@ describe("single proxy", () => {
     });
   });
 
-  it("does nothing when the proxy is off or empty", async () => {
+  it("does nothing when the proxy is off, and refuses one that is on but empty", async () => {
     expect(await createSocks5Connection("h", 22, {})).toBeNull();
-    expect(
-      await createSocks5Connection("h", 22, { useSocks5: true }),
-    ).toBeNull();
+    // Fork (46f9c56d): null would read as "no proxy" and every caller would
+    // connect directly, by the route the host was set up to avoid.
+    await expect(
+      createSocks5Connection("h", 22, { useSocks5: true }),
+    ).rejects.toThrow(/no proxy address is set/);
   });
 });
 

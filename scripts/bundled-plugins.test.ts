@@ -101,7 +101,8 @@ describe("parseBundledPlugins", () => {
 
     expect(problems).toEqual([]);
     expect(plugins).toEqual([
-      { id: "vpn", source: "workspace", onboarding: null },
+      // An image profile tier, "full" when the entry names none.
+      { id: "vpn", source: "workspace", onboarding: null, tier: "full" },
     ]);
   });
 

@@ -92,6 +92,6 @@ describe("validate-plugin-manifest.cjs", () => {
   it("validates every bundled manifest when given no argument", () => {
     const { status, output } = runValidator();
     expect(status).toBe(0);
-    expect(output).toContain("ssh-terminal");
+    expect(output).toContain("rdp-direct");
   });
 });

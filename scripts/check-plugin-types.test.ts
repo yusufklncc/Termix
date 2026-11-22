@@ -38,7 +38,6 @@ describe("the plugin type-check gate", () => {
       "desktop-stream",
       "rdp-direct",
       "session-recording",
-      "ssh-terminal",
       "vpn",
     ]);
   });

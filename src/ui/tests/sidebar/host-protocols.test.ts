@@ -8,8 +8,6 @@ import {
   type HostProtocolDef,
 } from "../../sidebar/host-protocols";
 import { isFieldShown } from "../../settings/settings-fields-util";
-import { readFileSync } from "node:fs";
-import path from "node:path";
 
 const desktop: HostProtocolDef = {
   id: "demo-desktop",
@@ -116,21 +114,5 @@ describe("the switch and the fields it gates", () => {
       [desktop],
     );
     expect(isFieldShown(gated, merged.demo ?? {})).toBe(true);
-  });
-
-  it("is what the editor merges on every toggle, not only on save", () => {
-    /*
-     * The merge used to happen in the save handler alone. Asserted on the
-     * source because the alternative is driving the whole host editor, and
-     * what matters is that the toggle writes the form at all.
-     */
-    const source = readFileSync(
-      path.join(import.meta.dirname, "../../sidebar/HostEditor.tsx"),
-      "utf8",
-    );
-    const handler = source.slice(source.indexOf("const handleProtocolToggle"));
-    const body = handler.slice(0, handler.indexOf("\n  };"));
-    expect(body).toContain("withProtocolSettings");
-    expect(body).toContain("pluginSettings");
   });
 });

@@ -47,13 +47,7 @@ describe("the plugins this fork builds in tree", () => {
       workspacePlugins()
         .map((plugin) => plugin.id)
         .sort(),
-    ).toEqual([
-      "desktop-stream",
-      "rdp-direct",
-      "session-recording",
-      "ssh-terminal",
-      "vpn",
-    ]);
+    ).toEqual(["desktop-stream", "rdp-direct", "session-recording", "vpn"]);
   });
 
   it("are offered on a fresh install", () => {

@@ -170,9 +170,11 @@ export async function openSshTransport(
         via = "proxy";
       }
     } catch (error) {
-      throw new SshTransportError(gateway.describeFailure(error), "proxy", {
-        cause: error,
-      });
+      throw new SshTransportError(
+        await gateway.describeFailure(error),
+        "proxy",
+        { cause: error },
+      );
     }
   }
 

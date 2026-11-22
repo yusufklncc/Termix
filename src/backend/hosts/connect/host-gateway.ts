@@ -59,8 +59,11 @@ export interface HostGatewayService {
    * Core no longer knows what kind of thing that is, and "Proxy connection
    * failed" sends someone who set a host's **VPN** looking in the wrong
    * place. Whoever answered names it.
+   *
+   * A Promise when the provider runs in its own process (plugin API 2):
+   * every call into one crosses it, whatever the provider wrote.
    */
-  describeFailure?(error: unknown): string;
+  describeFailure?(error: unknown): string | Promise<string>;
 }
 
 /**
@@ -98,7 +101,7 @@ export interface ResolvedGateway {
   /** False while the route exists but is not up. See HostGatewayService. */
   isUp(): Promise<boolean>;
   /** Words a failure to connect through it, for whoever reads the error. */
-  describeFailure(error: unknown): string;
+  describeFailure(error: unknown): Promise<string>;
 }
 
 function proxyFailure(error: unknown): string {
@@ -122,8 +125,13 @@ export async function resolveHostGateway(
       resolveName: (name) =>
         provider?.resolveName?.(host as never, name) ?? Promise.resolve(null),
       isUp: () => provider?.isUp?.(host as never) ?? Promise.resolve(true),
-      describeFailure: (error) =>
-        provider?.describeFailure?.(error) ?? proxyFailure(error),
+      describeFailure: async (error) => {
+        // Wording a failure must not become a second one.
+        const worded = await Promise.resolve(
+          provider?.describeFailure?.(error),
+        ).catch(() => undefined);
+        return typeof worded === "string" ? worded : proxyFailure(error);
+      },
     };
   }
 
@@ -135,7 +143,7 @@ export async function resolveHostGateway(
         resolveName: async () => null,
         // Nothing of ours raises it, so there is nothing to wait for.
         isUp: async () => true,
-        describeFailure: proxyFailure,
+        describeFailure: async (error) => proxyFailure(error),
       }
     : null;
 }

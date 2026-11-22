@@ -700,8 +700,10 @@ eklentisine. API 1 eklentisi artık hiç çalışmıyor; bizimkiler taşındı.
       bırakmıyordu → host bir bağlantıdan sonra sonsuza dek "çevrimiçi"
 - [x] VPN `sandbox.alwaysOn`: 26.11 boştaki eklenti sürecini 10 dk sonra
       durduruyor, VPN'in dakikalık kapı eşitlemesi de dururdu
-- [ ] `frame-plugins.test.tsx`'te 9 test bu makinede başarısız — temiz
-      upstream'de de aynı 9'u, bizimle ilgisi yok
+- [x] `frame-plugins.test.tsx`'te 9 test bu makinede başarısız, CI'da değil:
+      test `getUserInfo`'yu taklit etmiyor, jsdom'da istek `localhost:3000`'e
+      gidiyor ve bu makinede orada başka bir projenin ön yüzü yanıt veriyor.
+      Ağı olmayan `node:24` konteynerinde 15/15 geçiyor
 - [ ] Gerçek donanımda: Windows host'a Direct RDP (doğrudan, jump, VPN),
       VPN arkasındaki host'un durum noktası, RDP kapalıyken Direct RDP
       girişinin kayıttan sağ çıkması

@@ -196,7 +196,13 @@ export async function runSession({
     fail(1011, "Failed to reach the RDP bridge");
   });
 
+  let untrack: (() => void) | null = null;
+
   const teardown = () => {
+    // Released once: held, the host read online for good, since a tracked
+    // session is taken as proof without asking the host.
+    untrack?.();
+    untrack = null;
     bridge?.destroy();
     bridge = null;
     tunnel?.close();
@@ -224,6 +230,6 @@ export async function runSession({
   ws.on("close", teardown);
   ws.on("error", teardown);
 
-  ctx.hosts.trackSession(hostId);
+  untrack = ctx.hosts.trackSession(hostId);
   ctx.log.info(`Direct RDP session started for host ${hostId} (${userId})`);
 }

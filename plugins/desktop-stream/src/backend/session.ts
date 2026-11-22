@@ -147,10 +147,13 @@ export async function runSession({
     }
   }) as never);
 
+  // Released when the viewer leaves: held, the host read online for good,
+  // since a tracked session is taken as proof without asking the host.
+  const untrack = ctx.hosts.trackSession(hostId);
+
   ws.on("close", (() => {
     adapter?.close();
     adapter = null;
+    untrack();
   }) as never);
-
-  ctx.hosts.trackSession(hostId);
 }

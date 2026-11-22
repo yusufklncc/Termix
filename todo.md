@@ -656,6 +656,56 @@ Go yamalarını aylarca bekletiyordu. Bedeli: sürümleri kendiliğinden gelmiyo
       eklendi, testle korunuyor (`session-recording` upstream'de de
       önerilmiyor, ona dokunulmadı)
 
+## Faz 14 — Upstream 26.11.3 (dal `upgrade/26.11.3`)
+
+Upstream eklenti arka uçlarını **ayrı süreçlere** (API 2) taşıdı, host
+düzenleyiciyi ve listeyi layout eklentilerine, durum noktasını `host-status`
+eklentisine. API 1 eklentisi artık hiç çalışmıyor; bizimkiler taşındı.
+
+- [x] Eklenti süreci yalnızca manifestinde `env` olarak listelenen
+      değişkenleri görüyor → `NET_MANAGER_*`, `RDP_BRIDGE_*` eklendi.
+      Eklenmeseydi VPN ve Direct RDP **sessizce** ayarsız kalırdı
+- [x] Süreç dışındaki `ctx.ssh.openTransport` akışı karşı taraf SSH selamı
+      verene kadar hiçbir şey geçirmiyor → RDP hiç çalışmazdı (doğrudan
+      bağlantı dahil). Çekirdek yaması: `raw: true`, yalnız `network:sockets`
+      olan eklentiye (`src/backend/plugins/sandbox/bridge.ts`). **Upstream
+      birleştirmelerinde bu dosyada çakışma beklenir**
+- [x] Ön yüzler kısıtlı iframe'de çalışıyor (worker yalnız `blob:`, script
+      `blob:` yok, tam ekran/pano okuma yok, başka site çerçevesi yok).
+      Direct RDP ve desktop-stream için manifest alanı `pageFrontend` (fork
+      SDK uzantısı), çekirdek onu **yalnız imajla gelen** eklentide dikkate
+      alıyor (`frontend-isolation.ts`). VPN ve session-recording çerçevede
+- [x] Servis çağrıları süreç sınırında Promise: VPN `describeFailure`
+      "[object Promise]" yazacaktı → `await`
+- [x] Durum noktası: `host-status` jump host'u olmayanı IP'den yokluyor →
+      VPN/kendi proxy'si olan hostlar `probeTargets`'ta kendisini hop olarak
+      gösterip `ctx.ssh.probe`'a yönlendiriliyor (`probe/gateway-probe.ts`).
+      **Kayıp:** noktadaki "VPN kapalı" nedeni artık yok, sadece çevrimdışı
+- [x] Layout'lar anahtarı kapalı protokolün girişine `null` gönderiyor →
+      Direct RDP'nin ödünç RDP girişi her kayıtta siliniyordu. Sunucuda
+      `foldBorrowedLogins` (`protocol-auth.ts`)
+- [x] Direct RDP kaydı kendi klasörüne yazıp session-recording'e `read`
+      ile veriyor (eklentiler birbirinin klasörünü açamıyor)
+- [x] `ssh-terminal` ağaçtan çıktı: 1.5.0'da DNS hatası yalnız doğrudan
+      bağlantıda reddediliyor, yamamızın yaptığı buydu
+- [x] `session-recording` 1.2.1 yeniden vendor + düz metin yaması
+- [x] İmaj profili `full` (kullanıcı kararı, 2026-11-22); kullanılmayan
+      eklentiler yayından sonra ayıklanacak
+- [x] Uçtan uca (yerel imaj, sahte RDP sunucusu): Direct RDP zinciri
+      tarayıcı → eklenti süreci → köprü → eklentinin tünel dinleyicisi →
+      çekirdeğin ham rotası → host çalışıyor; katlanmış RDP girişi
+      kullanılıyor (`mstshash=winuser`); var olmayan VPN'e atanmış host
+      doğrudan **aranmıyor**, hata metni doğru
+- [x] Bulundu ve düzeltildi: Direct RDP/desktop-stream `trackSession`'ı hiç
+      bırakmıyordu → host bir bağlantıdan sonra sonsuza dek "çevrimiçi"
+- [x] VPN `sandbox.alwaysOn`: 26.11 boştaki eklenti sürecini 10 dk sonra
+      durduruyor, VPN'in dakikalık kapı eşitlemesi de dururdu
+- [ ] `frame-plugins.test.tsx`'te 9 test bu makinede başarısız — temiz
+      upstream'de de aynı 9'u, bizimle ilgisi yok
+- [ ] Gerçek donanımda: Windows host'a Direct RDP (doğrudan, jump, VPN),
+      VPN arkasındaki host'un durum noktası, RDP kapalıyken Direct RDP
+      girişinin kayıttan sağ çıkması
+
 ---
 
 ## Hedef makine tarafı (kodla ilgisi yok)

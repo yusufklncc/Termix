@@ -8,6 +8,11 @@
   It asks for network:sockets, since the signaling connection to the
   streamer is a socket of its own.
 
+### Fixed
+
+- A session marked its host online and never let go, so the host read
+  online for good after the first connection and was never asked again.
+
 ## 1.0.0
 
 ### Added

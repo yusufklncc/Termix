@@ -11,6 +11,11 @@
   session-recording through a reader, because neither plugin can open the
   other's files any more.
 
+### Fixed
+
+- A session marked its host online and never let go, so the host read
+  online for good after the first connection and was never asked again.
+
 ## 1.0.0
 
 ### Added

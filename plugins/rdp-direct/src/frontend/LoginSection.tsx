@@ -1,4 +1,4 @@
-import { KeyRound } from "lucide-react";
+import { KeyRound, MonitorPlay } from "lucide-react";
 import {
   HOST_PROTOCOL_SECRET_KEPT,
   useTranslation,
@@ -7,6 +7,7 @@ import {
   type HostProtocolAuthType,
 } from "@termix-ssh/plugin-sdk/frontend";
 import {
+  FakeSwitch,
   Input,
   PasswordInput,
   SectionCard,
@@ -23,6 +24,51 @@ export const LOGIN_PROTOCOL = "rdp";
 
 /** Upstream's switch for RDP, which shows its own login form while on. */
 export const RDP_ENABLE_KEY = "enableRdp";
+
+/** This plugin's id, and its switch in the protocol list. */
+export const PLUGIN_ID = "rdp-direct";
+export const ENABLE_KEY = "enableRdpDirect";
+export const DEFAULT_PORT = 3389;
+
+/**
+ * The host editor section, offered while Direct RDP is on.
+ *
+ * Since Termix 26.11 core no longer draws a plugin's manifest host fields on
+ * a host when the plugin has an editor section of its own -- only in the
+ * defaults editor. The login section made Direct RDP such a plugin, so its
+ * port and printing switch vanished from the host editor. Upstream's RDP
+ * draws everything in one section named after its protocol; so does this.
+ */
+export function sectionVisible(protocols: Record<string, boolean>) {
+  return !!protocols[ENABLE_KEY];
+}
+
+/** This plugin's host settings as the form holds them. */
+export function settingsOf(form: Record<string, unknown> | undefined) {
+  const bag = (form?.pluginSettings ?? {}) as Record<
+    string,
+    Record<string, unknown>
+  >;
+  return bag[PLUGIN_ID] ?? {};
+}
+
+/** The form patch that changes one of this plugin's host settings. */
+export function patchSetting(
+  form: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): Record<string, unknown> {
+  const bag = (form.pluginSettings ?? {}) as Record<
+    string,
+    Record<string, unknown>
+  >;
+  return {
+    pluginSettings: {
+      ...bag,
+      [PLUGIN_ID]: { ...(bag[PLUGIN_ID] ?? {}), [key]: value },
+    },
+  };
+}
 
 /** A login as the editor form holds it, with nothing missing. */
 export function loginOf(login: unknown): HostProtocolAuthForm {
@@ -160,5 +206,58 @@ export function RdpDirectLoginSection({
         />
       </SettingRow>
     </SectionCard>
+  );
+}
+
+export function RdpDirectSection(props: HostEditorSectionProps) {
+  const { t } = useTranslation();
+  const { form, updateForm, protocols } = props;
+  const settings = settingsOf(form);
+  const port = settings.port ?? DEFAULT_PORT;
+  const set = (key: string, value: unknown) =>
+    updateForm((current) => patchSetting(current, key, value));
+
+  return (
+    <>
+      <SectionCard
+        title={t("section.connection")}
+        icon={<MonitorPlay className="size-3.5" />}
+      >
+        <SettingRow
+          label={t("settings.host.port.label")}
+          description={t("settings.host.port.description")}
+        >
+          <Input
+            type="number"
+            min={1}
+            max={65535}
+            value={String(port)}
+            placeholder={String(DEFAULT_PORT)}
+            aria-label={t("settings.host.port.label")}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              set("port", Number.isInteger(next) && next > 0 ? next : "");
+            }}
+          />
+        </SettingRow>
+        <SettingRow
+          label={t("settings.host.enablePrinting.label")}
+          description={t("settings.host.enablePrinting.description")}
+        >
+          <FakeSwitch
+            checked={settings.enablePrinting === true}
+            onChange={(value: boolean) => set("enablePrinting", value)}
+          />
+        </SettingRow>
+      </SectionCard>
+
+      {loginSectionVisible(protocols ?? {}) ? (
+        <RdpDirectLoginSection {...props} />
+      ) : (
+        <p className="pt-3 text-xs text-muted-foreground">
+          {t("login.usesRdp")}
+        </p>
+      )}
+    </>
   );
 }

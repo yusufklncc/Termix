@@ -52,6 +52,10 @@
     "username": "Username",
     "password": "Password",
     "passwordKept": "Saved. Type to replace it.",
-    "domain": "Domain"
+    "domain": "Domain",
+    "usesRdp": "Signs in with the login in the RDP section: the same Windows account, entered once."
+  },
+  "section": {
+    "connection": "Connection"
   }
 }

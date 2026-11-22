@@ -24,6 +24,7 @@ import * as plugin from "../../src/frontend/index";
 import {
   loginSectionVisible,
   patchRdpLogin,
+  sectionVisible,
 } from "../../src/frontend/LoginSection";
 import manifestJson from "../../manifest.json";
 import locales from "../../locales/en.json";
@@ -71,9 +72,7 @@ describe("when the section is offered", () => {
 
   it("is registered", async () => {
     rendered = await renderWithApp(plugin, { manifest, locales });
-    expect(rendered.registered.hostEditorSections()).toContain(
-      "rdp-direct-login",
-    );
+    expect(rendered.registered.hostEditorSections()).toContain("rdp-direct");
   });
 });
 
@@ -109,7 +108,7 @@ describe("the form", () => {
   it("puts what is typed into the RDP login", async () => {
     rendered = await renderWithApp(plugin, { manifest, locales });
     const state = editor({ protocolAuth: {} });
-    rendered.renderHostEditorSection("rdp-direct-login", {
+    rendered.renderHostEditorSection("rdp-direct", {
       form: state.form,
       updateForm: state.updateForm,
       protocols: { enableRdpDirect: true },
@@ -140,7 +139,7 @@ describe("the form", () => {
         },
       },
     });
-    rendered.renderHostEditorSection("rdp-direct-login", {
+    rendered.renderHostEditorSection("rdp-direct", {
       form: state.form,
       updateForm: state.updateForm,
       protocols: { enableRdpDirect: true },
@@ -165,12 +164,57 @@ describe("the form", () => {
 
   it("says the login is shared with RDP", async () => {
     rendered = await renderWithApp(plugin, { manifest, locales });
-    rendered.renderHostEditorSection("rdp-direct-login", {
+    rendered.renderHostEditorSection("rdp-direct", {
       form: { protocolAuth: {} },
       updateForm: vi.fn(),
       protocols: { enableRdpDirect: true },
       credentials: [],
     });
     expect(screen.getByText(/same Windows account RDP/)).toBeTruthy();
+  });
+});
+
+describe("the section's connection settings", () => {
+  /*
+   * Since 26.11 core draws a plugin's manifest host fields on a host only
+   * when the plugin has no editor section of its own, so the port and the
+   * printing switch live in this section now. They went missing otherwise.
+   */
+  it("edits the port and printing in this plugin's host settings", async () => {
+    rendered = await renderWithApp(plugin, { manifest, locales });
+    const state = editor({ protocolAuth: {}, pluginSettings: {} });
+    rendered.renderHostEditorSection("rdp-direct", {
+      form: state.form,
+      updateForm: state.updateForm,
+      protocols: { enableRdpDirect: true },
+      credentials: [],
+    });
+
+    fireEvent.change(screen.getByLabelText("RDP port"), {
+      target: { value: "3390" },
+    });
+    expect(state.form.pluginSettings).toMatchObject({
+      "rdp-direct": { port: 3390 },
+    });
+  });
+
+  it("is offered whenever Direct RDP is on, RDP or not", () => {
+    expect(sectionVisible({ enableRdpDirect: true })).toBe(true);
+    expect(sectionVisible({ enableRdpDirect: true, enableRdp: true })).toBe(
+      true,
+    );
+    expect(sectionVisible({ enableRdp: true })).toBe(false);
+  });
+
+  it("points at RDP's login instead of a second form while RDP is on", async () => {
+    rendered = await renderWithApp(plugin, { manifest, locales });
+    rendered.renderHostEditorSection("rdp-direct", {
+      form: { protocolAuth: {}, pluginSettings: {} },
+      updateForm: vi.fn(),
+      protocols: { enableRdpDirect: true, enableRdp: true },
+      credentials: [],
+    });
+    expect(screen.getByText(/login in the RDP section/)).toBeTruthy();
+    expect(screen.queryByLabelText("Username")).toBeNull();
   });
 });

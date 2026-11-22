@@ -1,12 +1,12 @@
 import { type Ref } from "react";
-import { KeyRound, MonitorPlay } from "lucide-react";
+import { MonitorPlay } from "lucide-react";
 import type {
   TermixApp,
   TabProps,
   PluginHostRecord,
 } from "@termix-ssh/plugin-sdk/frontend";
 import RdpDirectApp, { type RdpDirectAppHandle } from "./RdpDirectApp.js";
-import { RdpDirectLoginSection, loginSectionVisible } from "./LoginSection.js";
+import { RdpDirectSection, sectionVisible } from "./LoginSection.js";
 
 const PLUGIN_ID = "rdp-direct";
 const ENABLE_KEY = "enableRdpDirect";
@@ -60,16 +60,22 @@ export function activate(app: TermixApp): void {
     order: 25,
   });
 
-  // Somewhere to enter the login when only Direct RDP is on. See
-  // LoginSection.tsx for why it edits RDP's login rather than its own.
+  /*
+   * Everything Direct RDP asks of a host, in one section named after the
+   * protocol the way upstream's RDP does it: the port, printing, and the
+   * Windows login while RDP is off. See LoginSection.tsx for why the login
+   * is RDP's own and why the port lives here rather than in the manifest.
+   */
   app.registerHostEditorSection({
-    id: "rdp-direct-login",
+    id: PLUGIN_ID,
     group: "top",
-    titleKey: "login.title",
-    icon: KeyRound,
+    titleKey: "protocol.title",
+    icon: MonitorPlay,
     order: 26,
-    visible: loginSectionVisible,
-    component: RdpDirectLoginSection,
+    visible: sectionVisible,
+    // Shown in the simple host editor too: a host can't connect without it.
+    ...{ simple: true },
+    component: RdpDirectSection,
   });
 
   app.registerHostAction({

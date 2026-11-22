@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.1
+
+### Fixed
+
+- The host editor showed nothing under Direct RDP. Since Termix 26.11 core
+  draws a plugin's manifest host fields on a host only when the plugin has
+  no editor section of its own, and the login section made this one such a
+  plugin, so the port and printing switch went with it. Everything Direct
+  RDP asks of a host is now one section named after the protocol, the way
+  upstream's RDP does it: port, printing, and the Windows login while RDP
+  is off.
+
 ## 1.1.0
 
 ### Changed

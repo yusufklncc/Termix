@@ -1,0 +1,37 @@
+{
+  "plugins": {
+    "ansible": { "tier": "full" },
+    "backups": { "tier": "full" },
+    "certificates": { "tier": "full" },
+    "cron": { "tier": "full" },
+    "dns": { "tier": "full" },
+    "firewall": { "tier": "full" },
+    "git": { "tier": "full" },
+    "ip-kvm": { "tier": "full" },
+    "log-search": { "tier": "full" },
+    "network-devices": { "tier": "full" },
+    "notes": { "tier": "full" },
+    "object-storage": { "tier": "full" },
+    "operations-center": {
+      "tier": "standard",
+      "onboarding": { "recommended": true, "consent": false }
+    },
+    "host-layout": { "tier": "standard" },
+    "original-layout": { "tier": "standard" },
+    "out-of-band": { "tier": "full" },
+    "package-manager": { "tier": "full" },
+    "privileged-access": { "tier": "full" },
+    "process-manager": { "tier": "full" },
+    "scim": { "tier": "full" },
+    "security-center": { "tier": "full" },
+    "storage-health": { "tier": "full" },
+    "ups-manager": { "tier": "full" },
+    "terminal-layout": { "tier": "standard" },
+    "uptime": { "tier": "full" },
+    "user-manager": { "tier": "full" },
+    "virtual-machines": { "tier": "full" },
+    "wall-display": { "tier": "standard" },
+    "web-servers": { "tier": "full" },
+    "wireguard": { "tier": "full" }
+  }
+}

@@ -1,13 +1,19 @@
 import type { Client } from "ssh2";
+import { explainHostKeyRefusal } from "../host-key-policy.js";
+import {
+  WITHHELD_LOGIN_MESSAGE,
+  sharedLoginWithheld,
+} from "../../sync/withheld-login.js";
 import type { WebSocket } from "ws";
 import { buildSSHAlgorithms } from "../../utils/ssh-algorithms.js";
 import { SSHHostKeyVerifier } from "../host-key-verifier.js";
 import { resolveSshKeepalive } from "../ssh-keepalive.js";
 import {
   SshAuthProviderMissingError,
-  requireSshAuthProvider,
+  awaitSshAuthProvider,
 } from "./auth-provider-registry.js";
 import { ensureCoreSshAuthProviders } from "./core-providers.js";
+import { ConnectPolicyError, assertConnectAllowed } from "../connect-policy.js";
 import type {
   MutableConnectConfig,
   SshAuthEnv,
@@ -113,6 +119,8 @@ export interface BuildConnectConfigOptions {
   /** Terminal socket for the changed-host-key prompt. */
   hostKeySocket?: WebSocket | null;
   interactive?: boolean;
+  /** Plugin id that asked for the connection, or "core". For connect policies. */
+  origin?: string;
   log?: SshAuthLog;
   /** Applied after the purpose defaults and before auth is prepared. */
   overrides?: Partial<MutableConnectConfig>;
@@ -182,6 +190,11 @@ export async function buildConnectConfig(
       options.userId,
       isJumpHost,
       preloaded,
+      {
+        onRefused: (code) => {
+          if (options.client) explainHostKeyRefusal(options.client, code);
+        },
+      },
     ),
     algorithms: buildSSHAlgorithms(sshOptions?.allowLegacyAlgorithms !== false),
   };
@@ -197,9 +210,57 @@ export async function buildConnectConfig(
     log: options.log ?? noopLog,
   };
 
+  if (await sharedLoginWithheld(host as unknown as Record<string, unknown>)) {
+    config.hostVerifier = () => false;
+    return {
+      config,
+      provider: null,
+      env,
+      outcome: {
+        status: "error",
+        code: "missing-secret",
+        message: WITHHELD_LOGIN_MESSAGE,
+      },
+    };
+  }
+
+  try {
+    await assertConnectAllowed({
+      userId: options.userId,
+      hostId: serverHostId,
+      protocol: "ssh",
+      purpose: String(options.purpose),
+      profile,
+      interactive: options.interactive ?? false,
+      origin: options.origin ?? "core",
+    });
+  } catch (error) {
+    if (error instanceof ConnectPolicyError) {
+      // A caller that ignores the outcome still can't connect with this.
+      config.hostVerifier = () => false;
+      return {
+        config,
+        provider: null,
+        env,
+        outcome: {
+          status: "error",
+          code: error.code,
+          message: error.message,
+          ...(error.result.requestTab
+            ? { requestTab: error.result.requestTab }
+            : {}),
+          ...(error.result.requestKind
+            ? { requestKind: error.result.requestKind }
+            : {}),
+        },
+      };
+    }
+    throw error;
+  }
+
   let provider: SshAuthProvider;
   try {
-    provider = requireSshAuthProvider(authType);
+    provider = await awaitSshAuthProvider(authType);
   } catch (error) {
     if (error instanceof SshAuthProviderMissingError) {
       return {
@@ -217,7 +278,7 @@ export async function buildConnectConfig(
   }
 
   if (provider.connectOptions) {
-    Object.assign(config, provider.connectOptions(host, options.purpose));
+    Object.assign(config, await provider.connectOptions(host, options.purpose));
   }
   if (options.overrides) {
     Object.assign(config, options.overrides);

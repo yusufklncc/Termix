@@ -1,7 +1,9 @@
-import type { ComponentType } from "react";
+import { useEffect, type ComponentType } from "react";
 import type { Host } from "@/types/ui-types";
 import { byOrderThenId, createRegistry } from "@/lib/registry";
 import type { TabShellCallbacks } from "@/shell/tab-registry";
+import type { DataReporter } from "@/components/data-view/data-reporter";
+import { getForeignRuntime } from "@/components/foreign/foreign-runtime";
 
 type Icon = ComponentType<{ className?: string; size?: number | string }>;
 
@@ -37,13 +39,36 @@ export interface HostActionDef {
   }[];
 }
 
+/** A problem a plugin wants shown as the host row's one status dot. */
+export interface HostDot {
+  tone: "bad" | "warn";
+  label: string;
+}
+
+/** Calls a plugin's dot hook and passes the answer up to the dot group. */
+export type HostDotReporter = ComponentType<{
+  host: Host;
+  report: (dot: HostDot | null) => void;
+}>;
+
 export interface HostBadgeDef {
   id: string;
   pluginId?: string;
   when: (host: Host) => boolean;
-  component: ComponentType<{ host: Host }>;
+  /** Drawn as is. Leave out when the badge is only a dot. */
+  component?: ComponentType<{ host: Host }>;
+  /** Merged with every other dot into one dot on the row. */
+  dot?: HostDotReporter;
+  /** Plain values drawn by the shell (badge, dot, text). Context { host }. */
+  value?: DataReporter;
   order?: number;
 }
+
+/** The dot or stripe on a host row that shows its status. */
+export type HostStatusIndicatorDef = HostBadgeDef;
+
+/** A button in the host editor's toolbar. */
+export type HostEditorToolbarItemDef = HostBadgeDef;
 
 export interface HostContextMenuItemDef {
   id: string;
@@ -57,10 +82,21 @@ export interface HostContextMenuItemDef {
 
 const actions = createRegistry<HostActionDef>(byOrderThenId);
 const badges = createRegistry<HostBadgeDef>(byOrderThenId);
+const statusIndicators = createRegistry<HostStatusIndicatorDef>(byOrderThenId);
+const editorToolbarItems =
+  createRegistry<HostEditorToolbarItemDef>(byOrderThenId);
 const menuItems = createRegistry<HostContextMenuItemDef>(byOrderThenId);
 
 export const registerHostAction = actions.register;
-export const useHostActions = actions.useList;
+/**
+ * Every host action. In a plugin frame the shell has the list, so it comes
+ * from there; the runtime is set before anything renders and never changes.
+ */
+export function useHostActions(): HostActionDef[] {
+  const fromShell = getForeignRuntime()?.useHostActions;
+  if (fromShell) return fromShell() as HostActionDef[];
+  return actions.useList();
+}
 
 /** Plugin actions sort by order; connect actions default to the end. */
 export function actionOrder(action: HostActionDef): number {
@@ -69,6 +105,13 @@ export function actionOrder(action: HostActionDef): number {
 export const listHostActions = actions.list;
 export const registerHostBadge = badges.register;
 export const useHostBadges = badges.useList;
+export const listHostBadges = badges.list;
+export const registerHostStatusIndicator = statusIndicators.register;
+export const useHostStatusIndicators = statusIndicators.useList;
+export const listHostStatusIndicators = statusIndicators.list;
+export const registerHostEditorToolbarItem = editorToolbarItems.register;
+export const useHostEditorToolbarItems = editorToolbarItems.useList;
+export const listHostEditorToolbarItems = editorToolbarItems.list;
 export const registerHostContextMenuItem = menuItems.register;
 export const useHostContextMenuItems = menuItems.useList;
 
@@ -101,8 +144,38 @@ export function defaultConnectAction(
   )[0];
 }
 
+/** Turns a plugin's dot hook into a component the dot group can mount. */
+export function hostDotReporter(
+  useDot: (host: Host) => HostDot | null,
+): HostDotReporter {
+  return function HostDotReport({ host, report }) {
+    const dot = useDot(host);
+    const tone = dot?.tone;
+    const label = dot?.label ?? "";
+    useEffect(() => {
+      report(tone ? { tone, label } : null);
+    }, [tone, label, report]);
+    useEffect(() => () => report(null), [report]);
+    return null;
+  };
+}
+
 export function hostBadgesFor(all: HostBadgeDef[], host: Host): HostBadgeDef[] {
   return all.filter((badge) => safeWhen(badge.when, host));
+}
+
+export function hostStatusIndicatorsFor(
+  all: HostStatusIndicatorDef[],
+  host: Host,
+): HostStatusIndicatorDef[] {
+  return all.filter((item) => safeWhen(item.when, host));
+}
+
+export function hostEditorToolbarItemsFor(
+  all: HostEditorToolbarItemDef[],
+  host: Host,
+): HostEditorToolbarItemDef[] {
+  return all.filter((item) => safeWhen(item.when, host));
 }
 
 export function hostMenuItemsFor(
@@ -125,5 +198,7 @@ export function runHostAction(
 export function resetHostContributions(): void {
   actions.reset();
   badges.reset();
+  statusIndicators.reset();
+  editorToolbarItems.reset();
   menuItems.reset();
 }

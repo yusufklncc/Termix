@@ -22,6 +22,8 @@
  */
 
 import type { ComponentType } from "react";
+import type { DataReporter } from "@/components/data-view/data-reporter";
+import type { DataShape } from "@/components/data-view/data-value";
 
 /**
  * Args are unknown[] because the registry never inspects them: a slot owner
@@ -37,12 +39,27 @@ export interface RegisteredAction {
   /** Role permission a user needs before this action is offered. */
   permission?: string;
   pluginId?: string;
+  /** Only frames of pluginId may invoke it. */
+  private?: boolean;
 }
 
 export interface ActionSlotDefinition {
   id: string;
   /** Contribution kinds this slot will render. */
   accepts: string[];
+  /**
+   * How a framed component sizes itself here: "inline" as wide and tall as
+   * its content (row items, badges), "bar" as wide as its content and as
+   * tall as the bar it sits in (tab bar buttons), "content" full width, "fill" the box,
+   * "overlay" the box, see-through and only clickable while it draws.
+   */
+  fit?: "inline" | "bar" | "content" | "fill" | "overlay";
+  /** For "data": the shapes the owner draws. Others are dropped. */
+  shapes?: DataShape[];
+  /** For "data": one row per host, tab or credential. */
+  rows?: "host" | "tab" | "credential";
+  /** The plugin that declared it. Its frames may watch the slot's data. */
+  pluginId?: string;
 }
 
 export interface SlotContribution {
@@ -59,6 +76,8 @@ export interface SlotContribution {
    * e.g. a panel docked into the terminal.
    */
   component?: ComponentType<Record<string, unknown>>;
+  /** For kind "data": runs the plugin's value hook for one row. */
+  value?: DataReporter;
   /** Extra condition, evaluated against the slot owner's context. */
   when?: (context: Record<string, unknown>) => boolean;
   pluginId?: string;
@@ -91,7 +110,7 @@ function emit(): void {
 export function registerAction(
   id: string,
   handler: ActionHandler,
-  options: { permission?: string; pluginId?: string } = {},
+  options: { permission?: string; pluginId?: string; private?: boolean } = {},
 ): () => void {
   const action = { id, handler, ...options };
   actions.set(id, action);
@@ -112,6 +131,16 @@ export function listActions(): RegisteredAction[] {
 /** Whether a handler is registered, i.e. its plugin is running. */
 export function isActionRegistered(id: string): boolean {
   return actions.has(id);
+}
+
+/** The plugin that registered an action, if one did. */
+export function getActionOwner(id: string): string | undefined {
+  return actions.get(id)?.pluginId;
+}
+
+/** Whether only the plugin that registered an action may invoke it. */
+export function isActionPrivate(id: string): boolean {
+  return actions.get(id)?.private === true;
 }
 
 /** The permission gating an action, if it declared one. */
@@ -214,6 +243,13 @@ export function getSlotContributions(slotId: string): SlotContribution[] {
   );
   snapshots.set(slotId, sorted);
   return sorted;
+}
+
+/** The declared slot, if its owner declared it. */
+export function getActionSlot(
+  slotId: string,
+): ActionSlotDefinition | undefined {
+  return slots.get(slotId);
 }
 
 export function subscribeToActionRegistry(listener: () => void): () => void {

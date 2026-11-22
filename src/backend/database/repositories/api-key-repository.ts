@@ -3,6 +3,7 @@ import { apiKeys, users } from "../db/schema.js";
 import type { DatabaseContext } from "./database-context.js";
 import { rowsAffected } from "./mutation-result.js";
 import { deleteReturning, insertReturning } from "./returning.js";
+import { endApiKeySockets } from "../../auth/socket-sessions.js";
 
 export type ApiKeyRecord = typeof apiKeys.$inferSelect;
 export type NewApiKeyRecord = typeof apiKeys.$inferInsert;
@@ -17,6 +18,8 @@ export interface ApiKeyListRecord {
   expiresAt: string | null;
   lastUsedAt: string | null;
   isActive: boolean;
+  /** JSON list, or null for full access. */
+  scopes: string | null;
 }
 
 export class ApiKeyRepository {
@@ -31,6 +34,41 @@ export class ApiKeyRepository {
     return rows[0];
   }
 
+  /** One user's keys, without their hashes. */
+  async listByUser(userId: string): Promise<ApiKeyListRecord[]> {
+    return this.context.drizzle
+      .select({
+        id: apiKeys.id,
+        name: apiKeys.name,
+        userId: apiKeys.userId,
+        username: users.username,
+        tokenPrefix: apiKeys.tokenPrefix,
+        createdAt: apiKeys.createdAt,
+        expiresAt: apiKeys.expiresAt,
+        lastUsedAt: apiKeys.lastUsedAt,
+        isActive: apiKeys.isActive,
+        scopes: apiKeys.scopes,
+      })
+      .from(apiKeys)
+      .leftJoin(users, eq(apiKeys.userId, users.id))
+      .where(eq(apiKeys.userId, userId))
+      .orderBy(apiKeys.createdAt);
+  }
+
+  /** Deletes every key, or every key of one user. Returns how many went. */
+  async deleteAll(userId?: string): Promise<number> {
+    const rows = await this.context.drizzle
+      .select({ id: apiKeys.id })
+      .from(apiKeys)
+      .where(userId ? eq(apiKeys.userId, userId) : undefined);
+    for (const row of rows) {
+      await this.context.drizzle.delete(apiKeys).where(eq(apiKeys.id, row.id));
+      endApiKeySockets(row.id);
+    }
+    if (rows.length > 0) await this.afterWrite();
+    return rows.length;
+  }
+
   async listAllWithUsers(): Promise<ApiKeyListRecord[]> {
     return this.context.drizzle
       .select({
@@ -43,6 +81,7 @@ export class ApiKeyRepository {
         expiresAt: apiKeys.expiresAt,
         lastUsedAt: apiKeys.lastUsedAt,
         isActive: apiKeys.isActive,
+        scopes: apiKeys.scopes,
       })
       .from(apiKeys)
       .leftJoin(users, eq(apiKeys.userId, users.id))
@@ -83,6 +122,7 @@ export class ApiKeyRepository {
       eq(apiKeys.id, id),
     );
 
+    endApiKeySockets(id);
     await this.afterWrite();
     return rows[0] ?? null;
   }

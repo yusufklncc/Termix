@@ -12,9 +12,12 @@ import {
 } from "react";
 import type React from "react";
 import { createPortal } from "react-dom";
+import { ForeignOccluder } from "@/components/foreign/ForeignSlot";
+import { getForeignRuntime } from "@/components/foreign/foreign-runtime";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { BackButton, PanelShell } from "@/components/panel-layout";
+import { TileColumn } from "@/components/tile-grid/TileColumn";
 import {
   PROMPT_BUTTON,
   PROMPT_DESTRUCTIVE_BUTTON,
@@ -36,6 +39,22 @@ export interface ConfirmOptions {
   cancelLabel?: string;
   /** Red confirm button. Defaults to true, since most confirms delete. */
   destructive?: boolean;
+  /**
+   * A checkbox under the description, like "Delete permanently". onChange
+   * hears every change, so read its last value once the answer is yes.
+   * Termix 26.11.3; older versions draw no checkbox.
+   */
+  checkbox?: ConfirmCheckbox;
+}
+
+export interface ConfirmCheckbox {
+  label: string;
+  checked?: boolean;
+  onChange?: (checked: boolean) => void;
+  /** Used instead of the description while it is ticked. */
+  checkedDescription?: React.ReactNode;
+  /** Used instead of the confirm label while it is ticked. */
+  checkedConfirmLabel?: string;
 }
 
 interface PendingConfirm extends ConfirmOptions {
@@ -147,6 +166,7 @@ export function SurfaceScope({
   return (
     <ScopeContext.Provider value={value}>
       <div
+        data-surface={kind}
         className={cn(
           "relative flex min-h-0 min-w-0 flex-1 flex-col",
           className,
@@ -175,6 +195,25 @@ export function SurfaceScope({
 /** Which kind of surface this code renders in, or null outside any. */
 export function useSurfaceKind(): SurfaceKind | null {
   return useContext(ScopeContext)?.kind ?? null;
+}
+
+/**
+ * Opens a view on the surface without drawing into it, for a plugin frame
+ * that grows over the surface itself. Null outside any surface.
+ */
+export function useSurfaceCover(): {
+  overlay: HTMLElement | null;
+  openView: (id: string, width: EditingWidth) => void;
+  closeView: (id: string) => void;
+} | null {
+  const scope = useContext(ScopeContext);
+  const overlay = scope?.overlay ?? null;
+  const openView = scope?.openView;
+  const closeView = scope?.closeView;
+  return useMemo(
+    () => (openView && closeView ? { overlay, openView, closeView } : null),
+    [overlay, openView, closeView],
+  );
 }
 
 /** Closes the surface this code renders in, or null when it can't be closed. */
@@ -211,6 +250,9 @@ function ConfirmCard({
   const confirmRef = useRef<HTMLButtonElement>(null);
   const titleId = useId();
   const destructive = options.destructive ?? true;
+  const box = options.checkbox;
+  const [checked, setChecked] = useState(box?.checked === true);
+  const boxId = useId();
   const settleRef = useRef(onSettle);
   settleRef.current = onSettle;
 
@@ -242,7 +284,11 @@ function ConfirmCard({
       labelledBy={titleId}
       title={options.title}
       titleId={titleId}
-      description={options.description}
+      description={
+        checked && box?.checkedDescription !== undefined
+          ? box.checkedDescription
+          : options.description
+      }
       tone={destructive ? "destructive" : "default"}
       onCancel={() => onSettle(false)}
       actions={
@@ -262,7 +308,8 @@ function ConfirmCard({
               destructive ? PROMPT_DESTRUCTIVE_BUTTON : PROMPT_PRIMARY_BUTTON
             }
           >
-            {options.confirmLabel ??
+            {(checked && box?.checkedConfirmLabel) ||
+              options.confirmLabel ||
               (destructive ? t("common.delete") : t("common.confirm"))}
             <span aria-hidden className="ml-1.5 opacity-60">
               ↵
@@ -270,7 +317,26 @@ function ConfirmCard({
           </button>
         </>
       }
-    />
+    >
+      {box && (
+        <label
+          htmlFor={boxId}
+          className="flex cursor-pointer items-center gap-2 text-sm"
+        >
+          <input
+            id={boxId}
+            type="checkbox"
+            className="size-4"
+            checked={checked}
+            onChange={(e) => {
+              setChecked(e.target.checked);
+              box.onChange?.(e.target.checked);
+            }}
+          />
+          {box.label}
+        </label>
+      )}
+    </PanePrompt>
   );
 }
 
@@ -319,7 +385,7 @@ export function PanePrompt({
   if (!open) return null;
   const headingId = titleId ?? fallbackId;
   return (
-    <div
+    <ForeignOccluder
       className={cn(
         "motion-fade-enter absolute inset-0 flex items-center justify-center overflow-y-auto p-4",
         layer === "connection" ? "z-500 bg-canvas" : "z-50 bg-background/85",
@@ -376,7 +442,7 @@ export function PanePrompt({
         )}
         {!actions && <div className="h-4" />}
       </div>
-    </div>
+    </ForeignOccluder>
   );
 }
 
@@ -397,6 +463,7 @@ export function InlineView({
   onBeforeClose,
   scroll = true,
   bare = false,
+  stacked = false,
   className,
   children,
 }: {
@@ -416,6 +483,11 @@ export function InlineView({
   scroll?: boolean;
   /** Draw children edge to edge, for views with their own bands. */
   bare?: boolean;
+  /**
+   * Cards stacked in one column with a line between them and no padding,
+   * like a settings page. For forms built from SectionCards.
+   */
+  stacked?: boolean;
   className?: string;
   children: React.ReactNode;
 }) {
@@ -429,6 +501,14 @@ export function InlineView({
     return () => closeView(id);
   }, [open, id, width, openView, closeView]);
 
+  // The view covers the surface: other plugins' views under it hide.
+  const overlay = scope?.overlay;
+  useEffect(() => {
+    const runtime = getForeignRuntime();
+    if (!open || !overlay || !runtime) return;
+    return runtime.addOccluder(overlay);
+  }, [open, overlay]);
+
   const requestClose = useCallback(async () => {
     if (onBeforeClose && !(await onBeforeClose())) return;
     onOpenChange(false);
@@ -436,7 +516,6 @@ export function InlineView({
 
   if (!open) return null;
 
-  const padded = scope?.kind === "tab" || scope?.kind === "pane";
   const view = (
     <div
       className={cn(
@@ -462,11 +541,14 @@ export function InlineView({
       >
         {bare ? (
           children
+        ) : stacked ? (
+          <TileColumn className={cn("w-full", className)}>
+            {children}
+          </TileColumn>
         ) : (
           <div
             className={cn(
-              "flex w-full flex-col gap-3",
-              padded ? "mx-auto max-w-3xl p-3" : "p-3",
+              "flex w-full flex-col gap-3 p-3",
               !scroll && "min-h-0 flex-1",
               className,
             )}
@@ -481,7 +563,9 @@ export function InlineView({
   if (scope?.overlay) return createPortal(view, scope.overlay);
   if (scope) return null;
   return createPortal(
-    <div className="fixed inset-0 z-50 bg-background">{view}</div>,
+    <ForeignOccluder className="fixed inset-0 z-50 bg-background">
+      {view}
+    </ForeignOccluder>,
     document.body,
   );
 }

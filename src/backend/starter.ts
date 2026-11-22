@@ -12,6 +12,77 @@ import {
   setGlobalLogLevel,
 } from "./utils/logger.js";
 import { getTrustedProxyAuthConfig } from "./utils/trusted-proxy-auth.js";
+import { createShutdown, exitWithParent } from "./utils/shutdown.js";
+import { onParentMessage, sendToParent } from "./utils/parent-channel.js";
+import { installConsoleCapture } from "./utils/log-buffer.js";
+
+installConsoleCapture();
+
+const embedded = process.env.ELECTRON_EMBEDDED === "true";
+// The desktop app kills the backend after 5 s, Docker after 10 s.
+const SHUTDOWN_TOTAL_MS = embedded ? 4000 : 8500;
+// Kept back from plugins so the database still gets saved.
+const SHUTDOWN_DATABASE_RESERVE_MS = 1500;
+
+let databaseOpen = false;
+let persistOnShutdown = false;
+
+const gracefulShutdown = createShutdown(
+  () => [
+    {
+      // Plugin workers and processes stop before the database goes away, so
+      // a plugin mid-write cannot outlive it.
+      name: "plugins",
+      maxMs: SHUTDOWN_TOTAL_MS - SHUTDOWN_DATABASE_RESERVE_MS,
+      run: async () => {
+        const { shutdownPlugins } = await import("./plugins/index.js");
+        await shutdownPlugins();
+      },
+    },
+    {
+      // Only SQLite has anything to flush. On a client-server engine the
+      // writes committed as they happened.
+      name: "database",
+      run: async () => {
+        if (!databaseOpen) return;
+        if (persistOnShutdown) {
+          try {
+            await DatabaseSaveTrigger.forceSave("shutdown_explicit_save");
+            systemLogger.info("Database saved to disk before exit", {
+              operation: "shutdown_db_saved",
+            });
+          } catch (error) {
+            systemLogger.error(
+              "Failed to save database during shutdown",
+              error,
+              { operation: "shutdown_db_save_failed" },
+            );
+          }
+        }
+        const { closeDatabase } = await import("./database/db/index.js");
+        closeDatabase();
+      },
+    },
+  ],
+  {
+    totalMs: SHUTDOWN_TOTAL_MS,
+    exit: (code) => process.exit(code),
+    log: (message) => systemLogger.info(message, { operation: "shutdown" }),
+  },
+);
+
+// Registered before startup, so quitting while the backend still starts
+// works too.
+process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
+onParentMessage((msg) => {
+  if ((msg as { type?: string } | null)?.type === "shutdown") {
+    void gracefulShutdown("IPC shutdown");
+  }
+});
+if (process.send) {
+  exitWithParent(gracefulShutdown, { exit: (code) => process.exit(code) });
+}
 
 /**
  * host:port from DATABASE_URL for the startup log. Parsed rather than printed
@@ -102,6 +173,19 @@ async function provisionLocalDesktopUserIfNeeded(): Promise<void> {
       // expected - env file may not exist
     }
 
+    // The desktop app's fuses stop Node reading NODE_EXTRA_CA_CERTS itself.
+    if (process.env.NODE_EXTRA_CA_CERTS) {
+      const { cachedExtraCaCertificates, trustExtraCertificates } =
+        await import("./utils/extra-ca.js");
+      const certs = cachedExtraCaCertificates();
+      if (certs.length === 0 || !trustExtraCertificates(certs)) {
+        systemLogger.warn(
+          "NODE_EXTRA_CA_CERTS is set but no certificates could be added from it",
+          { operation: "extra_ca_certs" },
+        );
+      }
+    }
+
     systemLogger.info("Termix backend initialization started", {
       operation: "backend_init_start",
       nodeEnv: process.env.NODE_ENV || "production",
@@ -161,6 +245,8 @@ async function provisionLocalDesktopUserIfNeeded(): Promise<void> {
 
     const dbModule = await import("./database/db/index.js");
     await dbModule.initializeDatabase();
+    databaseOpen = true;
+    persistOnShutdown = needsExplicitPersist(databaseDialect);
     // Naming the engine makes a misconfiguration obvious: without it, a bad
     // DATABASE_DIALECT silently falls back to SQLite and looks like data loss.
     systemLogger.success(`Database initialized (${databaseDialect})`, {
@@ -200,9 +286,9 @@ async function provisionLocalDesktopUserIfNeeded(): Promise<void> {
     const { runCoreBootMigrations } = await import("./boot.js");
     await runCoreBootMigrations();
 
-    const { hostStatusService } =
-      await import("./hosts/status/host-status-service.js");
-    hostStatusService.start();
+    // Status comes from whichever plugin provides it; none means unknown.
+    const { hostStatus } = await import("./plugins/host-status-provider.js");
+    hostStatus.start();
 
     // Counted before the desktop user is provisioned, so a first desktop
     // run counts as a fresh install too.
@@ -226,7 +312,7 @@ async function provisionLocalDesktopUserIfNeeded(): Promise<void> {
     // Plugins serve their routes under /plugin-api/<id>/ and /plugin-ws/<id>/
     // through ctx on activate, and start their own schedulers there, so
     // disabling one answers 503 instead of leaving a dead import here. The
-    // dashboard's own uptime and recent-activity routes are core and are
+    // dashboard's uptime and recent-activity routes are core forwarders and are
     // mounted on the main server in database.ts.
 
     // Initialize log level from database settings
@@ -243,6 +329,27 @@ async function provisionLocalDesktopUserIfNeeded(): Promise<void> {
     // Last, so a plugin's activate() sees a fully wired server. A plugin that
     // fails to load must not stop the backend, so this never rejects.
     try {
+      const { startAdminAlerts } = await import("./notify/admin-alerts.js");
+      startAdminAlerts();
+      const { startMemoryWatch } = await import("./plugins/sandbox/memory.js");
+      startMemoryWatch();
+      const { startAuditChainChecks } = await import("./utils/audit-chain.js");
+      startAuditChainChecks();
+      const { startAdminHolds } = await import("./auth/admin-holds.js");
+      startAdminHolds();
+      const { startRecoveryWatch } = await import("./recovery/requests.js");
+      startRecoveryWatch();
+    } catch (error) {
+      systemLogger.warn("Security checks failed to start", {
+        operation: "security_checks_start",
+        error: getErrorMessage(error),
+      });
+    }
+
+    try {
+      const { startOperationsMaintenance } =
+        await import("./operations/maintenance.js");
+      await startOperationsMaintenance();
       const { initializePlugins } = await import("./plugins/index.js");
       const loaded = await initializePlugins({ freshInstall });
       if (loaded.length > 0) {
@@ -258,6 +365,15 @@ async function provisionLocalDesktopUserIfNeeded(): Promise<void> {
       const { startPluginAutoUpdate } =
         await import("./plugins/auto-update.js");
       startPluginAutoUpdate();
+      const { startTrustChecks } = await import("./plugins/revocations.js");
+      startTrustChecks();
+
+      const inventoryFile = process.env.TERMIX_ROUTE_INVENTORY_FILE;
+      if (inventoryFile) {
+        const { writeRouteInventory } =
+          await import("./plugins/route-inventory.js");
+        writeRouteInventory(inventoryFile);
+      }
     } catch (error) {
       systemLogger.warn("Plugin runtime failed to initialize", {
         operation: "plugin_init",
@@ -265,17 +381,15 @@ async function provisionLocalDesktopUserIfNeeded(): Promise<void> {
       });
     }
 
-    // After plugins, so their sync entities are registered before a pass.
+    // Sync itself starts with the plugin that provides it.
     if (process.env.ELECTRON_EMBEDDED === "true") {
       try {
-        const { startDesktopSync } = await import("./sync/client/engine.js");
-        startDesktopSync();
         const { startDesktopUpdateCheck } =
           await import("./updates/desktop-update-check.js");
         startDesktopUpdateCheck();
       } catch (error) {
-        systemLogger.warn("Desktop sync failed to start", {
-          operation: "sync_start",
+        systemLogger.warn("Desktop update check failed to start", {
+          operation: "update_check_start",
           error: getErrorMessage(error),
         });
       }
@@ -293,49 +407,8 @@ async function provisionLocalDesktopUserIfNeeded(): Promise<void> {
       process.env.ELECTRON_EMBEDDED === "true" ||
       process.env.TERMIX_DEV_RELOAD === "true"
     ) {
-      process.send?.({ type: "backend-ready" });
+      sendToParent({ type: "backend-ready" });
     }
-
-    const gracefulShutdown = async (signal: string) => {
-      systemLogger.info(`Received ${signal}, initiating graceful shutdown...`, {
-        operation: "shutdown",
-      });
-
-      // Terminate plugin workers before the database goes away, so a plugin
-      // mid-write cannot outlive it.
-      try {
-        const { shutdownPlugins } = await import("./plugins/index.js");
-        await shutdownPlugins();
-      } catch {
-        // Nothing to stop.
-      }
-
-      // Only SQLite has anything to flush. On a client-server engine the writes
-      // committed as they happened, so there is no file to save and claiming
-      // otherwise in the log would be untrue.
-      if (needsExplicitPersist(databaseDialect)) {
-        try {
-          await DatabaseSaveTrigger.forceSave("shutdown_explicit_save");
-          systemLogger.info("Database saved to disk before exit", {
-            operation: "shutdown_db_saved",
-          });
-        } catch (error) {
-          systemLogger.error("Failed to save database during shutdown", error, {
-            operation: "shutdown_db_save_failed",
-          });
-        }
-      }
-      process.exit(0);
-    };
-
-    process.on("SIGINT", () => gracefulShutdown("SIGINT"));
-    process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
-
-    process.on("message", (msg: { type?: string }) => {
-      if (msg?.type === "shutdown") {
-        gracefulShutdown("IPC shutdown");
-      }
-    });
 
     if (process.env.TERMIX_DEV_RELOAD === "true") {
       const { listenForDevReloads } = await import("./plugins/dev-reload.js");

@@ -7,7 +7,9 @@
  * sha256 and signature checks and stays marked unverified. Bundled plugins ship in the
  * image and can still be uninstalled: their files are deleted and the id is
  * recorded in the settings table, so the shipped copy is ignored from then
- * on and a reinstall downloads the plugin like any other.
+ * on and a reinstall downloads the plugin like any other. The one exception
+ * is a default-look plugin (bundled-index.ts): the app is drawn with it, so
+ * it can be disabled or swapped but never uninstalled.
  */
 
 import crypto from "node:crypto";
@@ -15,6 +17,13 @@ import fs from "node:fs";
 import path from "node:path";
 import semver from "semver";
 import { pluginLogger } from "../utils/logger.js";
+import { isLegacyPlugin, isOfficialPlugin } from "./isolation.js";
+import {
+  isDefaultLookPlugin,
+  shippedCatalog,
+  startsEnabled,
+} from "./bundled-index.js";
+import { mayRunInSafeMode } from "./safe-mode.js";
 import {
   activatePlugin,
   deactivatePlugin,
@@ -22,6 +31,7 @@ import {
   registerLoadedPlugins,
   unloadPlugin,
 } from "./index.js";
+import { missingShippedPluginIds, newShippedPluginIds } from "./boot-state.js";
 import type { LoadedPlugin, PluginLoader } from "./loader.js";
 import {
   getBundledPluginsDir,
@@ -31,6 +41,7 @@ import {
 } from "./paths.js";
 import {
   OFFICIAL_REGISTRY_ID,
+  canRunRelease,
   downloadRelease,
   fetchRegistryIndex,
   channelReleases,
@@ -39,8 +50,10 @@ import {
   getRegistryStatus,
   isApiCompatible,
   latestOnChannel,
+  neededTermix,
   officialSource,
   parsePluginChannel,
+  PROVENANCE_SUFFIX,
   type PluginChannel,
   type RegistryIndex,
   type RegistryPlugin,
@@ -66,7 +79,7 @@ import {
   pluginFeatures,
   type PluginManifest,
 } from "./manifest.js";
-import { requireSignedPlugins } from "./trust.js";
+import { requireSignedPlugins, verifyAnyTrusted } from "./trust.js";
 import {
   parseChangelog,
   parseReleaseNotes,
@@ -254,10 +267,13 @@ export interface RegistryListing {
     videoId?: string;
     features: string[];
     docs?: string;
+    contributes: string[];
     versions: Array<{
       version: string;
       prerelease: boolean;
       compatible: boolean;
+      /** The Termix range this version needs, when this build is too old. */
+      needsTermix: string | null;
       capabilities: string[];
       publishedAt?: string;
       releaseNotesUrl?: string;
@@ -393,7 +409,7 @@ export async function listRegistry(
       const channel = channelOf(record);
       const latest = latestOnChannel(plugin, channel);
       const latestBeta =
-        plugin.prereleases.find((entry) => isApiCompatible(entry.api)) ?? null;
+        plugin.prereleases.find((entry) => canRunRelease(entry)) ?? null;
       const installedVersion =
         live?.manifest.version ?? record?.version ?? null;
       const updateAvailable = Boolean(
@@ -416,10 +432,12 @@ export async function listRegistry(
         videoId: plugin.videoId,
         features: plugin.features,
         docs: plugin.docs,
+        contributes: plugin.contributes,
         versions: channelReleases(plugin, "beta").map((entry) => ({
           version: entry.version,
           prerelease: Boolean(entry.prerelease),
-          compatible: isApiCompatible(entry.api),
+          compatible: canRunRelease(entry),
+          needsTermix: neededTermix(entry),
           capabilities: entry.capabilities,
           publishedAt: entry.publishedAt,
           releaseNotesUrl: entry.releaseNotesUrl,
@@ -459,7 +477,41 @@ async function removeArtifactFiles(
   for (const file of candidates) {
     await fs.promises.rm(file, { force: true });
     await fs.promises.rm(`${file}.sig`, { force: true });
+    await fs.promises.rm(`${file}${PROVENANCE_SUFFIX}`, { force: true });
   }
+}
+
+/**
+ * With the admin wait on, dangerous capabilities are not granted at install
+ * or update: they wait as one held change. Returns the ones held back.
+ */
+async function holdDangerousGrants(
+  plugin: LoadedPlugin,
+  missing: string[],
+  userId: string,
+): Promise<string[]> {
+  const { createHold, getHoldSettings, listHolds, needsHold } =
+    await import("../auth/admin-holds.js");
+  const held = needsHold(missing);
+  if (held.length === 0) return [];
+  const settings = await getHoldSettings();
+  if (!settings.active) return [];
+  const pending = (await listHolds()).some(
+    (hold) =>
+      hold.status === "pending" &&
+      hold.kind === "plugin_grant" &&
+      hold.summary.includes(`(${plugin.id})`),
+  );
+  if (!pending) {
+    await createHold({
+      kind: "plugin_grant",
+      payload: { pluginId: plugin.id, capabilities: held },
+      summary: `give the plugin ${plugin.manifest.name ?? plugin.id} (${plugin.id}) ${held.join(", ")}`,
+      requesterId: userId,
+      minutes: settings.minutes,
+    });
+  }
+  return held;
 }
 
 /** Grants every capability the manifest declares, after the admin agreed. */
@@ -473,8 +525,12 @@ async function grantDeclared(
   const granted = new Set(
     (await repository.listByPlugin(plugin.id)).map((g) => g.capability),
   );
-  for (const capability of plugin.manifest.capabilities) {
-    if (granted.has(capability)) continue;
+  const missing = plugin.manifest.capabilities.filter((c) => !granted.has(c));
+  const waiting = userId
+    ? await holdDangerousGrants(plugin, missing, userId)
+    : [];
+  for (const capability of missing) {
+    if (waiting.includes(capability)) continue;
     await repository.grant({
       pluginId: plugin.id,
       capability,
@@ -510,8 +566,12 @@ async function swapIn(
   const staged = useBundled
     ? null
     : "release" in source
-      ? await downloadRelease(pluginId, source.release, source.source.keys)
-      : { file: source.upload, signatureFile: `${source.upload}.sig` };
+      ? await downloadRelease(pluginId, source.release, source.source)
+      : {
+          file: source.upload,
+          signatureFile: `${source.upload}.sig`,
+          provenanceFile: `${source.upload}${PROVENANCE_SUFFIX}`,
+        };
 
   const finalFile = path.join(getPluginsDir(), `${pluginId}.tmxplug`);
   const backupDir = path.join(getDownloadsDir(), `${pluginId}.previous`);
@@ -531,6 +591,12 @@ async function swapIn(
         path.join(backupDir, "plugin.tmxplug.sig"),
       );
     }
+    if (fs.existsSync(`${previousArtifact}${PROVENANCE_SUFFIX}`)) {
+      await fs.promises.copyFile(
+        `${previousArtifact}${PROVENANCE_SUFFIX}`,
+        path.join(backupDir, `plugin.tmxplug${PROVENANCE_SUFFIX}`),
+      );
+    }
   }
 
   try {
@@ -541,6 +607,12 @@ async function swapIn(
       await moveWithRetry(staged.file, finalFile);
       if (fs.existsSync(staged.signatureFile)) {
         await moveWithRetry(staged.signatureFile, `${finalFile}.sig`);
+      }
+      if (fs.existsSync(staged.provenanceFile)) {
+        await moveWithRetry(
+          staged.provenanceFile,
+          `${finalFile}${PROVENANCE_SUFFIX}`,
+        );
       }
       plugin = await loader.loadArtifact(finalFile, loader.bundledIds());
     } else {
@@ -557,6 +629,7 @@ async function swapIn(
     if (staged) {
       await fs.promises.rm(staged.file, { force: true });
       await fs.promises.rm(staged.signatureFile, { force: true });
+      await fs.promises.rm(staged.provenanceFile, { force: true });
     }
   }
 }
@@ -574,6 +647,12 @@ async function restorePrevious(
       await fs.promises.copyFile(backup, previousArtifact);
       if (fs.existsSync(`${backup}.sig`)) {
         await fs.promises.copyFile(`${backup}.sig`, `${previousArtifact}.sig`);
+      }
+      if (fs.existsSync(`${backup}${PROVENANCE_SUFFIX}`)) {
+        await fs.promises.copyFile(
+          `${backup}${PROVENANCE_SUFFIX}`,
+          `${previousArtifact}${PROVENANCE_SUFFIX}`,
+        );
       }
       await loader.loadArtifact(previousArtifact, loader.bundledIds());
     } else if (
@@ -605,6 +684,11 @@ async function startAndRecord(pluginId: string): Promise<string> {
   try {
     await recordState(pluginId, "enabled", null);
     await activatePlugin(pluginId);
+    const plugin = getPluginRuntime().loader.get(pluginId);
+    if (plugin?.state === "blocked") {
+      await recordState(pluginId, "blocked", plugin.lastError);
+      return "blocked";
+    }
     return "active";
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -753,6 +837,13 @@ export async function setPluginStateUnlocked(
   if (!loader.get(pluginId)) {
     throw new PluginManageError("Plugin not found", 404, "NOT_FOUND");
   }
+  if (enabled && !mayRunInSafeMode(pluginId, loader.list())) {
+    throw new PluginManageError(
+      "Safe mode is on, so only layout and theme plugins can start",
+      409,
+      "SAFE_MODE",
+    );
+  }
   const plan = await planStateChange(pluginId, enabled);
 
   if (enabled) {
@@ -899,9 +990,12 @@ async function requireRelease(
       "NOT_IN_REGISTRY",
     );
   }
-  if (!isApiCompatible(found.release.api)) {
+  if (!canRunRelease(found.release)) {
+    const termix = neededTermix(found.release);
     throw new PluginManageError(
-      `${pluginId} ${found.release.version} does not run on this version of Termix`,
+      termix
+        ? `${pluginId} ${found.release.version} needs Termix ${termix}`
+        : `${pluginId} ${found.release.version} does not run on this version of Termix`,
       409,
       "INCOMPATIBLE",
     );
@@ -946,7 +1040,11 @@ export function installPlugin(
   return serialized(async () => {
     const { createCurrentPluginRepository } = await repos();
     const repository = createCurrentPluginRepository();
-    if (await repository.findById(pluginId)) {
+    // A record with no code is a plugin an older image shipped: install fills it in.
+    if (
+      (await repository.findById(pluginId)) &&
+      getPluginRuntime().loader.get(pluginId)
+    ) {
       throw new PluginManageError(
         "Plugin is already installed",
         409,
@@ -1005,6 +1103,135 @@ export function installPlugin(
   });
 }
 
+/**
+ * Called at boot before plugins start. A plugin the database has on but the
+ * image no longer ships (an update to a smaller image tag) is fetched from the
+ * official registry, so nothing an install used goes missing. One that cannot
+ * be fetched stays as it was and is tried again on the next start.
+ */
+export function restoreMissingPlugins(): Promise<LoadedPlugin[]> {
+  return serialized(async () => {
+    const { createCurrentPluginRepository } = await repos();
+    const repository = createCurrentPluginRepository();
+    const { loader } = getPluginRuntime();
+    const ids = missingShippedPluginIds(
+      await repository.listAll(),
+      new Set(loader.list().map((plugin) => plugin.id)),
+      await readUninstalled(),
+    );
+    const restored: LoadedPlugin[] = [];
+    // Shown on the Plugins tab, so a plugin that could not be fetched is not
+    // listed as working. It stays on and is tried again on the next start.
+    const markMissing = (id: string, message: string) =>
+      recordState(
+        id,
+        "failed",
+        `Not in this image and could not be downloaded: ${message}`,
+      ).catch(() => {});
+    for (const [index, id] of ids.entries()) {
+      try {
+        const record = await repository.findById(id);
+        const { source, release } = await requireRelease(
+          id,
+          record?.pinnedVersion ?? undefined,
+          channelOf(record),
+          OFFICIAL_REGISTRY_ID,
+        );
+        const plugin = await swapIn(id, { release, source });
+        await repository.update(id, {
+          registryId: source.id,
+          tier: tierFor(plugin, source),
+        });
+        await grantDeclared(plugin, null);
+        restored.push(plugin);
+        pluginLogger.info(
+          `Restored ${id}@${release.version} from the registry`,
+          {
+            operation: "plugin_restore_missing",
+          },
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        pluginLogger.warn(`Could not restore ${id}: ${message}`, {
+          operation: "plugin_restore_missing",
+        });
+        await markMissing(id, message);
+        // The registry is down or offline, so the rest would fail the same way.
+        if (
+          error instanceof PluginManageError &&
+          error.code === "REGISTRY_UNREACHABLE"
+        ) {
+          for (const rest of ids.slice(index + 1))
+            await markMissing(rest, message);
+          break;
+        }
+      }
+    }
+    return restored;
+  });
+}
+
+/**
+ * Called at boot on an existing install. A plugin this image's profile ships
+ * that the install never had and that is not on disk is fetched from the
+ * official registry and starts on only if it is recommended. Offline, nothing
+ * is recorded, so the next start tries again.
+ */
+export function installNewShippedPlugins(): Promise<LoadedPlugin[]> {
+  return serialized(async () => {
+    if (await isLinkedDesktop()) return [];
+    const catalog = shippedCatalog();
+    if (catalog.size === 0) return [];
+    const { createCurrentPluginRepository } = await repos();
+    const repository = createCurrentPluginRepository();
+    const { loader } = getPluginRuntime();
+    const ids = newShippedPluginIds(
+      catalog.keys(),
+      await repository.listAll(),
+      new Set(loader.list().map((plugin) => plugin.id)),
+      await readUninstalled(),
+    );
+    const added: LoadedPlugin[] = [];
+    for (const id of ids) {
+      try {
+        const { source, release } = await requireRelease(
+          id,
+          catalog.get(id)?.version,
+          "stable",
+          OFFICIAL_REGISTRY_ID,
+        );
+        const plugin = await swapIn(id, { release, source });
+        const enabled = startsEnabled(id);
+        await repository.update(id, {
+          registryId: source.id,
+          tier: "bundled",
+          state: enabled ? "enabled" : "disabled",
+          lastError: null,
+        });
+        await grantDeclared(plugin, null);
+        added.push(plugin);
+        pluginLogger.info(
+          `Added ${id}@${release.version} from the registry (${enabled ? "on" : "off"})`,
+          { operation: "plugin_install_shipped" },
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        pluginLogger.warn(`Could not add ${id}: ${message}`, {
+          operation: "plugin_install_shipped",
+        });
+        // A half made row would hide the plugin from the next try.
+        if (!loader.get(id)) await repository.delete(id).catch(() => false);
+        if (
+          error instanceof PluginManageError &&
+          error.code === "REGISTRY_UNREACHABLE"
+        )
+          break;
+      }
+    }
+    return added;
+  });
+}
+
 export function updatePlugin(
   pluginId: string,
   options: InstallOptions,
@@ -1036,6 +1263,19 @@ async function updateUnlocked(
       `${pluginId} ${release.version} is already installed`,
       409,
       "SAME_VERSION",
+    );
+  }
+  // Going back takes the admin naming the older version.
+  if (
+    !options.version &&
+    semver.valid(release.version) &&
+    semver.valid(live.manifest.version) &&
+    semver.lt(release.version, live.manifest.version)
+  ) {
+    throw new PluginManageError(
+      `${pluginId} ${release.version} is older than the installed ${live.manifest.version}`,
+      409,
+      "NOT_NEWER",
     );
   }
 
@@ -1085,6 +1325,58 @@ async function updateUnlocked(
     { operation: "plugin_update" },
   );
   return { id: pluginId, version: release.version, state };
+}
+
+/**
+ * A linked desktop gets plugin updates through its sync provider. If that
+ * provider is an official API 1 copy, it never runs, so nothing would ever
+ * update it and the desktop can't sync. It comes from the official registry
+ * instead. An API 1 plugin had all of core's reach, so the capabilities of
+ * its API 2 version are granted as asked.
+ */
+export function updateStuckSyncProvider(): Promise<string[]> {
+  return serialized(async () => {
+    if (!(await isLinkedDesktop())) return [];
+    const { loader } = getPluginRuntime();
+    const stuck = loader
+      .list()
+      .filter(
+        (plugin) =>
+          plugin.manifest.capabilities.includes("sync:provide") &&
+          isLegacyPlugin(plugin) &&
+          isOfficialPlugin(plugin),
+      );
+    const updated: string[] = [];
+    for (const plugin of stuck) {
+      try {
+        let done: { id: string; version: string };
+        try {
+          done = await updateUnlocked(plugin.id, { userId: null });
+        } catch (error) {
+          if (
+            !(error instanceof PluginManageError) ||
+            error.code !== "CAPABILITIES_ADDED"
+          ) {
+            throw error;
+          }
+          done = await updateUnlocked(plugin.id, {
+            userId: null,
+            acceptCapabilities: true,
+            capabilities: error.details?.capabilities as string[],
+          });
+        }
+        updated.push(done.id);
+      } catch (error) {
+        pluginLogger.warn(
+          `Could not update ${plugin.id}, which this desktop needs to sync: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          { operation: "plugin_update" },
+        );
+      }
+    }
+    return updated;
+  });
 }
 
 export interface UpdateAllResult {
@@ -1154,6 +1446,13 @@ export async function uninstallPluginUnlocked(
     throw new PluginManageError("Plugin not found", 404, "NOT_FOUND");
   }
   const shipped = loader.bundledIds().has(pluginId);
+  if (shipped && isDefaultLookPlugin(pluginId)) {
+    throw new PluginManageError(
+      "The default look cannot be uninstalled",
+      409,
+      "DEFAULT_LOOK",
+    );
+  }
 
   const dependents = dependentChain(pluginId, await enabledIds());
   if (dependents.length > 0) {
@@ -1206,7 +1505,11 @@ export async function uninstallPluginUnlocked(
 
 export function setPluginOptions(
   pluginId: string,
-  options: { autoUpdate?: boolean; pinned?: boolean; channel?: PluginChannel },
+  options: {
+    autoUpdate?: boolean;
+    pinned?: boolean;
+    channel?: PluginChannel;
+  },
 ): Promise<{
   autoUpdate: boolean;
   pinnedVersion: string | null;
@@ -1424,6 +1727,8 @@ interface StagedUpload {
   file: string;
   manifest: PluginManifest;
   expiresAt: number;
+  /** Set when the upload came with a .sig an official key made. */
+  official: boolean;
 }
 
 const uploads = new Map<string, StagedUpload>();
@@ -1447,6 +1752,31 @@ export interface UploadPreview {
   capabilities: string[];
   /** The version of an earlier upload this one replaces. */
   replaces: string | null;
+  /** The .sig sent with it was made by the official Termix key. */
+  official: boolean;
+}
+
+/**
+ * Checks a .sig sent with an upload. An official signature makes the file
+ * the same as a registry download, so it may stand in for one that could not
+ * be fetched (an offline install). Anything else is refused.
+ */
+function checkUploadSignature(
+  buffer: Buffer,
+  signature: string,
+): { official: boolean } {
+  const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
+  const result = verifyAnyTrusted(buffer, sha256, signature, {
+    mode: "download",
+  });
+  if (result.ok === false) {
+    throw new PluginManageError(
+      `The signature does not match this file: ${result.reason}`,
+      400,
+      "INVALID_SIGNATURE",
+    );
+  }
+  return { official: result.tier === "official" };
 }
 
 async function assertUploadsAllowed(): Promise<void> {
@@ -1492,12 +1822,28 @@ function validateUpload(buffer: Buffer): PluginManifest {
       "INCOMPATIBLE",
     );
   }
+  const termix = neededTermix({ engine: manifest.engine });
+  if (termix) {
+    throw new PluginManageError(
+      `${manifest.id} ${manifest.version} needs Termix ${termix}`,
+      409,
+      "INCOMPATIBLE",
+    );
+  }
   return manifest;
 }
 
-/** Only another upload of the same id can be replaced from a file. */
-async function assertReplaceable(pluginId: string): Promise<string | null> {
+/**
+ * Only another upload of the same id can be replaced from a file. An
+ * officially signed file may also fill in a plugin whose code is missing, like
+ * one that was on but could not be downloaded.
+ */
+async function assertReplaceable(
+  pluginId: string,
+  official = false,
+): Promise<string | null> {
   const { loader } = getPluginRuntime();
+  if (official && !loader.get(pluginId)) return null;
   if (loader.bundledIds().has(pluginId)) {
     throw new PluginManageError(
       `${pluginId} ships with Termix and can only be replaced by a signed release`,
@@ -1522,21 +1868,30 @@ async function assertReplaceable(pluginId: string): Promise<string | null> {
  * Checks an uploaded .tmxplug and holds it until the admin agrees to what
  * it asks for. Nothing is loaded yet.
  */
-export async function stageUpload(buffer: Buffer): Promise<UploadPreview> {
+export async function stageUpload(
+  buffer: Buffer,
+  signature: string | null = null,
+): Promise<UploadPreview> {
   await assertUploadsAllowed();
   await clearUploads(Date.now());
   const manifest = validateUpload(buffer);
-  const replaces = await assertReplaceable(manifest.id);
+  const { official } = signature
+    ? checkUploadSignature(buffer, signature)
+    : { official: false };
+  const replaces = await assertReplaceable(manifest.id, official);
 
   const token = crypto.randomBytes(16).toString("hex");
   const dir = getDownloadsDir();
   await fs.promises.mkdir(dir, { recursive: true });
   const file = path.join(dir, `upload-${token}.tmxplug`);
   await fs.promises.writeFile(file, buffer);
+  // Next to the file, where the loader looks for it.
+  if (signature) await fs.promises.writeFile(`${file}.sig`, signature);
   uploads.set(token, {
     file,
     manifest,
     expiresAt: Date.now() + UPLOAD_TTL_MS,
+    official,
   });
 
   return {
@@ -1549,6 +1904,7 @@ export async function stageUpload(buffer: Buffer): Promise<UploadPreview> {
     features: pluginFeatures(manifest.features),
     capabilities: [...manifest.capabilities],
     replaces,
+    official,
   };
 }
 
@@ -1578,7 +1934,7 @@ export function installUpload(
       );
     }
     assertConsent(options.capabilities, manifest.capabilities);
-    await assertReplaceable(pluginId);
+    await assertReplaceable(pluginId, upload.official);
 
     const { createCurrentPluginRepository } = await repos();
     const repository = createCurrentPluginRepository();
@@ -1591,6 +1947,7 @@ export function installUpload(
       plugin = await swapIn(pluginId, { upload: upload.file });
     } catch (error) {
       await fs.promises.rm(upload.file, { force: true });
+      await fs.promises.rm(`${upload.file}.sig`, { force: true });
       const { loader } = getPluginRuntime();
       if (before && wasEnabled && loader.get(pluginId)) {
         await startAndRecord(pluginId);
@@ -1603,7 +1960,7 @@ export function installUpload(
     }
 
     await repository.update(pluginId, {
-      tier: UNVERIFIED_TIER,
+      tier: upload.official ? "official" : UNVERIFIED_TIER,
       registryId: null,
       pinnedVersion: null,
       autoUpdate: false,
@@ -1627,7 +1984,7 @@ export function installUpload(
     }
     const state = await startAndRecord(pluginId);
     pluginLogger.warn(
-      `Installed unverified plugin ${pluginId}@${manifest.version} from a file`,
+      `Installed ${upload.official ? "officially signed" : "unverified"} plugin ${pluginId}@${manifest.version} from a file`,
       { operation: "plugin_install" },
     );
     return { id: pluginId, version: manifest.version, state };
@@ -1635,40 +1992,93 @@ export function installUpload(
 }
 
 /**
+ * Loads the copy in the bundled folder again. Running dependents stop first
+ * and start again after. `prepare` runs once the plugin is stopped, for work
+ * that needs its files out of use.
+ */
+async function reloadBundledUnlocked(
+  pluginId: string,
+  prepare?: (previous: LoadedPlugin | undefined) => Promise<void>,
+): Promise<{ id: string; version: string; state: string }> {
+  const { loader } = getPluginRuntime();
+  const previous = loader.get(pluginId);
+  if (previous && previous.source !== "bundled" && !prepare) {
+    throw new PluginManageError(
+      `${pluginId} is not loaded from the bundled folder`,
+      409,
+      "NOT_BUNDLED",
+    );
+  }
+  const dependents = previous
+    ? dependentChain(pluginId, await enabledIds()).filter(
+        (id) => loader.get(id)?.state === "active",
+      )
+    : [];
+  for (const id of dependents) await deactivatePlugin(id);
+  await unloadPlugin(pluginId);
+  if (prepare) await prepare(previous);
+
+  const plugin = await loader.loadBundled(pluginId);
+  await registerLoadedPlugins([plugin]);
+
+  let state = "stopped";
+  if ((await enabledIds()).has(pluginId)) {
+    const { missing } = dependencyChain(pluginId);
+    state = missing.length > 0 ? "blocked" : await startAndRecord(pluginId);
+  }
+  for (const id of [...dependents].reverse()) await startAndRecord(id);
+  return { id: pluginId, version: plugin.manifest.version, state };
+}
+
+/**
  * Loads the copy in the bundled folder again after it was rebuilt, for the
- * dev runner. Running dependents stop first and start again after.
+ * dev runner.
  */
 export function reloadBundledPlugin(
   pluginId: string,
 ): Promise<{ id: string; version: string; state: string }> {
+  return serialized(() => reloadBundledUnlocked(pluginId));
+}
+
+/**
+ * Puts a bundled plugin back to the copy that shipped with this install,
+ * dropping any update downloaded over it. The shipped version is pinned so
+ * auto update does not bring a broken release straight back; unpin it in the
+ * Plugins tab to follow updates again.
+ */
+export function restoreBundledPlugin(
+  pluginId: string,
+): Promise<{ id: string; version: string; state: string }> {
   return serialized(async () => {
+    if (!ID_PATTERN.test(pluginId)) {
+      throw new PluginManageError("Invalid plugin id", 400, "INVALID_ID");
+    }
     const { loader } = getPluginRuntime();
-    const previous = loader.get(pluginId);
-    if (previous && previous.source !== "bundled") {
+    if (!loader.bundledIds().has(pluginId) || !isBundledOnDisk(pluginId)) {
       throw new PluginManageError(
-        `${pluginId} is not loaded from the bundled folder`,
+        "This plugin has no bundled copy",
         409,
-        "NOT_BUNDLED",
+        "NO_BUNDLED_COPY",
       );
     }
-    const dependents = previous
-      ? dependentChain(pluginId, await enabledIds()).filter(
-          (id) => loader.get(id)?.state === "active",
-        )
-      : [];
-    for (const id of dependents) await deactivatePlugin(id);
-    await unloadPlugin(pluginId);
-
-    const plugin = await loader.loadBundled(pluginId);
-    await registerLoadedPlugins([plugin]);
-
-    let state = "stopped";
-    if ((await enabledIds()).has(pluginId)) {
-      const { missing } = dependencyChain(pluginId);
-      state = missing.length > 0 ? "blocked" : await startAndRecord(pluginId);
-    }
-    for (const id of [...dependents].reverse()) await startAndRecord(id);
-    return { id: pluginId, version: plugin.manifest.version, state };
+    const { createCurrentPluginRepository } = await repos();
+    const repository = createCurrentPluginRepository();
+    const result = await reloadBundledUnlocked(pluginId, async (previous) => {
+      await removeArtifactFiles(pluginId, previous?.artifact);
+      await fs.promises.rm(path.join(getUnpackedPluginsDir(), pluginId), {
+        recursive: true,
+        force: true,
+      });
+    });
+    await repository.update(pluginId, {
+      autoUpdate: false,
+      pinnedVersion: result.version,
+    });
+    await applyPin(pluginId, result.version);
+    pluginLogger.info(`Restored the bundled copy of ${pluginId}`, {
+      operation: "plugin_restore_bundled",
+    });
+    return result;
   });
 }
 

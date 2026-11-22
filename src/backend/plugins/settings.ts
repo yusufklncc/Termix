@@ -44,6 +44,10 @@ export type { PluginSettingsScope };
 export const CORE_SETTINGS_ALLOWLIST: readonly string[] = [
   "app_name",
   "notification_private_endpoint_allowlist",
+  // Read once by the branding provider to keep a pre-plugin install's branding.
+  "branding_app_name",
+  "branding_tagline",
+  "branding_logo",
 ];
 
 type ChangeListener = (value: unknown) => void;
@@ -186,6 +190,9 @@ export function declaredFields(
           labelKey: host.enableLabelKey,
           descriptionKey: host.enableDescriptionKey,
           default: host.enableDefault ?? false,
+          ...(host.enablePermission
+            ? { permission: host.enablePermission }
+            : {}),
         },
       ]
     : [];

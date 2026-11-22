@@ -1,5 +1,523 @@
 # Changelog
 
+## 2.11.0
+
+Plugin API 2.9.0. Needs Termix 26.11.2.
+
+### Added
+
+- `ctx.diagnostics.provide({ title, collect })` adds a section about the plugin's own state to the diagnostics report admins make. Core masks it and caps it at 64 KB. Termix 26.11.3
+- `app.openDiagnostics({ pluginId })` opens the diagnostics report page with this plugin first. In a frame it needs a click. Termix 26.11.3
+- `ctx.hosts.connectPolicy.disconnect(hostId, { reason })` ends every connection core holds open to a host, and `provide({ check, probes: true })` also gates status checks. Termix 26.11.3
+- `app.deepLinks.onOpen(listener)`: termix:// links the desktop app was opened with, replayed for a listener that starts late. Termix 26.11.3
+- `ctx.credentials.resolveLogin(credentialId)`: a saved credential's username and password, for a login the plugin makes itself, like a Quick Connect session. Only the user's own or shared credentials. Needs `credentials:read`. `QuickConnectLogin.credentialId` carries one from the browser without its secret, and `viewOnly` asks for a session without input. Termix 26.11.3
+- `useConfirm` takes a `checkbox` (`label`, `checked`, `onChange`, and text used while it is ticked), like Delete permanently. Termix 26.11.3 draws it, older versions ignore it
+- Data badges and text can carry an `icon`, a `color` and, for badges, a `variant` (`outline`, `filled` or `icon`). Termix 26.11.3 draws them, older versions ignore them
+- Login methods can offer `logoutRedirect(session)`: where to send the browser when a user signs out of a session the method made, like the identity provider's sign out page. Termix 26.11.3 uses it, older versions ignore it
+- `ctx.credentials.registerSecretResolver(scheme, resolve, { unlockTab })`: when `resolve` throws an error with code `unlock-required` for the person connecting, the connect answers access required with that tab, so clients offer Verify instead of failing. Termix 26.11.3
+- `registerAction(id, handler, { private: true })`: only your own plugin views may run the action, even when another plugin lists it in `uses`. Termix 26.11.3 enforces it, older versions ignore it
+- `app.registerHostTreeChildren({ id, when, useChildren })` lists containers, guests and the like under a host in layouts that draw a host tree, and `HostTreeChildren` from the `ui` entry reads them. Works from a frame. Termix 26.11.3
+
+## 2.10.1
+
+Plugin API 2.9.0. Needs Termix 26.11.2.
+
+### Fixed
+
+- `termix-plugin build` no longer writes the build folder into the bundle for `?url` imports, so the same plugin builds to the same file in any folder
+
+## 2.10.0
+
+Plugin API 2.9.0. Needs Termix 26.11.2.
+
+### Added
+
+- `useShellScroll(on)` in `/frontend`: Termix scrolls a framed tab instead of the page's own scroll box, so parts from other plugins on it move with the page
+- `PanelToolbar` in `/ui`: a sidebar panel's search, icon buttons and icon only add button on one row
+- `registerHostEditorSection({ simple: true })` shows a section in the simple host editor, and sections get an `advanced` prop so they can keep rarer fields for advanced
+- `declareActionSlot({ fit: "bar" })`: a framed button in the slot is as wide as its content and as tall as the bar, for buttons that fill a tab bar
+- `termix-plugin validate` warns when a panel stacks a full width `PanelSearch` over a labelled `AddButton`, and points to `PanelToolbar`
+
+### Fixed
+
+- `scriptShell` runs its command under `sh -c`, so host scripts work when the login shell is fish or csh
+
+## 2.9.0
+
+Plugin API 2.9.0. Needs Termix 26.11.2.
+
+### Added
+
+- `ctx.users` account calls for provisioning plugins: `get`, `findByUsername`, `findByEmail` and `listRoles` with `users:read`, and `create`, `update`, `setDisabled`, `delete`, `syncRoles` and `setAdmin` with `users:write`. Accounts a plugin makes have no password, and their first SSO or LDAP sign in with the same verified email is linked to them. Optional in the types, so check `typeof ctx.users.create === "function"` first
+- `ctx.http.router({ publicAuthorization: true })` passes the Authorization header to the declared public routes, for protocols with their own bearer token like SCIM. Termix API keys and session tokens are never passed
+- `createMockCtx` takes `accounts` and `roles` for `ctx.users`, and records changes in `accounts`
+
+- `/ui` calls for account management: `disableUser`, `enableUser`, `updateMyProfile`, `adminUpdateUserProfile`, `getAdminHostBypass`, `updateAdminHostBypass`, `getExternalSignupApproval`, `updateExternalSignupApproval`
+- `/ui` calls for invite links: `listUserInvites`, `createUserInvite`, `revokeUserInvite`, `checkUserInvite`, `acceptUserInvite`, `inviteLink`
+- `/ui` calls for the access review: `getAccessReview`, `downloadAccessReviewCsv`
+- `getUserList` takes a `status` filter, and `UserInfo` carries the display name, email, account state and last sign in
+- `AdminSection` includes `access`
+
+## 2.8.1
+
+Plugin API 2.8.0. Needs Termix 26.11.2.
+
+### Fixed
+
+- `net-guard` also refuses private IPv4 addresses written in IPv4-compatible (`::10.0.0.1`) or NAT64 (`64:ff9b::10.0.0.1`) form
+
+## 2.8.0
+
+Plugin API 2.8.0. Needs Termix 26.11.2.
+
+### Added
+
+- `ctx.desktop.local.fs.openInEditor(path)` opens a local file in the external editor the person picked in the desktop app, or with its default app. The app starts the editor, so the plugin needs no process grant
+- `ctx.schedule.keepAwake(reason, awake)` tells Termix the plugin has work that needs its process running. A plugin that calls it lets Termix stop the process when there is none, and its jobs shorter than the idle time then run only while it runs. Optional in the types, so call it as `ctx.schedule.keepAwake?.(...)`
+- `createMockCtx` records those reasons in `awake`
+- `ctx.desktop.grantView({ url, ignoreCert })` lets the plugin's frames show one page: `NativeView` from `/ui` takes the `grant` and Termix draws a native view on the desktop or a credentialless sandboxed iframe in a browser. Needs `desktop:window`. `createMockCtx` records them in `viewGrants`
+- `app.serial`: Web Serial through Termix for a plugin with `device:serial`. The browser's picker opens from a click and the plugin gets only the port the person picked
+- Login methods can describe themselves for the sign in screen: `fields` for form methods, `kind: "webauthn"` with `options` for passkeys, `placement` and per instance `views`. Second factors take a `prompt` (`code`, `fields` or `webauthn`)
+- `ctx.auth.registerWebAuthnCeremony` and `app.auth.webauthn(id, extra)` run WebAuthn steps from a plugin's own screens, such as adding a passkey. Termix runs the browser prompt and the plugin's server checks the answer. `createMockCtx` records them in `auth.webAuthnCeremonies`
+- `app.session.signOut()` and `app.session.reload()` for login policy plugins (`auth:policy`)
+
+### Changed
+
+- On the desktop app, plugin processes run on the app's pinned Node with the same flags as on a server, inside an OS sandbox. Desktop only code that used `fs` or `child_process` freely must move to `ctx.desktop.local`
+- `registerLoginMethod` and `registerSecondFactorUI` in a frame take only `enrollment`; the sign in steps are drawn from what the backend describes. `component` is optional and only works for plugins in the page
+- `NativeView` no longer takes `ignoreCert`. Only a grant from the plugin's server can trust a bad certificate
+- `termix-plugin validate` refuses theme CSS that loads anything from outside the plugin, through `url()`, `image-set()`, `src()`, root paths or CSS escapes
+- A plugin process now stops when idle unless it provides something on core's own request paths (logins, connects, sync, host status and locks, alerts, approvals, TLS, looks) or runs a job more often than the idle time. Operations, services, registry values, event listeners, settings hooks and jobs it registered stay with core and start the process again when called
+
+### Fixed
+
+- The sandbox mock of `createMockCtx` lets `ctx.auth.completeRedirectLogin` keep the live request, and hands login hooks a plain copy of the request, as a plugin process does
+
+## 2.7.1
+
+Plugin API 2.7.0. Needs Termix 26.11.2.
+
+### Fixed
+
+- `renderSlot` in `renderWithApp` draws a component part once, not twice, in a slot that is not a data slot
+
+## 2.7.0
+
+Plugin API 2.7.0. Needs Termix 26.11.2.
+
+### Added
+
+- Inside a frame, `useSlotContributions`, `useExtensions`, `getExtension` and `usePluginComponent` now return other plugins' parts. Their components draw as placeholders and Termix draws the real view over each one, so `ComponentSlot`, `ActionSlot` and `PluginComponent` work in frames too
+- `ForeignSlot` in `/ui` draws such a part with your own class, style and `interactive` flag; `ForeignInteractive` turns clicks off for every part inside it (an edit mode)
+- `useForeignOccluder` and `ForeignOccluder` in `/ui` hide other plugins' parts under a menu or popover you draw yourself. Popover, DropdownMenu, Select, Sheet, Dialog, AlertDialog, Tooltip, InlineView and PanePrompt do it already
+- `declareActionSlot` takes `fit: "overlay"`: the part covers the box, is see-through and only takes clicks while it draws something
+- A frame may place the parts of a slot it declared, an extension point or component id under its own plugin id, or any id in its manifest `contributes.uses`
+- `useShell()` answers inside a frame with a read only view: tabs, the active tab, splits, the user and whether it is mobile. `tabs.setActive` works right after the person used the frame
+- `renderWithApp` takes `others` with other plugins' slot parts, extension items and components for a plugin that draws them
+
+## 2.6.0
+
+Plugin API 2.6.0. Needs Termix 26.11.2.
+
+### Added
+
+- `ctx.operations.runs.cancel({ runId })` and `ctx.operations.runs.undo({ runId, confirmed })` cancel or undo a run from inside one of the plugin's own requests, as the person on that request. Needs `operations:invoke`
+- `app.stepUp()` asks the person to prove a second factor in a prompt the shell owns and answers true or false; a plugin never sees the code. In a frame it works only right after the person used the frame
+- `createMockCtx` answers `ctx.operations.runs` and records `runCalls`
+- Data slots: `registerSlotContribution` takes `kind: "data"` with a `useValue(context, rowKey)` hook that returns plain values (`bars`, `stat`, `badge`, `dot`, `text`). The shell draws them, and in a frame the hook runs in the background frame, so a row costs no iframe
+- `useValue` on `registerHostBadge`, `registerHostStatusIndicator` and `registerHostEditorToolbarItem`, which now work from a frame. Their `component` is optional and in-page only
+- `declareActionSlot` takes `shapes` and `rows` for data slots
+- `DATA_SLOTS` in `/manifest` lists the data slots in Termix
+- `DataSlot`, `DataValues`, `HostDataItems` and `parseDataValue` in `/ui` for slot owners and layouts
+- `renderWithApp` results have `readDataValues` and `renderHostItems`, and `renderSlot` draws data values
+- `termix-plugin validate` warns about a component in a data slot or per row slot, and about host badges, status indicators and toolbar items with a component
+
+## 2.5.0
+
+Plugin API 2.5.0. Needs Termix 26.11.2.
+
+### Added
+
+- `ctx.operations.approvals.decide({ approvalId, approve, comment })` approves or rejects a waiting action from inside one of the plugin's own requests, as the person on that request. Needs `operations:approve`
+- `checkFrameViews` in `/testing` renders every view a plugin registers and lists the core requests a plugin frame would be refused
+- `declareActionSlot` takes `fit` (`inline`, `content` or `fill`): how a framed plugin's component sizes itself in the slot
+- `createMockCtx` answers `ctx.operations.approvals.decide`
+
+## 2.4.0
+
+Plugin API 2.4.0. Needs Termix 26.11.2.
+
+### Added
+
+- `PluginHostLockProvider.lockedHosts()` lists every host a provider locks. A plugin process needs it to provide host locks
+- `ctx.hosts.status.provide`, `ctx.sync.provide` and `ctx.sync.host` work in a plugin process
+- `ctx.sync.host.desktop.connectionOrigin()` reads the desktop wide default for where connections start
+- `ctx.files.readEnvFile(name)` reads the file an admin named in a manifest `env` variable marked `"file": true`, such as a mounted config file. A plugin process can't read it itself
+- Manifest `env` entries take `"file": true`
+- Capability `config:secrets` and `ctx.files.readSecret({ env } | { file })` read a secret a config file points at, such as a Docker secret. Never Termix's own variables, key files or data folder
+- `createMockCtx({ envFiles, configSecrets })` answers `ctx.files.readEnvFile` and `readSecret`
+
+### Changed
+
+- In a plugin process, `ctx.sync.host.replica.orderSelfReferences`, an entity's `covers`, `http.normalizeServerUrl`, `plugins.lastRemote` and `plugins.localNames` return Promises
+- `createMockCtx({ sandbox: true })` takes host locks with `lockedHosts`, a host status provider and a sync provider
+
+## 2.3.0
+
+Plugin API 2.3.0. Needs Termix 26.11.2.
+
+### Added
+
+- `ctx.ssh.prepare`, `ctx.ssh.openTransport` and `ctx.ssh.jumpChain` work in a plugin process. Your own ssh2 client runs over a stream Termix opens, and Termix keeps the host key check
+- `forwardOut`, `forwardIn`, `unforwardIn` and the `tcp connection` event on clients from `ctx.ssh.connect`, `withConnection` and `jumpChain` in a plugin process. A `forwardOut` channel or any other stream works as `sock` for `ctx.ssh.connect`
+- `ctx.desktop.local` works in a plugin process, with streams for `fs.openRead`, `fs.openDownload`, `pluginFetch` and `pty.spawn`
+- Manifest `sandbox.workers` lets a plugin process start worker threads. Each worker keeps the process's limits, and workers from code strings are refused
+- `validate` warns when `package.json` builds workers but the manifest has no `sandbox.workers`
+- `ctx.network.lookup(name, { family })` looks up a host name on the Termix server and answers the first address or null. Needs `network:probe`. A plugin process can't look names up itself without `network:sockets`
+- `createMockCtx({ resolve })` answers `ctx.network.lookup`
+
+### Changed
+
+- Login methods, keyboard-interactive handlers and `ctx.auth.completeRedirectLogin` work in a plugin process. A login method gets a plain copy of the request, and `request.res.cookie`/`clearCookie` only set cookies named `tmxp_<id>_*`
+- An SSH auth provider's `onBanner` and `onKeyboardInteractive`, a keyboard-interactive handler's `detect` and `autoAnswerPasswords`, and `onBanner` from `ctx.ssh.prepare` may return a Promise. Await them. An answer that takes over 5 seconds counts as none
+- An SSH auth provider in a plugin process may also set the socket `timeout`
+- A sync entity's `shouldSync` may return a Promise. Termix waits for it, so one from a plugin process works
+- A plugin process gets `VERSION`, `TERMIX_DEPLOYMENT` (`desktop`, `docker` or `server`) and `TERMIX_SANDBOX_PLUGIN` (its id) from Termix, and `validate` no longer warns about reading them
+- `createMockCtx({ sandbox: true })` takes `ssh.prepare` with your own client and socket, a `sock` for `ssh.connect`, `ssh.openTransport`, `ssh.jumpChain` and `desktop.local`, and its `ssh.prepare` config names the host
+- `ctx.asUser` in a plugin process gives back exactly what its callback returned or threw, so a live object such as an SSH connection and your own error classes work
+- `PluginAuthPolicyProvider.allowRememberDevice` may return a Promise
+- `createMockCtx({ sandbox: true })` takes login methods, keyboard-interactive handlers, `completeRedirectLogin` and async banner hooks, and refuses a login method cookie outside `tmxp_<id>_*`
+
+### Fixed
+
+- `createMockCtx({ sandbox: true })` no longer refuses an `AbortSignal` in `ctx.fetch` or Drizzle queries in `ctx.db.batch`; a plugin process takes both
+- The test setup no longer fails a test now and then with "server closed before listening" when a test server first lands on a port fetch refuses
+
+## 2.2.1
+
+Plugin API 2.2.0. Needs Termix 26.11.2.
+
+### Added
+
+- `applyCertificateAuth` works in a plugin process: it puts the certificate on the config and Termix applies it to the real client. `isSandboxSshClient` and `SANDBOX_CERTIFICATE_FIELD` in `/ssh-certs`
+
+### Changed
+
+- An SSH auth provider's `onAuthFailed` and `connectOptions`, and `onAuthFailed` from `ctx.ssh.prepare`, may return a Promise. Await them
+- `createMockCtx({ sandbox: true })` lets a `process.run` handle's `exited` Promise through, reads `ctx.http.baseUrl(req)` without checking the request, and refuses `onBanner` and `onKeyboardInteractive` on an SSH auth provider, the way a plugin process does
+
+## 2.2.0
+
+Plugin API 2.2.0. Needs Termix 26.11.2.
+
+### Added
+
+- `ctx.audit.chain` (`audit:read`): `status()`, `verify()` and `checkHead(head)` for the audit log's hash chain
+- Stored and subscribed audit lines carry `hash` and `prevHash`
+- `/ui`: `getMyApiKeys`, `revokeMyApiKey`, `revokeAllMyApiKeys`, `revokeEveryoneSessions`, `getAdminHoldSettings`, `setAdminHoldMinutes`, `getAdminHolds`, `cancelAdminHold` and `isAdminHoldTicket`
+- `createMockCtx` takes `auditChain` for what `ctx.audit.chain` answers
+
+### Changed
+
+- `/ui` `createApiKey`: leave `expiresAt` out for the server's 90 days or pass null for never, and leave `scopes` out for read only or pass `["full"]`
+
+## 2.1.0
+
+Plugin API 2.1.0. A plugin API 2 frontend now runs in sandboxed frames. See "Frames" in PLUGIN-GUIDE.md.
+
+### Added
+
+- `app.frame` says whether the frontend runs in a frame and which one: the background frame or a view
+- `checkFrameApp` in `/testing` runs activate the way a frame does and lists what the shell would not get
+
+## 2.0.0
+
+Plugin API 2.0.0. Every plugin backend now runs in its own process. See "The plugin process" and "Moving from API 1" in PLUGIN-GUIDE.md.
+
+### Added
+
+- Manifest `sandbox` block: `schedules`, `events`, `registry`, `memoryMb` and `alwaysOn`
+- `ctx.db.batch()` runs writes in one transaction
+- `ctx.schedule.every` takes an `id`
+- Capability `network:sockets` for plugins that open their own listeners and connections
+- `CAPABILITY_PROCESS_GRANTS`, `modulesGrantedBy`, `SANDBOX_GATED_MODULES` and `SANDBOX_BLOCKED_MODULES` in `/capabilities`
+- `isLegacyPluginApi` and `LEGACY_PLUGIN_API_VERSION` in `/manifest`
+- `createMockCtx({ sandbox: true })` applies the rules of a plugin process in tests, with `sandboxContext`, `SandboxRuleError` and `assertCrossable`
+- `termix-plugin validate` warns about Node modules a plugin process can't use
+
+### Changed
+
+- `services.get`, `services.providers`, `registry.consume`, `registry.revoke`, `secrets.withdraw`, `hosts.sessionActive`, `ssh.poolKey`, `ssh.classifyKeyboardInteractive`, `ssh.requiresSecret`, `ssh.supportsBackground`, `auth.listSecondFactors`, `desktop.available` and `desktop.local.available` return Promises
+- `ctx.events.on` and `ctx.registry.provide` need the topic or key listed in the manifest `sandbox` block
+- The fake ctx answers those reads with Promises too
+
+## 1.1.6
+
+Plugin API 1.17.0.
+
+### Fixed
+
+- `execElevated` sends the sudo password on stdin instead of putting it in the command. `buildSudoCommand` no longer takes the password: send `sudoStdin(password)` as the command's stdin
+- `execCommand` takes an optional `stdin`
+
+## 1.1.5
+
+Plugin API 1.17.0.
+
+### Added
+
+- `@termix-ssh/plugin-sdk/net-guard` with `resolveTarget`, `pinnedLookup` and `isPrivateAddress`, so sockets a plugin opens itself get the same private address check as `ctx.fetch`
+- `/ui` exports `getHostKeyPolicy` and `updateHostKeyPolicy`, the admin switch that lets connections with nobody to ask trust a host's first key
+
+## 1.1.4
+
+Plugin API 1.17.0.
+
+### Added
+
+- `contributes.settings.host.enablePermission` limits who may change a plugin's host switch
+
+## 1.1.3
+
+Plugin API 1.16.0.
+
+### Fixed
+
+- `generateSshKeyPair` no longer hands out an unreadable key. ssh2 broke about 1 in 256 ed25519 keys
+
+## 1.1.2
+
+Plugin API 1.16.0.
+
+### Added
+
+- Sync entities take `matchOn`, columns that identify a row besides its syncId, so a row made on both sides (one per host) is merged instead of failing
+- `PluginHostRecord` has `hasPassword` and `hasSudoPassword`, so a plugin knows a saved password exists without seeing it
+- `ctx.credentials.setSshKeyCertificate` stores an OpenSSH certificate on one of the acting user's SSH key credentials, or clears it with `null`
+- `/ui` exports `ToolbarBand` (a toolbar row outside the PanelShell toolbar), `ToolbarSelect` (a small select for those rows) and `TOOLBAR_FIT` (the classes that make every control in a row 32px)
+- `PANEL.section`, the one inner layout for a SectionCard body
+- `TextAreaField` takes `fill`, so a config or log editor uses the rest of the height
+- `registerHostBadge` takes `useDot`. Every plugin's dots merge into one dot on the host row, with the worst tone and each reason in its tooltip. `/ui` exports `HostDotGroup` for layouts that draw host rows
+- `/ui` exports `getCredentialStorage` and `updateCredentialStorage`, and `HostPolicy` has `credentialStorage`
+- `LoginMethodUIProps` has `view`, the login page a method is drawn on
+- `ctx.auth.identities` lists, links and unlinks a user's external identities
+- Connect policy input has `stepUpAt`, and a `request` decision can set `requestKind: "verify"`
+- `/ui` exports `listStepUpFactors`, `challengeStepUp`, `verifyStepUp` and `useSecondFactors`, to ask a signed in user for a second factor
+- `/ui` exports `getHostDeviceAuth`, `setHostDeviceAuth`, `getFolderDeviceAuth` and `setFolderDeviceAuth` for logins kept on a desktop
+
+### Changed
+
+- Controls in the PanelShell toolbar, tab band and footer are all 32px, so small buttons line up with search boxes and selects
+- `Segmented` and `ViewToggle` match the height of inputs and buttons, and `Segmented` keeps its natural width
+- `FormFooter` buttons are full height
+- `PANEL.body` is `p-3`, the same padding `InlineView` gives a form
+- A body with a pinned footer no longer draws a closing line just above the footer's own line
+- The placeholder for a plugin view that is still starting uses `LoadingState`
+- `termix-plugin validate` warns about UI drift: raw loading spinners, small back buttons, native selects, stretched filters, filled headers, capped log views and footers that scroll away
+- A `ToolbarBand` right inside a `TileStack` leaves the line under it to the stack
+- `ListBadge` and `StatusBadge` keep their own width in a table cell instead of filling it
+
+### Fixed
+
+- `parseCpuLine` no longer counts guest and guest_nice twice, so CPU percent on hosts running VMs is no longer too high
+
+## 1.1.1
+
+Plugin API 1.15.0.
+
+### Added
+
+- `ctx.hosts.connectPolicy.provide` and the `hosts:connect-policy` capability, so a plugin can allow, deny or ask for an access request before an SSH or remote desktop session opens
+- SSH prepare outcomes can carry the error codes `access-denied` and `access-required` with a `requestTab`
+
+## 1.1.0
+
+Plugin API 1.15.0.
+
+### Added
+
+- `/ui` exports `TileGrid`, `TileFrame` and `TilePicker`, the 12 column tile grid the dashboard, the host page and Host Metrics share, plus `appendTile`, `flowTiles`, `removeTile`, `sanitizeTiles` and the `TileSlot` type
+- `registerDashboardCard` takes `entries`, so one card can be placed many times with its own `config`, and `defaultSize` for the grid
+- Dashboard cards get `config`, `setConfig` and `editMode`
+- `/ui` exports `TileWall` (a fixed grid of tiles with shared lines), `TileStack` and `TileColumn` (sections stacked with a line between), `TileEditBar`, and `SeamlessTileContext` with `useInSeamlessTile`
+- `/ui` exports `StatTile`, `InfoGrid`, `StatusDot`, `StatusBadge` and `statusTone`, `LoadingState`, `NoticePanel`, `Pager` with `usePaged` and `pageOf`, `DataTable` with `DataTableRow`, `SideNav` with `SideNavItem`, `PanelFrame` and `RefreshButton`
+- `InlineView` takes `stacked`, which lays SectionCards out in one column with lines between them
+- `GroupHeading` takes `plain`, which drops the rule after the title. Inside a tile layout that is the default
+
+### Changed
+
+- `Card`, `SectionCard`, `MetricCard` and `DataView` use the tile look: no fill, and inside a tile layout no box either. `DataView` grids sit edge to edge with shared lines
+
+## 1.0.25
+
+Plugin API 1.14.0.
+
+### Added
+
+- Host click behavior `hostPage` opens a host page when a plugin offers one
+- `createApiKey` takes scopes, to limit a key to actions
+
+## 1.0.24
+
+Plugin API 1.14.0.
+
+### Added
+
+- `app.registerHostSection` adds a card to the host page
+- `/ui` exports `HostTabEmbed`, which draws any tab type inside another view, the host section registry, and `operationsApi` for core's `/operations` routes
+
+## 1.0.23
+
+Plugin API 1.14.0.
+
+### Added
+
+- `contributes.operations` declares a plugin's actions, events, resources and signals, so Automations, Fleets, the assistant, the CLI, the phone app and the command palette can find them with no wiring
+- `ctx.operations` registers handlers, runs other plugins' declared actions, emits events and provides approval rules, with the new `operations:provide`, `operations:invoke` and `operations:approve` capabilities
+- `@termix-ssh/plugin-sdk/operations` has the types, input checks, redaction and JSON Schema for declared actions
+- `contributes.hostSections` declares cards for the host page
+
+## 1.0.22
+
+Plugin API 1.13.0.
+
+### Added
+
+- `contributes.mobile` in the manifest says how a plugin shows in the Termix mobile app: `webview`, `native` or `none`, with an optional mobile bundle, screen sizes, views and a note
+- `termix-plugin build` bundles `src/mobile` into the `contributes.mobile.entry` file, and `validate` checks that it exists
+- `@termix-ssh/plugin-sdk/frame-host` runs one plugin view outside the shell, with core's bridge, registries and CSS, so the mobile app can show `webview` plugins
+- SSH transport providers get the host's owner, sync id, connection origin and local only flag in `claims` and `open`, and core's SSH relay takes a `syncId` instead of a host id
+- `ctx.sync.host.entities.idsOf` maps sync ids to the local ids of the user's own rows of one type
+- Rail items take `useStatus` for a small ok, warning or error dot on the icon
+- `shell.editHost(hostId)` opens the editor of a saved host
+- A sync entity can be read only with `load`, `write` and `erase`, so a plugin can sync rows a user does not own, like a shared library, down to linked desktops
+- `getFolderAuthOverride` and `setFolderAuthOverride` in `@termix-ssh/plugin-sdk/ui` read and set a user's own login for the shared hosts in a folder
+
+### Fixed
+
+- `@termix-ssh/plugin-sdk/ui` is built in production mode, so outside Termix it no longer sends requests to the Vite dev server path
+- `execCommand` buffers output and decodes it once as strict UTF-8 with a GBK fallback, exposed as `decodeCommandOutput`, so messages from a Windows host on a legacy codepage are readable instead of � characters
+
+## 1.0.21
+
+Plugin API 1.12.0.
+
+### Added
+
+- `@termix-ssh/plugin-sdk/host-scripts`: Docker, Linux metrics, systemd, journal and OpenRC command builders and parsers, plus `scriptShell()` and `passwordSudoScript()` to send scripts to `bash -s` on stdin. It has no Node or ssh2 imports, so the Termix mobile app runs the same code
+
+## 1.0.20
+
+Plugin API 1.12.0.
+
+### Added
+
+- `columns` and `onColumns` on `ViewToggle` show a cards per row picker: Auto fits as many as the pane has room for, or pick 1 to 6
+- `size` and `minCardWidth` on `DataView`, so a card grid follows that pick, and the `GridSize` type
+- `usePluginPanelView` also keeps `columns`, the cards per row pick, with `setColumns`
+
+## 1.0.19
+
+Plugin API 1.11.0.
+
+### Added
+
+- `app.registerCompanionLayout` and `useCompanions`, so a plugin can let each host turn the panel bar on or off, move it and choose which panels show and in what order
+
+## 1.0.18
+
+Plugin API 1.10.0.
+
+### Added
+
+- `clientCert` on the sync link, link patch and remote target, and the `client_cert` remote error kind, so a sync plugin can link to a server that needs mutual TLS
+
+## 1.0.17
+
+Plugin API 1.9.0.
+
+### Added
+
+- `app.registerCompanion` and `app.toggleCompanion`, so a plugin can add a panel beside any host tab. The user opens, resizes and moves it, and the tab keeps running
+- `NativeView` in `@termix-ssh/plugin-sdk/ui`, which shows a web page in a native view in the desktop app, for sites that do not work in an iframe
+
+## 1.0.16
+
+Plugin API 1.8.0.
+
+### Added
+
+- `ctx.sync.provide` and the `sync:provide` capability, so a plugin can answer every /sync request
+- `ctx.ssh.transports.provide` and the `ssh:transport` capability, so a plugin can carry SSH connections over its own stream
+- `ctx.hosts.folders.ensure` and `removeEmpty`
+
+### Removed
+
+- The sync screens and calls in `@termix-ssh/plugin-sdk/ui`: `LinkServerDialog`, `ProxySettingsFields`, `useSyncStatus`, `refreshSyncStatus`, `setSyncStatus`, `getSyncConflicts`, `getSyncErrors`, `retrySyncErrors`, `settleSyncConflict`, `syncNow`, `unlinkServer`, `updateSyncSettings` and their types. They moved into the sync plugin
+
+## 1.0.15
+
+Plugin API 1.7.0.
+
+### Added
+
+- `ctx.auth.policy.provide` and the `auth:policy` capability, so a plugin can set an idle timeout, cap session length, turn off remember me and require a second factor
+- `ctx.auth.listSecondFactors` lists the second factors from every running plugin
+- `AuthEnrollmentSections` takes `factorsOnly`
+- `getHttpsSettings` and `updateHttpsSettings` in `@termix-ssh/plugin-sdk/ui`
+
+### Fixed
+
+- Plugin frontend tests against a locally linked SDK failed with a second copy of React
+
+## 1.0.14
+
+Plugin API 1.6.0.
+
+### Added
+
+- `ctx.hosts.locks.provide` and the `hosts:lock` capability, so a plugin can manage hosts that stay read only for everyone else and block adding hosts by hand
+- `ctx.hosts.setShares` to replace every grant on a host in one call
+- `ctx.credentials.list` returns the acting user's credentials by name, without secrets
+- `ctx.hosts.create` and `update` take `password`, `key`, `keyPassword`, `keyType`, `sudoPassword`, `protocolAuth` and `pluginEnable`
+
+## 1.0.13
+
+Plugin API 1.5.0.
+
+### Added
+
+- `runtime: "desktop"` in the manifest for a plugin that only loads on the desktop app
+- `desktop:local` and `ctx.desktop.local`: file system, local shell and machine info on the desktop app's own backend
+- `ctx.audit.subscribe`, `ctx.audit.list` and `ctx.audit.exportBatches` under `audit:read`
+- `ctx.hosts.importMany`, `importSshConfig`, `exportMany` and `registerImportNormalizer`, with the `hosts:export` capability
+- `ctx.credentials.publicKey` and `resolveKeyRefs`, `ctx.ssh.exec`, and `@termix-ssh/plugin-sdk/ssh-keys`
+- `ctx.hosts.status.provide` and `ctx.hosts.activity.provide` so a plugin can own host status and recent activity, with `ctx.network.tcpProbe`, `ctx.ssh.probe`, `ctx.hosts.probeTargets` and `ctx.hosts.sessionActive`
+- `registerHostStatusIndicator` and `registerHostEditorToolbarItem`, and `order` for host badges
+- Onboarding steps can sit in a `start` section, take a `position` and `replaces` a core step
+- A plugin can provide the app name, tagline and logo through the `<id>.brandingProvider` registry key
+
+## 1.0.12
+
+Plugin API 1.4.0.
+
+### Added
+
+- `contributes.layouts` and `app.registerLayout()` for a whole-app layout, with the `ui:layout` capability. Needs `engine.api` 1.4
+- `contributes.themes` for CSS-only themes, with the `ui:theme` capability. `termix-plugin validate` checks theme CSS and `pack` ships it
+- `useShell()` gives a layout the live shell: tabs, splits, hosts, docks, the command palette and the registries. The shell's home tab is left out until some plugin registers a `dashboard` tab type
+- `TabStage` and `ShellConfirmCapture` in `@termix-ssh/plugin-sdk/ui`, for a layout to place tabs
+- `validateThemeCss()` in `@termix-ssh/plugin-sdk/manifest`
+- `@termix-ssh/plugin-sdk/ui` also exports what a whole layout is built from: the API client, shared types, hooks, `useShellController()` and `APP_VERSION`. These reach into core, so they can change with a core release
+- `@termix-ssh/plugin-sdk/testing-host` exports the registries and permission seam a layout's own tests fill directly
+- A plugin that only holds themes needs no source: `termix-plugin build` writes an empty backend and `validate` does not ask for a frontend
+- `termix-plugin validate` flags `ui:layout` or `ui:theme` with nothing contributed, and a layout plugin with no frontend
+
+### Fixed
+
+- The manifest JSON schema lists the `notify:hub` and `plugins:read` capabilities
+- Plugin tests and type checks work with the SDK linked from a local Termix checkout
+
 ## 1.0.11
 
 Plugin API 1.3.0.

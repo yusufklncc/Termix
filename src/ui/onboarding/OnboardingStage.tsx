@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, ArrowRight, Loader2, LogOut } from "lucide-react";
 import { Button } from "@/components/button";
+import { LoadingState } from "@/components/loading-state";
 import { SurfaceScope } from "@/components/surface/surface-scope";
 import { useUiPreferencesContext } from "@/contexts/UiPreferencesContext";
 import { usePermissions } from "@/hooks/use-permissions";
 import { isElectron } from "@/lib/electron";
+import { TITLE_BAR_OFFSET } from "@/shell/TitleBar";
 import {
   getOnboardingPlugins,
   type OnboardingPluginList,
@@ -18,6 +20,7 @@ import {
 } from "./onboarding-registry";
 import {
   computeFlow,
+  isStepRelevant,
   ONBOARDING_ADMIN_PERMISSION,
   seenFor,
 } from "./onboarding-flow";
@@ -108,10 +111,13 @@ export function OnboardingStage({
     const live = computeFlow(candidates, seenAtStart.current, ctx);
     for (const step of live) sticky.current.add(step.id);
     // A step that was in the run stays in it (the picker stops being
-    // pending once applied), unless its plugin went away.
+    // pending once applied), unless its plugin went away or it no longer
+    // applies, like Security once no sign in plugin offers anything.
     const kept = allSteps.filter(
       (step) =>
-        sticky.current.has(step.id) && !live.some((s) => s.id === step.id),
+        sticky.current.has(step.id) &&
+        !live.some((s) => s.id === step.id) &&
+        (!!step.forcePending || isStepRelevant(step, ctx)),
     );
     return sortSteps([...live, ...kept]);
   }, [allSteps, ctx]);
@@ -222,11 +228,7 @@ export function OnboardingStage({
   const stageValue = useMemo(() => ({ plugins, setPlugins }), [plugins]);
 
   if (!permissionsLoaded || !step) {
-    return (
-      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-background">
-        <Loader2 className="size-5 animate-spin text-muted-foreground" />
-      </div>
-    );
+    return <LoadingState className="fixed inset-0 z-[60] bg-background" />;
   }
 
   const StepComponent = step.Component;
@@ -236,6 +238,7 @@ export function OnboardingStage({
     <OnboardingStageContext.Provider value={stageValue}>
       <div
         className="fixed inset-0 z-[60] overflow-y-auto bg-background text-foreground"
+        style={{ paddingTop: TITLE_BAR_OFFSET }}
         role="dialog"
         aria-modal="true"
         aria-label={t("onboarding.stageLabel")}

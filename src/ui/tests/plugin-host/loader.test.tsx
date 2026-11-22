@@ -1,4 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const lookApi = vi.hoisted(() => ({
+  getLook: vi.fn(async (): Promise<unknown> => {
+    throw new Error("no server");
+  }),
+  saveUserLook: vi.fn(),
+  saveDefaultLook: vi.fn(),
+}));
+vi.mock("@/api/look-api", () => lookApi);
+const framedStarts = vi.hoisted(() => [] as string[]);
+const framedReady = vi.hoisted(() => new Map<string, Promise<void>>());
+vi.mock("@/plugin-host/frames/frame-plugins", () => ({
+  startFramedPlugin: vi.fn(async (entry: { id: string }) => {
+    framedStarts.push(entry.id);
+    return {
+      handle: { app: {} },
+      dispose: () => {},
+      ready: framedReady.get(entry.id) ?? Promise.resolve(),
+    };
+  }),
+}));
 import { Puzzle } from "lucide-react";
 import type {
   FrontendModule,
@@ -9,10 +30,12 @@ import {
   configurePluginLoader,
   isPluginFrontendActive,
   orderForActivation,
+  pluginsBooted,
   resetPluginLoader,
   startPluginRuntime,
   startPreLoginPlugins,
   syncPlugins,
+  importWithRetry,
 } from "@/plugin-host/loader";
 import {
   getPluginRecord,
@@ -25,6 +48,14 @@ import {
 } from "@/sidebar/rail-items";
 import { getTabType, resetTabTypes } from "@/shell/tab-registry";
 import i18n from "@/i18n/i18n";
+import { resetLook } from "@/look/look-store";
+import {
+  getRegisteredLayout,
+  listLayouts,
+  resetPluginLayouts,
+  resetRegisteredLayouts,
+} from "@/look/layout-registry";
+import { getTheme, resetPluginThemes } from "@/look/theme-registry";
 
 function summary(
   id: string,
@@ -84,6 +115,11 @@ beforeEach(() => {
 
 afterEach(async () => {
   await resetPluginLoader();
+  resetLook();
+  resetRegisteredLayouts();
+  resetPluginLayouts();
+  resetPluginThemes();
+  window.history.replaceState(null, "", "/");
   resetPluginStore();
   resetRegisteredRailItems();
   resetTabTypes();
@@ -214,6 +250,54 @@ describe("plugin loader", () => {
     expect(railIds()).not.toContain("headless-panel");
   });
 
+  it("waits for a plugin the server is still starting, then loads it", async () => {
+    vi.useFakeTimers();
+    try {
+      const imported: string[] = [];
+      modules.slow = railPlugin("slow");
+      modules.after = railPlugin("after");
+      configurePluginLoader({
+        fetchPlugins: async () => plugins,
+        importFrontend: async (entry) => {
+          imported.push(entry.id);
+          return modules[entry.id];
+        },
+        loadLocale: async () => null,
+        injectCss: () => null,
+      });
+      plugins = [
+        summary("slow", { state: "activating" }),
+        summary("after", {
+          state: "active",
+          dependencies: { slow: "^1.0.0" },
+        }),
+      ];
+      await syncPlugins();
+      // The server answers 404 for its assets until it is running.
+      expect(imported).toEqual([]);
+      expect(getPluginRecord("slow")?.frontend).toBe("loading");
+      expect(getPluginRecord("after")?.frontend).toBe("loading");
+
+      plugins = [
+        summary("slow"),
+        summary("after", { dependencies: { slow: "^1.0.0" } }),
+      ];
+      await vi.advanceTimersByTimeAsync(5_000);
+      await syncPlugins();
+      expect(imported).toEqual(["slow", "after"]);
+      expect(railIds()).toContain("slow-panel");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips plugins safe mode keeps off", async () => {
+    modules.paused = railPlugin("paused");
+    plugins = [summary("paused", { state: "safe-mode" })];
+    await syncPlugins();
+    expect(railIds()).not.toContain("paused-panel");
+  });
+
   it("keeps every plugin when the pre-login list lands after sign-in", async () => {
     modules.login = railPlugin("login");
     modules.alpha = railPlugin("alpha");
@@ -248,6 +332,88 @@ describe("plugin loader", () => {
     expect(isPluginFrontendActive("login")).toBe(false);
     await startPreLoginPlugins({ retryFailed: true });
     expect(isPluginFrontendActive("login")).toBe(true);
+  });
+
+  it("starts framed plugins on the first sync after a pre-login load", async () => {
+    framedStarts.length = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify([summary("login", { frontendIsolation: "frame" })]),
+        ),
+    );
+    await startPreLoginPlugins();
+    expect(framedStarts).toEqual([]);
+
+    plugins = [
+      summary("login", { frontendIsolation: "frame" }),
+      summary("framed", { frontendIsolation: "frame" }),
+    ];
+    await startPluginRuntime();
+    expect(framedStarts.sort()).toEqual(["framed", "login"]);
+    expect(isPluginFrontendActive("framed")).toBe(true);
+  });
+
+  it("does not wait for a framed plugin's frame and marks a failed one", async () => {
+    let fail: (error: Error) => void = () => {};
+    framedReady.set(
+      "slow",
+      new Promise<void>((_resolve, reject) => {
+        fail = reject;
+      }),
+    );
+    plugins = [summary("slow", { frontendIsolation: "frame" })];
+    await startPluginRuntime();
+    expect(isPluginFrontendActive("slow")).toBe(true);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    fail(new Error("activate threw"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(isPluginFrontendActive("slow")).toBe(false);
+    expect(getPluginRecord("slow")?.frontend).toBe("failed");
+    framedReady.clear();
+  });
+
+  it("pluginsBooted waits for framed plugins still starting", async () => {
+    let finish: () => void = () => {};
+    framedReady.set(
+      "cold",
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    plugins = [summary("cold", { frontendIsolation: "frame" })];
+    await startPluginRuntime();
+    let booted = false;
+    void pluginsBooted().then(() => {
+      booted = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(booted).toBe(false);
+    finish();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(booted).toBe(true);
+    framedReady.clear();
+  });
+
+  it("pluginsBooted waits for a plugin the server is still starting", async () => {
+    vi.useFakeTimers();
+    try {
+      modules.late = railPlugin("late");
+      plugins = [summary("late", { state: "activating" })];
+      await startPluginRuntime();
+      let booted = false;
+      void pluginsBooted().then(() => {
+        booted = true;
+      });
+      await vi.advanceTimersByTimeAsync(200);
+      expect(booted).toBe(false);
+      plugins = [summary("late")];
+      await vi.advanceTimersByTimeAsync(3_200);
+      expect(booted).toBe(true);
+      expect(railIds()).toContain("late-panel");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("ignores a pre-login load started after sign-in", async () => {
@@ -391,5 +557,131 @@ describe("activation order", () => {
 
     expect(railIds()).toContain("alpha-panel");
     expect(railIds()).toContain("beta-panel");
+  });
+});
+
+describe("layouts and themes", () => {
+  function look(layoutId: string | null) {
+    return {
+      layoutId,
+      themeId: null,
+      defaults: { layout: null, theme: null },
+      defaultLook: { layout: null, theme: null },
+      safeLayout: false,
+      unavailable: [],
+    };
+  }
+
+  function layoutPlugin(id: string, layout: string): FrontendModule {
+    return {
+      activate(app: TermixApp) {
+        app.registerLayout({
+          id: layout,
+          label: layout,
+          component: () => null,
+        });
+      },
+    };
+  }
+
+  function layoutSummary(id: string, layout: string) {
+    return summary(id, {
+      contributes: { layouts: [{ id: layout, label: layout }] },
+    });
+  }
+
+  it("loads only the chosen layout's plugin", async () => {
+    lookApi.getLook.mockResolvedValueOnce(look("two"));
+    modules["one-layout"] = layoutPlugin("one-layout", "one");
+    modules["two-layout"] = layoutPlugin("two-layout", "two");
+    modules.alpha = railPlugin("alpha");
+    plugins = [
+      layoutSummary("one-layout", "one"),
+      layoutSummary("two-layout", "two"),
+      summary("alpha"),
+    ];
+
+    await startPluginRuntime();
+    expect(getPluginRecord("one-layout")?.frontend).toBe("inactive");
+    expect(getPluginRecord("two-layout")?.frontend).toBe("active");
+    expect(getPluginRecord("alpha")?.frontend).toBe("active");
+    expect(getRegisteredLayout("two")).toBeDefined();
+    expect(getRegisteredLayout("one")).toBeUndefined();
+    // Both can still be chosen.
+    expect(listLayouts().map((layout) => layout.id)).toEqual(
+      expect.arrayContaining(["one", "two"]),
+    );
+  });
+
+  it("loads no layout plugin in safe mode", async () => {
+    window.history.replaceState(null, "", "/?safe-layout=1");
+    lookApi.getLook.mockResolvedValueOnce(look("two"));
+    modules["two-layout"] = layoutPlugin("two-layout", "two");
+    plugins = [layoutSummary("two-layout", "two")];
+    await startPluginRuntime();
+    expect(getPluginRecord("two-layout")?.frontend).toBe("inactive");
+  });
+
+  it("refuses a layout the manifest does not declare", async () => {
+    lookApi.getLook.mockResolvedValueOnce(look("two"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    modules["two-layout"] = layoutPlugin("two-layout", "undeclared");
+    plugins = [layoutSummary("two-layout", "two")];
+    await startPluginRuntime();
+    expect(getPluginRecord("two-layout")?.frontend).toBe("failed");
+    expect(getPluginRecord("two-layout")?.error).toContain(
+      "contributes.layouts",
+    );
+  });
+
+  it("offers a running plugin's themes with their stylesheet", async () => {
+    plugins = [
+      summary("paper", {
+        frontend: false,
+        themeVersion: "t1",
+        contributes: {
+          themes: [
+            {
+              id: "paper",
+              label: "Paper",
+              mode: "light",
+              css: "themes/paper.css",
+            },
+          ],
+        },
+      }),
+    ];
+    await syncPlugins();
+    const theme = getTheme("paper");
+    expect(theme?.mode).toBe("light");
+    expect(theme?.cssHref).toContain(
+      "/plugin-assets/paper/_themes/paper.css?v=t1",
+    );
+  });
+});
+
+describe("importWithRetry", () => {
+  const noWait = async () => {};
+
+  it("tries a bundle that failed to load again under a new URL", async () => {
+    const load = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new TypeError("Failed to fetch dynamically imported module: x"),
+      )
+      .mockResolvedValueOnce({ ok: true });
+    await expect(
+      importWithRetry("http://h/plugin-assets/a/frontend.js?v=1", load, noWait),
+    ).resolves.toEqual({ ok: true });
+    expect(load.mock.calls.map((call) => call[0])).toEqual([
+      "http://h/plugin-assets/a/frontend.js?v=1",
+      "http://h/plugin-assets/a/frontend.js?v=1&retry=1",
+    ]);
+  });
+
+  it("does not retry a bundle that threw while running", async () => {
+    const load = vi.fn().mockRejectedValue(new Error("boom"));
+    await expect(importWithRetry("u", load, noWait)).rejects.toThrow("boom");
+    expect(load).toHaveBeenCalledTimes(1);
   });
 });

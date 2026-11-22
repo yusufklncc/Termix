@@ -9,8 +9,14 @@
  */
 
 import { Client } from "ssh2";
+import {
+  connectionGeneration,
+  cutSince,
+  trackConnection,
+} from "../open-connections.js";
 import { withConnection } from "../ssh-connection-pool.js";
 import { resolveHostById } from "../host-resolver.js";
+import { ConnectPolicyError } from "../connect-policy.js";
 import { buildConnectConfig } from "./build-connect-config.js";
 import {
   createAutoKeyboardInteractiveHandler,
@@ -72,6 +78,8 @@ export interface ConnectHostOptions {
    */
   sock?: MutableConnectConfig["sock"];
   log?: SshAuthLog;
+  /** Plugin id that asked for the connection. For connect policies. */
+  origin?: string;
 }
 
 export interface SshConnection {
@@ -88,8 +96,44 @@ export async function resolveConnectHost(
   userId: string,
 ): Promise<SshConnectHost> {
   if (typeof target !== "number") return target;
-  const host = await resolveHostById(target, userId);
-  if (!host) throw new SshHostNotFoundError(target);
+  let host: Awaited<ReturnType<typeof resolveHostById>>;
+  try {
+    host = await resolveHostById(target, userId);
+  } catch (error) {
+    if (error instanceof ConnectPolicyError) {
+      throw new SshConnectError({
+        status: "error",
+        code: error.code,
+        message: error.message,
+        ...(error.result.requestTab
+          ? { requestTab: error.result.requestTab }
+          : {}),
+        ...(error.result.requestKind
+          ? { requestKind: error.result.requestKind }
+          : {}),
+      });
+    }
+    throw error;
+  }
+  if (!host) {
+    // A shared host with no login for this user also resolves to null.
+    const { PermissionManager } =
+      await import("../../utils/permission-manager.js");
+    const access = await PermissionManager.getInstance().canAccessHost(
+      userId,
+      target,
+      "connect",
+    );
+    if (access.hasAccess) {
+      throw new SshConnectError({
+        status: "error",
+        code: "missing-secret",
+        message:
+          "You have no login for this host. Add your own login to it first.",
+      });
+    }
+    throw new SshHostNotFoundError(target);
+  }
   return host as unknown as SshConnectHost;
 }
 
@@ -99,6 +143,7 @@ export async function connectHost(
 ): Promise<SshConnection> {
   const host = await resolveConnectHost(target, options.userId);
   const client = options.client ?? new Client();
+  const generation = connectionGeneration(host.id);
 
   const { config, provider, outcome, env } = await buildConnectConfig(host, {
     userId: options.userId,
@@ -107,6 +152,7 @@ export async function connectHost(
     client,
     hostKeySocket: options.prompt?.hostKeySocket ?? null,
     interactive: !!options.prompt,
+    origin: options.origin,
     log: options.log,
     overrides: options.overrides,
   });
@@ -156,6 +202,18 @@ export async function connectHost(
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      // A connect policy ended this host's connections mid handshake.
+      if (cutSince(host.id, generation)) {
+        dispose();
+        reject(
+          Object.assign(new Error("Access to this host was ended"), {
+            code: "access-denied",
+          }),
+        );
+        return;
+      }
+      const untrack = trackConnection(host.id, dispose);
+      client.once("close", untrack);
       resolve();
     });
 
@@ -169,12 +227,14 @@ export async function connectHost(
       );
       if (authFailed && provider?.onAuthFailed) {
         try {
-          provider.onAuthFailed(host, env, {
-            error,
-            retries: 0,
-            canRetry: false,
-            methodNotAvailable: false,
-          });
+          void Promise.resolve(
+            provider.onAuthFailed(host, env, {
+              error,
+              retries: 0,
+              canRetry: false,
+              methodNotAvailable: false,
+            }),
+          ).catch(() => undefined);
         } catch {
           // cleanup hooks never mask the connect error
         }

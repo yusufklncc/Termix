@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import type { PluginSummary } from "@/api/plugins-api";
 import {
   resetPluginStore,
@@ -17,11 +17,7 @@ import {
   registerTabType,
   resetTabTypes,
 } from "@/shell/tab-registry";
-import {
-  registerDashboardCard,
-  resetDashboardCards,
-} from "@/dashboard/dashboard-cards-registry";
-import { PluginCardSlot } from "@/dashboard/DashboardTab";
+import { resetDashboardCards } from "@/dashboard/dashboard-cards-registry";
 import type { Host, Tab } from "@/types/ui-types";
 
 const shell = {
@@ -105,6 +101,20 @@ describe("view ownership", () => {
     expect(placeholder.textContent).toContain("plugins.runtime.needsPlugin");
   });
 
+  it("never saves the dashboard tab while the plugin owning it is off", () => {
+    setPluginSummaries([
+      owner({
+        enabled: false,
+        contributes: {
+          tabs: [
+            { id: "dashboard", titleKey: "t", icon: "Box", openFrom: ["rail"] },
+          ],
+        },
+      }),
+    ]);
+    expect(isPersistentTabType("dashboard")).toBe(false);
+  });
+
   it("shows a not-installed placeholder for a tab nobody owns, without throwing", () => {
     setPluginSummaries([]);
     render(<>{renderTabContent({ ...savedTab, type: "gone" }, { shell })}</>);
@@ -122,37 +132,5 @@ describe("view ownership", () => {
     });
     render(<>{renderTabContent(savedTab, { shell })}</>);
     expect(screen.getByText("gizmo on web-01")).toBeTruthy();
-  });
-
-  it("keeps a dashboard card's slot while its plugin is off", () => {
-    setPluginSummaries([owner({ enabled: false })]);
-    const view = render(
-      <PluginCardSlot
-        id="gizmo-card"
-        isVisible
-        onOpenSingletonTab={() => {}}
-      />,
-    );
-    expect(screen.getByTestId("plugin-view-placeholder").dataset.status).toBe(
-      "disabled",
-    );
-
-    act(() => {
-      setPluginSummaries([owner()]);
-      registerDashboardCard({
-        id: "gizmo-card",
-        pluginId: "gizmo",
-        titleKey: "t",
-        component: () => <span>gizmo card</span>,
-      });
-    });
-    view.rerender(
-      <PluginCardSlot
-        id="gizmo-card"
-        isVisible
-        onOpenSingletonTab={() => {}}
-      />,
-    );
-    expect(screen.getByText("gizmo card")).toBeTruthy();
   });
 });

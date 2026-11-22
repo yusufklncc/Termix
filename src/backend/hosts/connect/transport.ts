@@ -1,6 +1,6 @@
 /**
- * How the bytes get to a host: port knocking, a jump host chain or a SOCKS5
- * proxy, in that order. Sets config.sock and
+ * How the bytes get to a host: a transport a plugin provides, else port
+ * knocking, a jump host chain or a SOCKS5 proxy, in that order. Sets config.sock and
  * returns the jump client so the caller can close it with the connection.
  *
  * The proxy step asks one question -- "what should this host leave through?"
@@ -15,6 +15,7 @@ import { logger } from "../../utils/logger.js";
 import { createSocks5Connection } from "../../utils/socks5-helper.js";
 import { resolveHostGateway } from "./host-gateway.js";
 import { createJumpHostChain } from "../jump-host-chain.js";
+import { openProvidedTransport } from "./transport-providers.js";
 import { resolveSshConnectConfigHost } from "../ssh-dns.js";
 import { performPortKnocking } from "../terminal-auth-helpers.js";
 import type {
@@ -46,7 +47,7 @@ export interface OpenTransportOptions {
 
 export interface OpenedTransport {
   jumpClient: Client | null;
-  via: "direct" | "proxy" | "jump";
+  via: "direct" | "proxy" | "jump" | "provided";
 }
 
 function forwardThrough(
@@ -81,6 +82,20 @@ export async function openSshTransport(
   config: MutableConnectConfig,
   options: OpenTransportOptions = {},
 ): Promise<OpenedTransport> {
+  const provided = await openProvidedTransport({
+    id: host.id,
+    ip: host.ip,
+    port: host.port || 22,
+    userId: host.userId ?? null,
+    syncId: host.syncId ?? null,
+    connectionOrigin: host.connectionOrigin ?? null,
+    localOnly: Boolean(host.localOnly),
+  });
+  if (provided) {
+    config.sock = provided;
+    return { jumpClient: null, via: "provided" };
+  }
+
   if (
     options.portKnock !== false &&
     Array.isArray(host.portKnockSequence) &&

@@ -38,6 +38,11 @@ Thumbs.db
 /nul
 .env
 electron/build-info.cjs
+
+# Desktop plugin runtime, made by npm run plugin-runtime
+/.plugin-runtime/
+electron/plugin-runtime.lock.json
+native/plugin-jail/target/
 /.mcp.json
 /CLAUDE.md
 /old_db/
@@ -50,3 +55,4 @@ reports/
 # Jenkins keeps npm's download cache here, in the workspace that outlives
 # the build container.
 .npm-cache/
+/sbom.cdx.json

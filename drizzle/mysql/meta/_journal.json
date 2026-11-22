@@ -512,6 +512,90 @@
       "when": 1791935283211,
       "tag": "0072_unique_username",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "5",
+      "when": 1792357129912,
+      "tag": "0073_user_look_preferences",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "5",
+      "when": 1792374489419,
+      "tag": "0074_mature_puff_adder",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "5",
+      "when": 1792430772041,
+      "tag": "0075_session_policy",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "5",
+      "when": 1792945361809,
+      "tag": "0076_host_color_icon",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "5",
+      "when": 1793304929772,
+      "tag": "0077_shared_folder_auth_overrides",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "5",
+      "when": 1793765383557,
+      "tag": "0078_sweet_king_cobra",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "5",
+      "when": 1794025749101,
+      "tag": "0079_large_skrulls",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "5",
+      "when": 1794526286784,
+      "tag": "0080_elite_darwin",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "5",
+      "when": 1794585754716,
+      "tag": "0081_little_dark_phoenix",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "5",
+      "when": 1794847880590,
+      "tag": "0082_minor_jackpot",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "5",
+      "when": 1794850609619,
+      "tag": "0083_loose_norman_osborn",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "5",
+      "when": 1794963338301,
+      "tag": "0084_misty_madame_masque",
+      "breakpoints": true
     }
   ]
 }

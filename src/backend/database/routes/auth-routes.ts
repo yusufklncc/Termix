@@ -21,18 +21,52 @@ import {
 import {
   getLoginMethod,
   listLoginMethods,
+  listSecondFactors,
   type LoginMethod,
 } from "../../auth/registry.js";
+import { checkWebAuthnOptions } from "../../auth/login-descriptors.js";
+import type {
+  PluginLoginField,
+  PluginSecondFactorPrompt,
+} from "@termix-ssh/plugin-sdk/backend";
 import { isTrustedProxyAuthEnabled } from "../../utils/trusted-proxy-auth.js";
 import { LoginMethodError, type VerifiedIdentity } from "../../auth/types.js";
+import { rememberDeviceAllowed } from "../../auth/policy.js";
+import { redeemAppHandoff } from "../../auth/app-handoff.js";
+import { AuthManager } from "../../utils/auth-manager.js";
 
 export interface PublicLoginMethod {
   id: string;
   pluginId: string;
-  kind: "redirect" | "form";
+  kind: "redirect" | "form" | "webauthn";
   labelKey: string;
   icon?: string;
-  instances: Array<{ id: string; label: string; autoStart?: boolean }>;
+  fields?: PluginLoginField[];
+  placement?: "inline";
+  instances: Array<{
+    id: string;
+    label: string;
+    autoStart?: boolean;
+    views?: Array<"password" | "external">;
+  }>;
+}
+
+export interface PublicSecondFactor {
+  id: string;
+  pluginId: string;
+  labelKey: string;
+  prompt?: PluginSecondFactorPrompt;
+}
+
+/** How the login screen draws each registered second factor. */
+export function listPublicSecondFactors(): PublicSecondFactor[] {
+  ensureCoreLoginProviders();
+  return listSecondFactors().map((factor) => ({
+    id: factor.id,
+    pluginId: factor.pluginId,
+    labelKey: factor.labelKey,
+    ...(factor.prompt ? { prompt: factor.prompt } : {}),
+  }));
 }
 
 async function enabledInstances(method: LoginMethod) {
@@ -104,6 +138,7 @@ export async function listPublicLoginMethods(): Promise<PublicLoginMethod[]> {
             ...(instance.autoStart && method.kind === "redirect"
               ? { autoStart: true }
               : {}),
+            ...(instance.views ? { views: instance.views } : {}),
           }));
       } catch (error) {
         authLogger.warn("Login method could not describe itself", {
@@ -121,6 +156,10 @@ export async function listPublicLoginMethods(): Promise<PublicLoginMethod[]> {
       kind: method.kind,
       labelKey: method.labelKey,
       icon: method.icon,
+      ...(method.fields ? { fields: method.fields } : {}),
+      ...(method.placement === "inline"
+        ? { placement: "inline" as const }
+        : {}),
       instances,
     });
   }
@@ -219,7 +258,10 @@ export async function verifyFormLogin(
 ): Promise<void> {
   const method = methodOr404(req, res, methodId);
   if (!method) return;
-  if (method.kind !== "form" || !method.verify) {
+  if (
+    (method.kind !== "form" && method.kind !== "webauthn") ||
+    !method.verify
+  ) {
     res.status(400).json({ error: "Not a form login method" });
     return;
   }
@@ -237,13 +279,41 @@ export async function verifyFormLogin(
   }
 }
 
+/** A passkey method's options for the browser prompt. */
+export async function webauthnLoginOptions(
+  req: Request,
+  res: Response,
+  methodId: string,
+  instanceId: string | null,
+): Promise<void> {
+  const method = methodOr404(req, res, methodId);
+  if (!method) return;
+  if (method.kind !== "webauthn" || !method.options) {
+    res.status(400).json({ error: "Not a passkey login method" });
+    return;
+  }
+  try {
+    const options = checkWebAuthnOptions(
+      await method.options(req as never, instanceId),
+    );
+    if (!options) {
+      res.status(400).json({ error: "Passkey sign in is not available" });
+      return;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.json(options);
+  } catch (error) {
+    sendLoginError(res, error);
+  }
+}
+
 export function registerAuthRoutes(router: Router): void {
   /**
    * @openapi
    * /users/auth/methods:
    *   get:
    *     summary: List login methods
-   *     description: Public. The login methods with at least one enabled instance, for the login screen. Carries ids and labels only.
+   *     description: Public. The login methods with at least one enabled instance, for the login screen. Carries ids, labels, the fields and prompts the screen draws for each method and second factor, plus rememberDevice, false when the login policy turned remember me off.
    *     tags:
    *       - Auth
    *     responses:
@@ -252,11 +322,51 @@ export function registerAuthRoutes(router: Router): void {
    */
   router.get("/auth/methods", async (_req, res) => {
     try {
-      res.json({ methods: await listPublicLoginMethods() });
+      res.json({
+        methods: await listPublicLoginMethods(),
+        secondFactors: listPublicSecondFactors(),
+        rememberDevice: await rememberDeviceAllowed(),
+      });
     } catch (error) {
       authLogger.error("Failed to list login methods", error);
       res.status(500).json({ error: "Failed to list login methods" });
     }
+  });
+
+  /**
+   * @openapi
+   * /users/auth/app-handoff/redeem:
+   *   post:
+   *     summary: Finish a browser sign in for the mobile app
+   *     description: Public. Trades the one-time code a browser login gave the mobile app for the session. The verifier must hash (SHA-256, base64url) to the challenge the app sent with the login. Each code works once and only for two minutes.
+   *     tags:
+   *       - Auth
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             properties:
+   *               code:
+   *                 type: string
+   *               verifier:
+   *                 type: string
+   *     responses:
+   *       200:
+   *         description: The session token.
+   *       400:
+   *         description: The code is wrong, used or expired.
+   */
+  router.post("/auth/app-handoff/redeem", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const token = redeemAppHandoff(req.body?.code, req.body?.verifier);
+    const valid =
+      token && (await AuthManager.getInstance().verifyJWTToken(token));
+    if (!token || !valid) {
+      return res.status(400).json({ error: "Invalid or expired code" });
+    }
+    res.json({ token });
   });
 
   /**
@@ -474,6 +584,37 @@ export function registerAuthRoutes(router: Router): void {
    *       404:
    *         description: Unknown login method.
    */
+  /**
+   * @openapi
+   * /users/auth/{methodId}/options:
+   *   post:
+   *     summary: Start a passkey login
+   *     description: Public. The options for the browser's passkey prompt for a passkey login method. The answer goes to /users/auth/{methodId}/verify with the context these options carry.
+   *     tags:
+   *       - Auth
+   *     parameters:
+   *       - in: path
+   *         name: methodId
+   *         required: true
+   *         schema:
+   *           type: string
+   *     responses:
+   *       200:
+   *         description: publicKey options and context.
+   *       400:
+   *         description: Not a passkey method, or passkey sign in is off.
+   *       404:
+   *         description: Unknown login method.
+   */
+  router.post("/auth/:methodId/options", (req, res) =>
+    webauthnLoginOptions(
+      req,
+      res,
+      String(req.params.methodId),
+      instanceParam(req),
+    ),
+  );
+
   router.post("/auth/:methodId/verify", (req, res) =>
     verifyFormLogin(req, res, String(req.params.methodId), instanceParam(req)),
   );

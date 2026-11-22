@@ -46,6 +46,8 @@ const UNGATED: Record<string, string> = {
   "events.on": "namespace check: plugin.* only without events:core",
   "sync.registerEntity": "adds the plugin's own table to remote sync",
   "registry.provide": "the plugin's own registry key",
+  "diagnostics.provide":
+    "adds the plugin's own report section, which only admins read",
   "registry.consume": "reads what another plugin chose to publish",
   "registry.revoke": "removes the plugin's own registry key",
   "services.provide": "only services declared in manifest provides",
@@ -65,20 +67,26 @@ const UNGATED: Record<string, string> = {
     "the plugin's own host settings, as a user's defaults",
   "settings.setHost": "the plugin's own host settings",
   "settings.getAll": "the plugin's own settings",
+  "files.readEnvFile":
+    "only a file the admin named in the plugin's own env, never core's files; audited once per variable",
   "settings.onChange": "the plugin's own settings",
   "settings.onValidate": "the plugin's own settings",
   "rbac.has": "answers for the actor only",
   "rbac.hasFor": "a yes/no about a role permission, grants nothing",
   "rbac.require": "route middleware for the plugin's own permissions",
   "capabilities.has": "a yes/no about the plugin's own grants",
+  "auth.listSecondFactors": "ids of the second factors, no user data",
   "disposables.add": "the plugin's own cleanup",
   "schedule.every": "the plugin's own timers",
   "schedule.after": "the plugin's own timers",
+  "schedule.keepAwake":
+    "keeps the plugin's own process running, grants nothing",
   "audit.record": "writes under the runtime's actor, never a plugin value",
   asUser:
     "audited as plugin_as_user (identical successful repeats coalesced for 10 minutes)",
   currentActor: "reads the actor, cannot set it",
   "desktop.available": "a yes/no about the environment",
+  "desktop.local.available": "a yes/no about the environment",
   "http.baseUrl": "reads the request's public origin",
   "ssh.poolKey": "a string built from a host the plugin already holds",
   "ssh.dropPooled": "closes only this plugin's own pooled connections",
@@ -162,7 +170,15 @@ describe("every privileged ctx member is guarded", () => {
       let caught: unknown;
       await runAsActor(ACTOR, "request", async () => {
         try {
-          await member.fn(...PLACEHOLDER_ARGS);
+          const result = await member.fn(...PLACEHOLDER_ARGS);
+          // An async generator only runs its guard on the first next().
+          if (
+            result &&
+            typeof (result as AsyncGenerator).next === "function" &&
+            Symbol.asyncIterator in (result as object)
+          ) {
+            await (result as AsyncGenerator).next();
+          }
         } catch (error) {
           caught = error;
         }

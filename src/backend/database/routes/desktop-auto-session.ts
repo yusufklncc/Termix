@@ -1,5 +1,7 @@
+import crypto from "crypto";
 import type { Request } from "express";
 import type { UserRecord } from "../repositories/user-repository.js";
+import { isDesktopAppOrigin } from "../../utils/cors-config.js";
 
 export function isLoopbackRequest(req: Request): boolean {
   // Requests relayed by the bundled nginx always carry X-Real-IP, which
@@ -26,10 +28,53 @@ export function isLoopbackRequest(req: Request): boolean {
  * embedded desktop backend, or a development backend the desktop app points
  * at. A production server never does, whoever asks.
  */
+// The desktop app makes a new one each launch and sends it on its own
+// requests, so another program or another user on the same machine can't
+// reach the loopback port and get a session. Taken out of the environment
+// so nothing started later inherits it.
+let launchSecret = process.env.TERMIX_DESKTOP_LAUNCH_SECRET || "";
+delete process.env.TERMIX_DESKTOP_LAUNCH_SECRET;
+
+export function setLaunchSecretForTests(secret: string): void {
+  launchSecret = secret;
+}
+
+function launchSecretMatches(sent: unknown): boolean {
+  if (!launchSecret) return true;
+  if (typeof sent !== "string") return false;
+  const a = Buffer.from(sent);
+  const b = Buffer.from(launchSecret);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 export function allowsDesktopAutoSession(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   return env.ELECTRON_EMBEDDED === "true" || env.NODE_ENV !== "production";
+}
+
+/** Why the auto-session must be refused for this request, or null. */
+export function desktopAutoSessionRefusal(
+  req: Request,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  if (!allowsDesktopAutoSession(env)) return "not a desktop backend";
+  if (!isLoopbackRequest(req)) return "not loopback";
+  const origin = req.headers.origin;
+  if (origin !== undefined && !isDesktopAppOrigin(origin)) return "origin";
+  // A custom header makes any browser page send a CORS preflight first,
+  // which a foreign origin fails.
+  if (req.headers["x-electron-app"] !== "true") return "not the app";
+  if (!launchSecretMatches(req.headers["x-termix-launch"])) {
+    return "launch secret";
+  }
+  // The app's own page sits on another scheme, so it reads as cross site.
+  // With no Origin to name it, a cross site call is someone else's page.
+  const site = req.headers["sec-fetch-site"];
+  if (!origin && (site === "cross-site" || site === "same-site")) {
+    return "cross site";
+  }
+  return null;
 }
 
 export function extractBearerOrCookieToken(req: Request): string | undefined {
@@ -61,14 +106,22 @@ export function isNativeTokenExportRequest(req: Request): boolean {
  * during testing, or a household sharing one install) -- a user in that
  * state deserves to get into the app they installed, not a confusing,
  * unexplained dead end. So this always returns a single, deterministic
- * user: the admin account if one exists, else the earliest-registered
- * account. It never returns null.
+ * user: the account the user switched to if it still exists, else the admin
+ * account if one exists, else the earliest-registered account. It never
+ * returns null when there are users.
  */
 export function resolveDesktopAutoSessionUser(
   allUsers: UserRecord[],
+  preferredId?: string | null,
 ): UserRecord | null {
   if (allUsers.length === 0) return null;
   if (allUsers.length === 1) return allUsers[0];
+
+  // An account the user switched to on purpose, while it still exists.
+  const preferred = preferredId
+    ? allUsers.find((user) => user.id === preferredId)
+    : undefined;
+  if (preferred) return preferred;
 
   const admin = allUsers.find((user) => user.isAdmin);
   if (admin) return admin;

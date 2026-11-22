@@ -1,4 +1,4 @@
-import { createPrivateKey } from "node:crypto";
+import { createHash, createPrivateKey } from "node:crypto";
 import sshpk from "sshpk";
 import { getErrorMessage } from "./error-message.js";
 import ssh2Pkg from "ssh2";
@@ -245,11 +245,78 @@ function getUnsupportedPrivateKeyError(privateKeyData: string): string {
   return "Unsupported private key format. Use an OpenSSH, PEM, or PuTTY PPK v2 RSA/DSA private key.";
 }
 
+const SECURITY_KEY_ERROR =
+  "This is a security key (FIDO2) key file. It only holds a handle, so the key itself must sign on your device. Load it with ssh-add and use SSH agent authentication in the desktop app.";
+
+/** An OpenSSH private key file for a FIDO2 security key (sk-ssh-ed25519, sk-ecdsa). */
+export function isSecurityKeyFile(privateKeyData: string): boolean {
+  const match = privateKeyData.match(
+    /-----BEGIN OPENSSH PRIVATE KEY-----([\s\S]*?)-----END OPENSSH PRIVATE KEY-----/,
+  );
+  if (!match) return false;
+  try {
+    const body = Buffer.from(match[1].replace(/\s+/g, ""), "base64");
+    return /sk-(?:ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com/.test(
+      body.toString("latin1"),
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Unlocking an OpenSSH key runs bcrypt on the main thread (about a second per
+// try), and every connect used to do it 3 or more times. Keep the unlocked copy
+// in memory for a short while so a burst of connects pays for it once.
+const UNLOCKED_KEY_TTL_MS = 15 * 60 * 1000;
+const UNLOCKED_KEY_MAX = 64;
+const unlockedKeys = new Map<string, { text: string; expires: number }>();
+
+function unlockOpenSSHKey(cleanKey: string, passphrase?: string): string {
+  if (
+    !passphrase ||
+    !cleanKey.startsWith("-----BEGIN OPENSSH PRIVATE KEY-----")
+  )
+    return cleanKey;
+  const id = createHash("sha256")
+    .update(cleanKey)
+    .update("\n")
+    .update(passphrase)
+    .digest("hex");
+  const now = Date.now();
+  const hit = unlockedKeys.get(id);
+  if (hit && hit.expires > now) return hit.text;
+  unlockedKeys.delete(id);
+  let text: string;
+  try {
+    text = parsePrivateKey(cleanKey, "openssh", { passphrase }).toString(
+      "openssh",
+    );
+  } catch {
+    // Wrong passphrase or a cipher sshpk lacks; the normal path reports it.
+    return cleanKey;
+  }
+  if (ssh2Utils.parseKey(text) instanceof Error) return cleanKey;
+  if (unlockedKeys.size >= UNLOCKED_KEY_MAX) {
+    const oldest = unlockedKeys.keys().next().value;
+    if (oldest !== undefined) unlockedKeys.delete(oldest);
+  }
+  unlockedKeys.set(id, { text, expires: now + UNLOCKED_KEY_TTL_MS });
+  return text;
+}
+
+export function clearUnlockedKeyCache(): void {
+  unlockedKeys.clear();
+}
+
 export function preparePrivateKeyForSSH2(
   privateKeyData: string,
   passphrase?: string,
 ): Buffer {
-  let cleanKey = normalizePrivateKeyText(privateKeyData);
+  if (isSecurityKeyFile(privateKeyData)) throw new Error(SECURITY_KEY_ERROR);
+  let cleanKey = unlockOpenSSHKey(
+    normalizePrivateKeyText(privateKeyData),
+    passphrase,
+  );
   if (
     /^-----BEGIN (?:ENCRYPTED )?PRIVATE KEY-----/.test(cleanKey) &&
     ssh2Utils.parseKey(cleanKey, passphrase) instanceof Error

@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import ssh2 from "ssh2";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { generateSshKeyPair } from "../../../../../packages/plugin-sdk/src/ssh-keys.js";
 import { FakeSshClient } from "./pipeline-test-helpers.js";
 
 vi.mock("ssh2", async (importOriginal) => {
@@ -25,6 +25,18 @@ const mocks = vi.hoisted(() => ({
   createJumpHostChain: vi.fn(),
   createSocks5Connection: vi.fn(),
   resolveHostById: vi.fn(),
+  findUsableCredential: vi.fn(),
+  canAccessHost: vi.fn(),
+}));
+
+vi.mock("../../../utils/permission-manager.js", () => ({
+  PermissionManager: {
+    getInstance: () => ({ canAccessHost: mocks.canAccessHost }),
+  },
+}));
+
+vi.mock("../../../hosts/usable-credential.js", () => ({
+  findUsableCredential: mocks.findUsableCredential,
 }));
 
 vi.mock("../../../utils/logger.js", () => {
@@ -83,12 +95,16 @@ import {
 } from "../../../hosts/connect/auth-provider-registry.js";
 import { ensureCoreSshAuthProviders } from "../../../hosts/connect/core-providers.js";
 import type { SshConnectHost } from "../../../hosts/connect/types.js";
+import {
+  clearConnectPolicies,
+  provideConnectPolicy,
+} from "../../../hosts/connect-policy.js";
 
-const plainKey = ssh2.utils.generateKeyPairSync("ed25519").private;
-const encryptedKey = ssh2.utils.generateKeyPairSync("ed25519", {
+// ssh2's own generator makes about 1 in 256 ed25519 keys nothing can read.
+const plainKey = generateSshKeyPair("ssh-ed25519").privateKey;
+const encryptedKey = generateSshKeyPair("ssh-ed25519", {
   passphrase: "secret",
-  cipher: "aes256-cbc",
-}).private;
+}).privateKey;
 
 function host(overrides: Partial<SshConnectHost> = {}): SshConnectHost {
   return {
@@ -148,8 +164,23 @@ async function build(
   });
 }
 
+// Building a hop's config parses keys, which is slow while the whole suite
+// runs, so give the multi hop steps more than vi.waitFor's 1 s.
+const settle = (check: () => void) => vi.waitFor(check, { timeout: 10_000 });
+vi.setConfig({ testTimeout: 30_000 });
+
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks keeps queued Once values, so a test that stopped early
+  // would hand its leftovers to the next one.
+  for (const mock of [
+    mocks.resolveHostById,
+    mocks.createJumpHostChain,
+    mocks.createSocks5Connection,
+    mocks.applyCertificateAuth,
+    mocks.applyAgentAuth,
+  ])
+    mock.mockReset();
   FakeSshClient.nextBehaviour = [];
   FakeSshClient.instances = [];
   mocks.createHostVerifier.mockResolvedValue(mocks.verifier);
@@ -205,6 +236,11 @@ describe("buildConnectConfig per auth type", () => {
     expect(Buffer.isBuffer(config.privateKey)).toBe(true);
     expect(config.passphrase).toBe("secret");
     expect(config.password).toBe("fallback");
+    expect(config.authHandler).toEqual([
+      "publickey",
+      "password",
+      "keyboard-interactive",
+    ]);
     expect(mocks.applyCertificateAuth).not.toHaveBeenCalled();
   });
 
@@ -260,6 +296,27 @@ describe("buildConnectConfig per auth type", () => {
 
     const empty = await build(host({ authType: "credential", password: null }));
     expect(empty.outcome).toMatchObject({ code: "missing-secret" });
+  });
+
+  it("expands a credential id on the server for an unsaved host", async () => {
+    mocks.findUsableCredential.mockResolvedValueOnce({
+      username: "root",
+      password: "from-credential",
+    });
+    const built = await build(
+      host({ authType: "credential", password: null, credentialId: 5 }),
+    );
+    expect(built.config.password).toBe("from-credential");
+    expect(mocks.findUsableCredential).toHaveBeenCalledWith(
+      5,
+      expect.any(String),
+    );
+
+    mocks.findUsableCredential.mockResolvedValueOnce(null);
+    const refused = await build(
+      host({ authType: "credential", password: null, credentialId: 6 }),
+    );
+    expect(refused.outcome).toMatchObject({ code: "missing-secret" });
   });
 
   it("agent hands the config to the agent helper", async () => {
@@ -350,6 +407,7 @@ describe("buildConnectConfig per auth type", () => {
       "user-1",
       true,
       null,
+      expect.objectContaining({ onRefused: expect.any(Function) }),
     );
   });
 });
@@ -382,6 +440,46 @@ describe("profile defaults", () => {
     expect(terminal.config.keepaliveInterval).toBe(10000);
     const fleet = await build(withSettings, "background");
     expect(fleet.config.keepaliveInterval).toBe(30000);
+  });
+});
+
+describe("connect policy", () => {
+  afterEach(() => clearConnectPolicies());
+
+  it("refuses before auth is prepared", async () => {
+    const check = vi.fn(() => ({
+      decision: "request" as const,
+      reason: "Ask first",
+      requestTab: "access",
+    }));
+    provideConnectPolicy("pa", { check });
+    const built = await build(host());
+    expect(built.provider).toBeNull();
+    expect(built.outcome).toEqual({
+      status: "error",
+      code: "access-required",
+      message: "Ask first",
+      requestTab: "access",
+    });
+    expect(check).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "user-1",
+        hostId: 7,
+        protocol: "ssh",
+        profile: "terminal",
+        origin: "core",
+      }),
+    );
+  });
+
+  it("connectHost throws with the policy code", async () => {
+    provideConnectPolicy("pa", { check: () => ({ decision: "deny" }) });
+    const error = await connectHost(host(), {
+      userId: "user-1",
+      purpose: "test",
+    }).catch((e) => e);
+    expect(error).toBeInstanceOf(SshConnectError);
+    expect(error.code).toBe("access-denied");
   });
 });
 
@@ -485,9 +583,22 @@ describe("connectHost", () => {
 
   it("fails for an unknown or forbidden host", async () => {
     mocks.resolveHostById.mockResolvedValueOnce(null);
+    mocks.canAccessHost.mockResolvedValueOnce({ hasAccess: false });
     await expect(
       connectHost(9, { userId: "user-1", purpose: "fleet" }),
     ).rejects.toThrow("Host not found or access denied");
+  });
+
+  it("says a login is missing on a shared host the user may connect to", async () => {
+    mocks.resolveHostById.mockResolvedValueOnce(null);
+    mocks.canAccessHost.mockResolvedValueOnce({ hasAccess: true });
+    const error = await connectHost(9, {
+      userId: "user-1",
+      purpose: "tmux",
+    }).catch((e) => e);
+    expect(error).toBeInstanceOf(SshConnectError);
+    expect(error.code).toBe("missing-secret");
+    expect(mocks.canAccessHost).toHaveBeenCalledWith("user-1", 9, "connect");
   });
 
   it("throws the auth outcome instead of connecting", async () => {
@@ -527,7 +638,7 @@ describe("connectHost", () => {
       "user-1",
       prompt,
     );
-    await vi.waitFor(() =>
+    await settle(() =>
       expect(FakeSshClient.instances[0]?.connectConfig).toBeTruthy(),
     );
     const first = FakeSshClient.instances[0];
@@ -541,11 +652,9 @@ describe("connectHost", () => {
       [{ prompt: "Verification code:", echo: false }],
       firstAnswer,
     );
-    await vi.waitFor(() =>
-      expect(firstAnswer).toHaveBeenCalledWith(["111111"]),
-    );
+    await settle(() => expect(firstAnswer).toHaveBeenCalledWith(["111111"]));
     first.emit("ready");
-    await vi.waitFor(() =>
+    await settle(() =>
       expect(FakeSshClient.instances[1]?.connectConfig).toBeTruthy(),
     );
     const second = FakeSshClient.instances[1];
@@ -561,7 +670,7 @@ describe("connectHost", () => {
       ],
       secondAnswer,
     );
-    await vi.waitFor(() =>
+    await settle(() =>
       expect(secondAnswer).toHaveBeenCalledWith(["hop-password", "222222"]),
     );
     second.emit("ready");
@@ -669,7 +778,7 @@ describe("connectHost", () => {
   it("auto-fills the stored password in keyboard-interactive with nobody to ask", async () => {
     FakeSshClient.nextBehaviour = ["hang"];
     const attempt = connectHost(host(), { userId: "user-1", purpose: "fleet" });
-    await vi.waitFor(() => {
+    await settle(() => {
       const last = FakeSshClient.instances.at(-1)!;
       expect(last.connectConfig).not.toBeNull();
     });
@@ -699,7 +808,7 @@ describe("connectHost", () => {
       purpose: "file-manager",
       prompt: { ask },
     });
-    await vi.waitFor(() =>
+    await settle(() =>
       expect(FakeSshClient.instances.at(-1)!.connectConfig).not.toBeNull(),
     );
     const client = FakeSshClient.instances.at(-1)!;
@@ -715,7 +824,7 @@ describe("connectHost", () => {
       ],
       finish,
     );
-    await vi.waitFor(() => expect(finish).toHaveBeenCalled());
+    await settle(() => expect(finish).toHaveBeenCalled());
     expect(ask).toHaveBeenCalledWith({
       kind: "totp",
       prompt: "Verification code: ",
@@ -746,7 +855,7 @@ describe("connectHost", () => {
         purpose: "fleet",
       }),
     ).rejects.toThrow(/All configured authentication methods failed/);
-    await vi.waitFor(() =>
+    await settle(() =>
       expect(mocks.forgetCert).toHaveBeenCalledWith("user-1", 7),
     );
     dispose();

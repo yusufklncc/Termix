@@ -14,6 +14,11 @@ import type { HostSshOptions } from "./ssh-options.js";
 export type { HostSshOptions } from "./ssh-options.js";
 import type { PluginManifest, PluginSettingsField } from "./manifest.js";
 import type { PluginTableDefinition } from "./db.js";
+import type {
+  OperationResult,
+  OperationRisk,
+  OperationSurfaces,
+} from "./operations.js";
 
 /**
  * Thrown when a plugin calls a guarded member without the capability.
@@ -65,11 +70,13 @@ export interface PluginLogger {
 export interface PluginEvents {
   /** Topics are namespaced to plugin.<id>.* unless the plugin holds events:core. */
   emit: (topic: string, payload: unknown) => void;
+  /** The topic must be listed in the manifest's sandbox.events. */
   on: (topic: string, listener: (payload: unknown) => void) => () => void;
 }
 
 /** Small key/value state owned by this plugin. Requires kv:own. */
 export interface PluginKeyValue {
+  /** The stored value, or null when the key was never set. */
   get: (key: string) => Promise<unknown>;
   set: (key: string, value: unknown) => Promise<void>;
   delete: (key: string) => Promise<boolean>;
@@ -87,6 +94,24 @@ export interface PluginFiles {
    * subdirectories underneath it.
    */
   dataDir: () => Promise<string>;
+  /**
+   * Reads the file an admin named in one of the manifest's env variables
+   * marked `"file": true` (a config file mounted into the container). Null
+   * when the variable is not set. Never a file in Termix's data folder or one
+   * of its own key files; at most 5 MB. Needs no capability. Termix 26.11.2+.
+   */
+  readEnvFile: (
+    name: string,
+  ) => Promise<{ text: string; modifiedMs: number } | null>;
+  /**
+   * A secret a config file points at: an environment variable of the server
+   * or a file such as a Docker secret. Null when it is not there. Never one of
+   * Termix's own variables, key files or anything in its data folder; at most
+   * 64 KiB. Needs config:secrets. Termix 26.11.2+.
+   */
+  readSecret: (
+    ref: { env: string } | { file: string },
+  ) => Promise<string | null>;
 }
 
 /**
@@ -104,8 +129,20 @@ export interface PluginFiles {
 export interface PluginDatabase {
   /** Registers a definition and returns its queryable table object. */
   define: <T = unknown>(definition: PluginTableDefinition) => Promise<T>;
-  /** Drizzle handle, scoped to this plugin's tables. */
+  /**
+   * Drizzle handle, scoped to this plugin's tables. In the plugin's own
+   * process each statement goes to core, which runs it only on this plugin's
+   * tables (and refs, read only). db.transaction() is not available there:
+   * use batch() for writes that must land together.
+   */
   client: <T = unknown>() => Promise<T>;
+  /**
+   * Runs write queries in one transaction: all of them or none. Each item is
+   * a Drizzle query built on db.client() and not awaited (it needs toSQL()).
+   */
+  batch: (
+    queries: { toSQL(): { sql: string; params: unknown[] } }[],
+  ) => Promise<void>;
   /**
    * Core tables a plugin may join against: users, hosts, roles, userRoles.
    * Needs db:core-refs. Treat them as read-only.
@@ -154,6 +191,14 @@ export interface SyncEntityReference {
   idType?: "number" | "string";
 }
 
+/** An external identity tied to a Termix account. */
+export interface PluginLinkedIdentity {
+  /** The `provider` of the identities the plugin returns from a login. */
+  provider: string;
+  subject: string;
+  email?: string | null;
+}
+
 export interface SyncEntityPermissions {
   /** Checked before a pushed row that does not exist yet is written. */
   create?: string;
@@ -177,8 +222,24 @@ export interface SyncWriteEvent {
 export interface SyncEntityRegistration {
   /** Stable wire name. Never change it: records on both sides match on it. */
   type: string;
-  /** The table, as returned by ctx.db.define. */
+  /** The table, as returned by ctx.db.define. Null for an entity with `load`. */
   table: unknown;
+  /**
+   * Server to desktop only: a desktop never pushes these rows. Required with
+   * `load`.
+   */
+  readOnly?: boolean;
+  /**
+   * Builds the rows the user gets instead of reading the rows they own in
+   * `table`, for data kept for the whole server (a shared library, rows other
+   * users share with them). Rows are on the wire: plaintext, each with a
+   * syncId. Needs `readOnly: true`, `write` and `erase`.
+   */
+  load?: (userId: string) => Promise<SyncRow[]>;
+  /** Keeps a copy of an inbound row on the desktop, for an entity with `load`. */
+  write?: (userId: string, wire: SyncRow) => Promise<void>;
+  /** Drops the desktop copy with this syncId, for an entity with `load`. */
+  erase?: (userId: string, syncId: string) => Promise<void>;
   /** Column holding the owning user id. Defaults to "userId". */
   userColumn?: string;
   /** Fields stored encrypted with the owner's data key. Plaintext on the wire. */
@@ -192,6 +253,13 @@ export interface SyncEntityRegistration {
    * inbound row, and ignored when deciding whether a row changed.
    */
   readOnlyFields?: readonly string[];
+  /**
+   * Columns that identify a row besides its syncId, checked after references
+   * are resolved. An inbound row with an unknown syncId takes over the user's
+   * row with the same values here instead of inserting a second one, for
+   * tables with a unique key such as one row per host. API 1.16.
+   */
+  matchOn?: readonly string[];
   /** One row per user rather than many, keyed on the owner. */
   singleton?: boolean;
   /**
@@ -203,7 +271,7 @@ export interface SyncEntityRegistration {
    * Rows this returns false for are left out of sync in both directions, for
    * state that belongs to one install (a per-device "last session").
    */
-  shouldSync?: (row: SyncRow) => boolean;
+  shouldSync?: (row: SyncRow) => boolean | Promise<boolean>;
   /** RBAC permissions a pushed change needs on the server. */
   permissions?: SyncEntityPermissions;
   /**
@@ -236,6 +304,478 @@ export interface SyncEntityRegistration {
  */
 export interface PluginSync {
   registerEntity: (entity: SyncEntityRegistration) => void;
+  /** Needs sync:provide. Takes over /sync/v2 and /sync/link. Removed on deactivate. */
+  provide: (provider: PluginSyncProvider) => () => void;
+  /** Needs sync:provide. The replica store, change feed and link registry. */
+  readonly host: PluginSyncHost;
+}
+
+/**
+ * The plugin that owns server and desktop sync. Core forwards every request
+ * under /sync to `handle` (an Express style handler) and answers 404 when no
+ * plugin provides it. Call `next()` to let core answer instead.
+ */
+export interface PluginSyncProvider {
+  handle: (
+    req: unknown,
+    res: unknown,
+    next: (error?: unknown) => void,
+  ) => void | Promise<void>;
+}
+
+/** A kind of data that syncs, as the sync provider sees it. */
+export interface SyncEntityInfo {
+  type: string;
+  owner: string;
+  order: number;
+  readOnly: boolean;
+  /**
+   * Whether the row would show in a load even if it exists. In a plugin
+   * process it returns a Promise.
+   */
+  covers?: (syncId: string) => boolean | Promise<boolean>;
+}
+
+/** A row ready for the wire, with its content hash. */
+export interface SyncWireRow {
+  syncId: string;
+  wire: SyncRow;
+  hash: string;
+}
+
+export interface SyncRecordInfo {
+  entityType: string;
+  syncId: string;
+  revision: number;
+  hash: string | null;
+  deleted: boolean;
+  error: string | null;
+  errorHash: string | null;
+  seq: number;
+}
+
+export interface SyncConflictInfo {
+  id: number;
+  entityType: string;
+  syncId: string;
+  localRow: string;
+  createdAt: string;
+}
+
+export interface SyncAccountInfo {
+  id: string;
+  username: string;
+  isAdmin: boolean;
+  active: boolean;
+}
+
+export interface SyncProxyHeader {
+  name: string;
+  value: string;
+}
+
+export interface SyncBasicAuth {
+  username: string;
+  password: string;
+}
+
+/** A client certificate for a server that asks for mutual TLS. */
+export interface SyncClientCert {
+  /** Base64 of the PFX/P12 file. */
+  pfx: string;
+  passphrase: string;
+  /** The file name, to show which certificate is saved. */
+  name: string | null;
+}
+
+/** Extra per server connection options. Kept open so new ones need no migration. */
+export type SyncLinkOptions = Record<string, unknown>;
+
+/** One server a desktop is linked to, with a replica of its data. */
+export interface SyncLinkInfo {
+  id: number;
+  /** The local user the replica belongs to. */
+  userId: string;
+  serverUrl: string;
+  serverName: string | null;
+  serverVersion: string | null;
+  sessionToken: string | null;
+  customHeaders: SyncProxyHeader[];
+  basicAuth: SyncBasicAuth | null;
+  allowInvalidCertificate: boolean;
+  clientCert: SyncClientCert | null;
+  remoteUserId: string | null;
+  remoteUsername: string | null;
+  account: {
+    remoteUserId?: string;
+    username?: string;
+    isAdmin?: boolean;
+    roles?: string[];
+    permissions?: string[];
+  } | null;
+  disabledTypes: string[];
+  /** Extra connection options for this server, kept open for new ones. */
+  options: SyncLinkOptions;
+  knownTypes: string[];
+  cursor: number;
+  status: "idle" | "syncing" | "offline" | "error" | "signed_out";
+  lastError: string | null;
+  linkedAt: string;
+  lastSyncAt: string | null;
+}
+
+export interface SyncLinkCreate {
+  userId: string;
+  serverUrl: string;
+  serverName?: string | null;
+  serverVersion?: string | null;
+  sessionToken: string;
+  customHeaders?: SyncProxyHeader[];
+  basicAuth?: SyncBasicAuth | null;
+  allowInvalidCertificate?: boolean;
+  clientCert?: SyncClientCert | null;
+  remoteUserId?: string | null;
+  remoteUsername?: string | null;
+}
+
+export type SyncLinkPatch = Partial<
+  Pick<
+    SyncLinkInfo,
+    | "serverName"
+    | "serverVersion"
+    | "sessionToken"
+    | "customHeaders"
+    | "basicAuth"
+    | "allowInvalidCertificate"
+    | "clientCert"
+    | "remoteUserId"
+    | "remoteUsername"
+    | "account"
+    | "disabledTypes"
+    | "options"
+    | "knownTypes"
+    | "cursor"
+    | "status"
+    | "lastError"
+    | "lastSyncAt"
+  >
+>;
+
+export type SyncRemoteErrorKind =
+  | "offline"
+  | "tls"
+  | "client_cert"
+  | "proxy"
+  | "basic_auth"
+  | "signed_out"
+  | "server";
+
+export interface SyncRemoteError extends Error {
+  readonly kind: SyncRemoteErrorKind;
+  readonly status?: number;
+}
+
+export interface SyncRemoteTarget {
+  serverUrl: string;
+  sessionToken?: string | null;
+  customHeaders?: SyncProxyHeader[];
+  basicAuth?: SyncBasicAuth | null;
+  allowInvalidCertificate?: boolean;
+  clientCert?: SyncClientCert | null;
+}
+
+export interface SyncRemoteRequest {
+  method?: string;
+  body?: unknown;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+export interface SyncPushOp {
+  entityType: string;
+  syncId: string;
+  baseRevision: number;
+  op: "upsert" | "delete";
+  row?: SyncRow;
+}
+
+export type SyncPushResult =
+  | { syncId: string; entityType: string; status: "ok"; revision: number }
+  | {
+      syncId: string;
+      entityType: string;
+      status: "conflict";
+      revision: number;
+      deleted: boolean;
+      row: SyncRow | null;
+    }
+  | { syncId: string; entityType: string; status: "rejected"; reason: string };
+
+export interface SyncRemotePlugin {
+  id: string;
+  name: string;
+  version: string;
+  source: string;
+  artifact: boolean;
+  enabled: boolean;
+  active: boolean;
+  desktop: string;
+  syncEntities: string[];
+  granted: string[];
+}
+
+/**
+ * What the sync provider gets from core: the replica store, the change feed,
+ * the linked server registry, sessions and a few helpers. Core keeps all of
+ * it neutral; the provider decides when and how to use it. Needs sync:provide.
+ */
+export interface PluginSyncHost {
+  /** True on the desktop app's own backend. */
+  readonly embedded: boolean;
+  info: { appName: () => Promise<string>; version: () => string };
+
+  entities: {
+    list: () => SyncEntityInfo[];
+    get: (type: string) => SyncEntityInfo | undefined;
+    /** Registers core's own entities once. */
+    ensureCore: () => Promise<void>;
+    onChanged: (listener: () => void) => () => void;
+    onLocalWrite: (listener: () => void) => () => void;
+    /** Local ids of the user's own rows of a type, by sync id. Termix 26.10.6+. */
+    idsOf?: (
+      type: string,
+      userId: string,
+      syncIds: string[],
+    ) => Promise<Record<string, number>>;
+  };
+
+  /** Rows and bookkeeping of one local user's replica. */
+  replica: {
+    resolvers: (userId: string, onMissing?: () => void) => unknown;
+    loadRows: (
+      type: string,
+      userId: string,
+      resolvers: unknown,
+    ) => Promise<{ rows: Map<string, SyncWireRow>; failed: Set<string> }>;
+    loadRow: (
+      type: string,
+      userId: string,
+      syncId: string,
+      resolvers: unknown,
+    ) => Promise<SyncWireRow | null>;
+    writeRow: (
+      type: string,
+      userId: string,
+      wire: SyncRow,
+      resolvers: unknown,
+    ) => Promise<void>;
+    deleteRow: (type: string, userId: string, syncId: string) => Promise<void>;
+    /** Returns a Promise in a plugin process. */
+    orderSelfReferences: (
+      type: string,
+      rows: SyncRow[],
+    ) => SyncRow[] | Promise<SyncRow[]>;
+    counts: (userId: string) => Promise<Record<string, number>>;
+    wipe: (userId: string) => Promise<void>;
+    regenerateSyncIds: (userId: string) => Promise<void>;
+    removeSharedCopies: (userId: string) => Promise<void>;
+    records: {
+      list: (userId: string) => Promise<Map<string, SyncRecordInfo>>;
+      put: (
+        userId: string,
+        type: string,
+        syncId: string,
+        values: { revision: number; hash: string | null; deleted: boolean },
+      ) => Promise<void>;
+      setError: (
+        userId: string,
+        type: string,
+        syncId: string,
+        reason: string,
+        hash: string,
+      ) => Promise<void>;
+      clearErrors: (userId: string) => Promise<void>;
+      listErrors: (userId: string) => Promise<SyncRecordInfo[]>;
+      deleteForUser: (userId: string) => Promise<void>;
+      key: (type: string, syncId: string) => string;
+    };
+    conflicts: {
+      save: (
+        userId: string,
+        type: string,
+        syncId: string,
+        row: SyncRow,
+        revision: number,
+      ) => Promise<void>;
+      list: (userId: string) => Promise<SyncConflictInfo[]>;
+      get: (userId: string, id: number) => Promise<SyncConflictInfo | null>;
+      delete: (userId: string, id: number) => Promise<void>;
+    };
+  };
+
+  /** The server side: what changed for an account and what a desktop pushed. */
+  feed: {
+    withUserLock: <T>(userId: string, run: () => Promise<T>) => Promise<T>;
+    changes: (
+      userId: string,
+      cursor: number,
+      limit: number,
+      types?: string[],
+    ) => Promise<{
+      records: Array<{
+        seq: number;
+        entityType: string;
+        syncId: string;
+        revision: number;
+        deleted: boolean;
+        row: SyncRow | null;
+      }>;
+      hasMore: boolean;
+      nextCursor: number;
+      entityTypes: Array<{
+        type: string;
+        owner: string;
+        order: number;
+        readOnly: boolean;
+      }>;
+    }>;
+    parsePushOps: (body: unknown) => Promise<SyncPushOp[] | null>;
+    applyPush: (userId: string, ops: SyncPushOp[]) => Promise<SyncPushResult[]>;
+    /**
+     * Streams a change notice to the account's open event streams. In a
+     * plugin process it works only inside the request whose response it is.
+     */
+    listen: (userId: string, res: unknown) => Promise<() => void>;
+  };
+
+  /**
+   * The linked server registry, kept in core so it is there before plugins.
+   * One link per local user. Without a user, the active account is meant.
+   */
+  links: {
+    list: () => Promise<SyncLinkInfo[]>;
+    get: (userId?: string) => Promise<SyncLinkInfo | null>;
+    create: (link: SyncLinkCreate) => Promise<SyncLinkInfo>;
+    update: (
+      patch: SyncLinkPatch,
+      userId?: string,
+    ) => Promise<SyncLinkInfo | null>;
+    remove: (userId?: string) => Promise<void>;
+  };
+
+  /** Desktop accounts: the local user and the replica user of each server. */
+  accounts: {
+    list: () => Promise<SyncAccountInfo[]>;
+    /** A new empty account, ready to be linked to a server. */
+    create: () => Promise<string>;
+    /** Which account the app signs in as from now on. */
+    setActive: (userId: string) => Promise<void>;
+    activeId: () => Promise<string | null>;
+    /** Deletes an account and all its data. The last one cannot go. */
+    remove: (userId: string) => Promise<void>;
+  };
+
+  http: {
+    json: <T>(
+      target: SyncRemoteTarget,
+      pathname: string,
+      request?: SyncRemoteRequest,
+    ) => Promise<T>;
+    fetch: (
+      target: SyncRemoteTarget,
+      pathname: string,
+      request?: SyncRemoteRequest,
+    ) => Promise<{
+      ok: boolean;
+      status: number;
+      body: AsyncIterable<Uint8Array> | null;
+    }>;
+    /** Returns a Promise in a plugin process. */
+    normalizeServerUrl: (
+      input: string,
+    ) => string | null | Promise<string | null>;
+    isRemoteError: (error: unknown) => error is SyncRemoteError;
+  };
+
+  sessions: {
+    /** A long lived session for a linked desktop. Shows in the account's sessions. */
+    issueDesktop: (
+      userId: string,
+      options: { days: number; deviceInfo: string },
+    ) => Promise<string>;
+    revoke: (sessionId: string) => Promise<void>;
+    find: (
+      sessionId: string,
+    ) => Promise<{ expiresAt: string; deviceInfo: string | null } | null>;
+    findUser: (
+      userId: string,
+    ) => Promise<{ id: string; username: string } | null>;
+    /** The user and session behind a token, or null when it is not valid. */
+    verify: (
+      token: string,
+    ) => Promise<{ userId: string; sessionId?: string } | null>;
+    /**
+     * Sets the sign in cookie on a response, like a login does. A name sets
+     * another cookie; in a plugin process only names starting with
+     * tmxp_<id>_, and only inside the request whose response it is.
+     */
+    setCookie: (
+      req: unknown,
+      res: unknown,
+      value: string,
+      options?: { name?: string; days?: number },
+    ) => void;
+    /** Removes the sign in cookie, without ending the session behind it. */
+    clearCookie: (req: unknown, res: unknown, name?: string) => void;
+    /** Express middleware that signs the request in and sets userId and sessionId. */
+    middleware: () => unknown;
+    /** Express middleware that lets a request through only on a desktop. */
+    desktopOnly: () => unknown;
+  };
+
+  hosts: {
+    findForSync: (
+      userId: string,
+      syncId: string,
+    ) => Promise<{ id: number; name: string | null } | null>;
+    statusBySyncId: (userId: string) => Promise<Record<string, unknown>>;
+  };
+
+  plugins: {
+    listForDesktop: () => Promise<{
+      plugins: SyncRemotePlugin[];
+      registryKeys: unknown;
+    }>;
+    /** Sends a plugin archive; false when there is no such plugin to share. */
+    sendPackage: (pluginId: string, res: unknown) => Promise<boolean>;
+    mirror: (link: SyncLinkInfo) => Promise<void>;
+    /** Returns a Promise in a plugin process. */
+    lastRemote: () => SyncRemotePlugin[] | Promise<SyncRemotePlugin[]>;
+    /** Returns a Promise in a plugin process. */
+    localNames: () => Map<string, string> | Promise<Map<string, string>>;
+  };
+
+  desktop: {
+    /** Tells the app's main process how to reach the linked origin. */
+    applyProxy: (link: SyncLinkInfo | null) => Promise<void>;
+    deviceName: () => string;
+    /**
+     * The desktop wide default for where connections start, from the app's
+     * settings. Termix 26.11.2+.
+     */
+    connectionOrigin?: () => Promise<"local" | "remote">;
+  };
+
+  alerts: {
+    send: (alert: {
+      title: string;
+      body: string;
+      severity: "info" | "warning" | "error";
+      category: string;
+      dedupeKey: string;
+      link?: { tab: string };
+    }) => Promise<void>;
+  };
 }
 
 /**
@@ -244,9 +784,14 @@ export interface PluginSync {
  * `consume`.
  */
 export interface PluginRegistry {
+  /** The key must be listed in the manifest's sandbox.registry. */
   provide: <T>(key: string, value: T) => void;
-  consume: <T>(key: string) => T | undefined;
-  revoke: (key: string, value?: unknown) => boolean;
+  /**
+   * The value another plugin provided. It lives in that plugin's process, so
+   * every function on it returns a Promise.
+   */
+  consume: <T>(key: string) => Promise<T | undefined>;
+  revoke: (key: string, value?: unknown) => Promise<boolean>;
 }
 
 export interface PluginServices {
@@ -268,9 +813,9 @@ export interface PluginServices {
   get: <T extends object>(
     service: string,
     options?: { userId?: string; provider?: string },
-  ) => T;
+  ) => Promise<T>;
   /** Names of the providers running now ("" for an unnamed one). */
-  providers: (service: string) => string[];
+  providers: (service: string) => Promise<string[]>;
 }
 
 export interface PluginSecrets {
@@ -299,7 +844,7 @@ export interface PluginSecrets {
     key: string,
     resolve: (userId: string) => Promise<string | null> | string | null,
   ) => void;
-  withdraw: (key: string) => boolean;
+  withdraw: (key: string) => Promise<boolean>;
   getShared: (
     pluginId: string,
     key: string,
@@ -364,6 +909,13 @@ export interface PluginRouterOptions {
    * TERMIX_PLUGIN_PUBLIC_RATE_LIMIT wins over it.
    */
   publicRateLimit?: number;
+  /**
+   * Passes the Authorization header to the declared public routes, for a
+   * protocol that sends its own bearer token, like SCIM. Termix API keys and
+   * session tokens are still never passed, and authenticated routes never get
+   * the header. Termix 26.11.2 and plugin API 2.9.
+   */
+  publicAuthorization?: boolean;
 }
 
 /**
@@ -698,6 +1250,36 @@ export interface PluginHostCreateInput {
   sshOptions?: HostSshOptions | null;
   /** Host settings by plugin id, the shape a Termix export carries. */
   pluginSettings?: Record<string, Record<string, unknown>>;
+  /**
+   * Each plugin's own host switch (its manifest enableKey), by plugin id.
+   * A plugin that is not running is skipped and logged; one with no switch
+   * is refused.
+   */
+  pluginEnable?: Record<string, boolean>;
+  /**
+   * Secrets, stored encrypted with the owner's data key and never returned
+   * in a PluginHostRecord. An empty string or null clears the stored value.
+   */
+  password?: string | null;
+  key?: string | null;
+  keyPassword?: string | null;
+  keyType?: string | null;
+  sudoPassword?: string | null;
+  /**
+   * Logins for plugin protocols (contributes.protocols), keyed by protocol
+   * id. null removes that protocol's login. Unknown protocol ids are skipped.
+   */
+  protocolAuth?: Record<string, PluginHostProtocolAuthInput | null>;
+}
+
+/** One protocol login on a host write. Absent keys keep what is stored. */
+export interface PluginHostProtocolAuthInput {
+  authType?: "direct" | "credential" | "none";
+  credentialId?: number | null;
+  username?: string | null;
+  password?: string | null;
+  /** The protocol's declared credentialFields, secret ones included. */
+  fields?: Record<string, string>;
 }
 
 /** Fields a plugin may change on a host the acting user owns. */
@@ -725,6 +1307,13 @@ export const PLUGIN_HOST_INPUT_KEYS = [
   "forceKeyboardInteractive",
   "sshOptions",
   "pluginSettings",
+  "pluginEnable",
+  "password",
+  "key",
+  "keyPassword",
+  "keyType",
+  "sudoPassword",
+  "protocolAuth",
 ] as const satisfies readonly (keyof PluginHostCreateInput)[];
 
 /** The same shape canAccessHost returns internally, without secrets. */
@@ -759,6 +1348,114 @@ export interface PluginShareableRole {
   id: number;
   name: string;
   displayName: string | null;
+}
+
+/** One grant in ctx.hosts.setShares. */
+export interface PluginHostShareGrant {
+  target: PluginShareTarget;
+  permissionLevel: PluginHostShareLevel;
+  /** Omit for a grant that never expires. */
+  durationHours?: number;
+}
+
+/**
+ * Hosts a plugin manages itself, for example from a config file. Core refuses
+ * edits, deletes and share changes on a locked host from the UI, the API and
+ * other plugins, and marks it in host reads so a layout can show it read only.
+ * Pins and order stay with the user. Only the plugin that locks a host may
+ * still write it.
+ */
+export interface PluginHostLockProvider {
+  isLocked: (hostId: number) => boolean;
+  /** A short line shown under the managed note, or null. */
+  note: (hostId: number) => string | null;
+  /** False blocks adding hosts by hand (editor, import, other plugins). */
+  allowManualCreate: () => boolean;
+  /**
+   * Every host this provider locks. Needed in a plugin process (API 2.4),
+   * where core keeps a copy of the locks the plugin reports and reads them
+   * again every second.
+   */
+  lockedHosts?: () => number[];
+}
+
+export interface PluginHostLocksApi {
+  /** Registers this plugin's locks. Needs hosts:lock. Removed on deactivate. */
+  provide: (provider: PluginHostLockProvider) => () => void;
+}
+
+/** What core asks a connect policy before a session to a host opens. */
+export interface PluginConnectPolicyInput {
+  /** The person connecting. */
+  userId: string;
+  hostId: number;
+  /** "ssh", or a remote desktop protocol id such as "rdp", "vnc" or "telnet". */
+  protocol: string;
+  /** Free form purpose the caller gave, such as "terminal" or "sftp". */
+  purpose: string;
+  /**
+   * SSH profile: terminal, session, stream, forward, background or jump.
+   * "desktop" for remote desktop logins, "probe" for status checks (only for
+   * providers with probes: true).
+   */
+  profile: string;
+  /** True when a person waits on this connect (a prompt channel is open). */
+  interactive: boolean;
+  /** Plugin id that asked for the connection, or "core". */
+  origin: string;
+  /**
+   * When this user last proved a second factor while signed in, in ms since
+   * the epoch, or null. Filled in by core. Termix 26.11.1+.
+   */
+  stepUpAt?: number | null;
+}
+
+export type PluginConnectPolicyDecision =
+  | { decision: "allow" }
+  | { decision: "deny"; reason?: string }
+  | {
+      decision: "request";
+      reason?: string;
+      /** A tab id of the providing plugin where the user can ask for access. */
+      requestTab?: string;
+      /** "verify" when the tab asks the user to prove who they are, so clients say Verify. */
+      requestKind?: "access" | "verify";
+    };
+
+/**
+ * Decides whether a user may open a session to a host. Core asks every
+ * provider before it builds an SSH config (terminal, file manager, tunnels,
+ * background exec) and before it hands out remote desktop logins. The
+ * strictest answer wins and a provider that throws denies. Keep check fast:
+ * it runs on every connect, including background polling.
+ */
+export interface PluginConnectPolicyProvider {
+  check: (
+    input: PluginConnectPolicyInput,
+  ) => PluginConnectPolicyDecision | Promise<PluginConnectPolicyDecision>;
+  /**
+   * Also asked before status checks, with profile "probe": hosts it denies
+   * are left out of ctx.hosts.probeTargets, so nothing contacts them. Off by
+   * default so a policy that denies background work never hides status
+   * dots. Termix 26.11.3.
+   */
+  probes?: boolean;
+}
+
+export interface PluginConnectPolicyApi {
+  /** Registers this plugin's policy. Needs hosts:connect-policy. Removed on deactivate. */
+  provide: (provider: PluginConnectPolicyProvider) => () => void;
+  /**
+   * Ends every connection core holds open to the host, for every user and
+   * plugin: terminals, file transfers, tunnels and pooled background
+   * connections. Call it right after your answer for the host changes.
+   * One still connecting ends once it is ready. Resolves to how many ended.
+   * Needs hosts:connect-policy. Audited. Termix 26.11.3; check it exists.
+   */
+  disconnect?: (
+    hostId: number,
+    options?: { reason?: string },
+  ) => Promise<number>;
 }
 
 /**
@@ -823,6 +1520,15 @@ export interface PluginHosts {
     permissionLevel: PluginHostShareLevel,
     durationHours?: number,
   ) => Promise<PluginHostShareResult>;
+  /**
+   * Replaces every grant on a host the acting user owns with this list.
+   * Grants that stay keep their row and counters, missing ones are revoked.
+   * Needs hosts:write.
+   */
+  setShares: (
+    hostId: number,
+    grants: PluginHostShareGrant[],
+  ) => Promise<PluginHostShareResult>;
   /** Users the caller may pick as a share target, for building a picker UI. */
   listUsers: () => Promise<PluginShareableUser[]>;
   /** Non-system roles the caller may pick as a share target. */
@@ -848,6 +1554,184 @@ export interface PluginHosts {
    * Needs hosts:read.
    */
   status: PluginHostStatusApi;
+  /**
+   * The hosts the acting user may connect to (their own and shared ones) as a
+   * status provider needs them: address, port and jump hosts, no secrets.
+   * Pass hostIds to narrow it. Needs hosts:read.
+   */
+  probeTargets: (filter?: {
+    hostIds?: number[];
+  }) => Promise<PluginHostProbeTarget[]>;
+  /** Whether a session is open to the host right now. Needs hosts:read. */
+  sessionActive: (hostId: number) => Promise<boolean>;
+  /**
+   * Imports Termix JSON host rows for the acting user, the same way POST
+   * /host/bulk-import does: up to 100 rows, jump hosts remapped by exportId,
+   * defaults, protocol logins and plugin settings applied, one save at the end.
+   * Needs hosts:write, plus credentials:write when credentials are passed, and
+   * the acting user needs the core hosts.create and hosts.edit permissions.
+   */
+  importMany: (
+    hosts: Record<string, unknown>[],
+    options?: PluginHostImportOptions,
+  ) => Promise<PluginHostImportResult>;
+  /** Imports the Host entries of an OpenSSH config file. Same rules as importMany. */
+  importSshConfig: (
+    content: string,
+    options?: Pick<PluginHostImportOptions, "overwrite" | "atomic">,
+  ) => Promise<PluginHostImportResult>;
+  /**
+   * The acting user's own hosts as Termix JSON. Without share the secrets are
+   * included, decrypted. With share every secret is left out and credential
+   * logins point at a scrubbed credentials list by alias. Needs hosts:export
+   * and is always audited.
+   */
+  exportMany: (options?: {
+    share?: boolean;
+    /** Only these of the user's hosts. */
+    hostIds?: number[];
+  }) => Promise<PluginHostExport>;
+  /**
+   * Validates and writes this plugin's own host settings from an imported
+   * row. Called for every imported row once the host exists. Return the
+   * values to write, or null to write nothing. Removed when the plugin
+   * deactivates. Needs hosts:write.
+   */
+  registerImportNormalizer: (
+    normalizer: PluginHostImportNormalizer,
+  ) => () => void;
+  /** The recent activity list on the dashboard. */
+  activity: PluginHostActivityApi;
+  /** Read only hosts this plugin manages. */
+  locks: PluginHostLocksApi;
+  /** Who may open sessions to which hosts. */
+  connectPolicy: PluginConnectPolicyApi;
+  /** Folder rows for the acting user. Needs hosts:write. */
+  folders: PluginHostFoldersApi;
+}
+
+export interface PluginHostFoldersApi {
+  /** Creates the folder row if missing and sets its color and icon. */
+  ensure: (
+    name: string,
+    style?: { color?: string | null; icon?: string | null },
+  ) => Promise<void>;
+  /** Removes the folder row and subfolders once no host is left in them. */
+  removeEmpty: (name: string) => Promise<boolean>;
+}
+
+export interface PluginHostImportOptions {
+  /** Update a host that matches on ip, port and username instead of skipping it. */
+  overwrite?: boolean;
+  /**
+   * All or nothing: if any row fails, the hosts this call created are deleted
+   * and the result says rolledBack. Cannot be combined with overwrite.
+   */
+  atomic?: boolean;
+  /** Credential placeholders rows can refer to by credentialAlias. */
+  credentials?: Array<Record<string, unknown>>;
+}
+
+export interface PluginHostImportResult {
+  success: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  errors: string[];
+  createdHostIds: number[];
+  rolledBack?: boolean;
+}
+
+export interface PluginHostExport {
+  hosts: Array<Record<string, unknown>>;
+  /** Share exports only. */
+  version?: string;
+  exportedAt?: string;
+  credentials?: Array<Record<string, unknown>>;
+}
+
+export type PluginHostImportNormalizer = (
+  raw: Record<string, unknown>,
+) => Record<string, unknown> | null;
+
+export interface PluginHostProbeTarget {
+  id: number;
+  /** The user who owns the host; its jump hosts are theirs. */
+  ownerUserId: string;
+  ip: string;
+  port: number;
+  connectionType: string;
+  jumpHosts: Array<{ hostId: number }>;
+  statusCheckEnabled: boolean;
+  /** Seconds, or null to use the global interval. */
+  statusCheckInterval: number | null;
+}
+
+/**
+ * The plugin that owns host status. Core keeps the routes, the sync feed and
+ * ctx.hosts.status; this fills them. One provider at a time.
+ */
+export interface PluginHostStatusProvider {
+  start: () => void;
+  stop: () => void;
+  get: (hostId: number) => PluginHostStatusEntry | null;
+  /**
+   * Every status known, after polling is brought in line with the request:
+   * with hostIds, exactly those of the user's hosts; without, all of them.
+   */
+  statusesFor: (
+    userId: string,
+    hostIds: number[] | null,
+  ) => Promise<Map<number, PluginHostStatusEntry>>;
+  /** Restarts the user's checks. */
+  refresh: (userId: string) => Promise<void>;
+  check: (hostId: number) => Promise<PluginHostStatusEntry | null>;
+  reportLogin: (hostId: number, outcome: { ok: boolean }) => void;
+  registerPort: (
+    connectionType: string,
+    resolve: (
+      hostId: number,
+    ) => number | undefined | Promise<number | undefined>,
+  ) => () => void;
+  /** The global check interval in seconds. */
+  getIntervalSeconds: () => Promise<number>;
+  setIntervalSeconds: (seconds: number) => Promise<void>;
+}
+
+export interface PluginActivityEntry {
+  id: number;
+  userId: string;
+  type: string;
+  hostId: number;
+  hostName: string | null;
+  timestamp: string;
+}
+
+export type PluginRecordActivityResult =
+  | { status: "logged"; id: number }
+  | { status: "rate_limited" }
+  | { status: "invalid_type" }
+  | { status: "denied" }
+  | { status: "unavailable" };
+
+/** The plugin that stores recent activity. One provider at a time. */
+export interface PluginActivityProvider {
+  record: (
+    userId: string,
+    entry: { type: string; hostId: number; hostName: string },
+  ) => Promise<PluginRecordActivityResult>;
+  list: (userId: string, limit: number) => Promise<PluginActivityEntry[]>;
+  deleteByUserId: (userId: string) => Promise<void>;
+  deleteByHostIds: (hostIds: number[]) => Promise<void>;
+}
+
+export interface PluginHostActivityApi {
+  /**
+   * Becomes the store behind the dashboard's recent activity and
+   * ctx.hosts.recordActivity. Needs hosts:activity-provide. Removed on
+   * deactivate.
+   */
+  provide: (provider: PluginActivityProvider) => () => void;
 }
 
 /**
@@ -902,6 +1786,11 @@ export interface PluginHostStatusApi {
       hostId: number,
     ) => number | undefined | Promise<number | undefined>,
   ) => () => void;
+  /**
+   * Becomes core's host status. Needs hosts:status-provide. Removed on
+   * deactivate, which hands status back to core's built-in checks.
+   */
+  provide: (provider: PluginHostStatusProvider) => () => void;
 }
 
 /**
@@ -950,8 +1839,14 @@ export type PluginSshAuthOutcome =
         | "invalid-key"
         | "passphrase-required"
         | "provider-missing"
-        | "failed";
+        | "failed"
+        | "access-denied"
+        | "access-required";
       message: string;
+      /** For access-required: a tab of the policy plugin where access is asked for. */
+      requestTab?: string;
+      /** For access-required: "verify" when that tab asks for a second factor. */
+      requestKind?: string;
     }
   | {
       /** Try once more with these config changes. */
@@ -1019,8 +1914,9 @@ export type PluginKeyboardInteractiveDetection =
  * browser sign-in). Handlers run before core's TOTP and push detection.
  *
  * `settings` is this plugin's host-scope settings for the host, with manifest
- * defaults filled in. Both hooks are synchronous; they run inside ssh2's
- * keyboard-interactive callback.
+ * defaults filled in. Both hooks run inside ssh2's keyboard-interactive
+ * callback. They may return Promises (a plugin process always does); one
+ * that takes over 5 seconds counts as no.
  */
 export interface PluginKeyboardInteractiveHandler {
   /** Listed in contributes.auth.keyboardInteractive. */
@@ -1035,12 +1931,15 @@ export interface PluginKeyboardInteractiveHandler {
     },
     host: PluginSshHost,
     settings: Record<string, unknown>,
-  ) => PluginKeyboardInteractiveDetection | null;
+  ) =>
+    | PluginKeyboardInteractiveDetection
+    | null
+    | Promise<PluginKeyboardInteractiveDetection | null>;
   /** Answer password prompts with the stored password instead of asking. */
   autoAnswerPasswords?: (
     host: PluginSshHost,
     settings: Record<string, unknown>,
-  ) => boolean;
+  ) => boolean | Promise<boolean>;
 }
 
 /** Answers keyboard-interactive prompts. Resolve null to give up. */
@@ -1066,6 +1965,25 @@ export interface PluginSshConnectOptions {
   sock?: unknown;
 }
 
+export interface PluginSshExecOptions extends PluginSshConnectOptions {
+  /** Time to wait for the command to finish. Default 30s, at most 10 minutes. */
+  timeoutMs?: number;
+  /** Most bytes kept of each of stdout and stderr. Default 256 KB, at most 4 MB. */
+  maxOutputBytes?: number;
+  /** Written to the command's standard input, then closed. */
+  stdin?: string;
+}
+
+export interface PluginSshExecResult {
+  stdout: string;
+  stderr: string;
+  /** The exit code. Null when the command was killed or ran out of time. */
+  code: number | null;
+  /** Output went past maxOutputBytes and the rest was dropped. */
+  truncated: boolean;
+  timedOut: boolean;
+}
+
 export interface PluginSshConnection<Client = unknown> {
   /** An ssh2 Client, already "ready". */
   client: Client;
@@ -1085,11 +2003,93 @@ export interface PluginSshConnection<Client = unknown> {
  * audit line per new connection. Connections still open on deactivate are
  * closed.
  */
+export interface PluginNetwork {
+  /**
+   * Whether a TCP port answers. An SSH banner is read and answered politely;
+   * nothing is ever sent that logs in. Loopback, private and link-local
+   * addresses are allowed, since status checks target the user's own hosts.
+   */
+  tcpProbe: (
+    host: string,
+    port: number,
+    options?: { timeoutMs?: number },
+  ) => Promise<boolean>;
+  /**
+   * Looks up a host name on the Termix server and returns the first address,
+   * or null when it has none. A plugin process can't look names up itself
+   * without network:sockets. Pass family 4 or 6 to ask for one kind.
+   */
+  lookup: (
+    host: string,
+    options?: { family?: 4 | 6 },
+  ) => Promise<string | null>;
+}
+
+/**
+ * A way to reach some hosts other than a plain TCP connection. `claims` is
+ * asked for every connection, so it must be quick. `open` returns a stream
+ * the SSH client runs over, like a relayed socket.
+ */
+/** The host a transport is asked about. Fields past port come from Termix 26.10.6. */
+export interface PluginSshTransportHost {
+  id: number;
+  ip: string;
+  port: number;
+  /** Owner of the host row. */
+  userId?: string | null;
+  syncId?: string | null;
+  connectionOrigin?: "local" | "remote" | null;
+  localOnly?: boolean;
+}
+
+export interface PluginSshTransportProvider {
+  /**
+   * Whether this provider carries the host. May answer with a Promise (it
+   * always does from a plugin process); only `true` claims the host, and an
+   * answer that takes over 2 seconds counts as no.
+   */
+  claims: (
+    hostId: number,
+    host?: PluginSshTransportHost,
+  ) => boolean | Promise<boolean>;
+  open: (host: PluginSshTransportHost) => Promise<import("node:stream").Duplex>;
+}
+
+export interface PluginSshTransports {
+  /** Needs ssh:transport. Removed on deactivate. */
+  provide: (provider: PluginSshTransportProvider) => () => void;
+}
+
 export interface PluginSsh {
+  /** Other ways to reach hosts, used by every connection to them. */
+  transports: PluginSshTransports;
+
+  /**
+   * Whether a TCP port answers through the host's jump host chain. Chains are
+   * shared and closed when idle. The acting user must be able to connect to
+   * the host. Needs ssh:connect.
+   */
+  probe: (
+    hostId: number,
+    options?: { port?: number; timeoutMs?: number },
+  ) => Promise<boolean>;
+
   connect: <Client = unknown>(
     host: number | PluginSshHost,
     options?: PluginSshConnectOptions,
   ) => Promise<PluginSshConnection<Client>>;
+
+  /**
+   * Runs one command on a host with its stored login and closes the
+   * connection. The acting user needs connect access to the host, the same as
+   * connect. Output is capped and the command is stopped at the time limit.
+   * Needs ssh:connect and credentials:use.
+   */
+  exec: (
+    host: number | PluginSshHost,
+    command: string,
+    options?: PluginSshExecOptions,
+  ) => Promise<PluginSshExecResult>;
 
   /** Borrows a pooled connection. The pool key is `<pool>:<owner>:<address>`. */
   withConnection: <T, Client = unknown>(
@@ -1114,7 +2114,7 @@ export interface PluginSsh {
   ) => Promise<PluginSshConnection<Client>>;
 
   /** The pool key withConnection would use, for clearing it. */
-  poolKey: (pool: string, host: PluginSshHost) => string;
+  poolKey: (pool: string, host: PluginSshHost) => Promise<string>;
 
   /**
    * Closes this plugin's pooled connections to a host, for when its details
@@ -1201,7 +2201,7 @@ export interface PluginSsh {
       prompts: PluginKeyboardInteractivePrompt[];
     },
     host: PluginSshHost,
-  ) => PluginKeyboardInteractiveDecision;
+  ) => Promise<PluginKeyboardInteractiveDecision>;
 
   /** Stored password for password prompts, empty for the rest. */
   autoResponses: (
@@ -1210,10 +2210,10 @@ export interface PluginSsh {
   ) => string[];
 
   /** Whether an auth type carries a secret (drives "auth_required" flows). */
-  requiresSecret: (authType: string) => boolean;
+  requiresSecret: (authType: string) => Promise<boolean>;
 
   /** Whether an auth type can connect unattended, for polling. */
-  supportsBackground: (authType: string) => boolean;
+  supportsBackground: (authType: string) => Promise<boolean>;
 }
 
 /** What ctx.ssh.prepare built, plus the provider hooks bound to it. */
@@ -1222,15 +2222,29 @@ export interface PluginSshPrepared {
   outcome: PluginSshAuthOutcome;
   /** The auth type whose provider prepared it, null when none exists. */
   authType: string | null;
-  /** The provider's banner hook, bound to this host and connection. */
-  onBanner?: (banner: string) => PluginSshBannerDecision | undefined;
-  /** The provider's auth failure hook, bound to this host and connection. */
+  /**
+   * The provider's banner hook, bound to this host and connection. Await it:
+   * a provider in a plugin process answers with a Promise.
+   */
+  onBanner?: (
+    banner: string,
+  ) =>
+    | PluginSshBannerDecision
+    | undefined
+    | Promise<PluginSshBannerDecision | undefined>;
+  /**
+   * The provider's auth failure hook, bound to this host and connection.
+   * Await it: a provider in a plugin process answers with a Promise.
+   */
   onAuthFailed?: (context: {
     error: Error;
     retries: number;
     canRetry: boolean;
     methodNotAvailable: boolean;
-  }) => PluginSshAuthOutcome | undefined;
+  }) =>
+    | PluginSshAuthOutcome
+    | undefined
+    | Promise<PluginSshAuthOutcome | undefined>;
 }
 
 /** Thrown by ctx.ssh.startInteraction when no provider can start it. */
@@ -1276,17 +2290,21 @@ export interface PluginSshAuthProvider {
   quickConnect?: boolean;
   /** Interaction name its outcomes use, for startInteraction routing. */
   interaction?: string;
+  /** In a plugin process this returns a Promise; core waits for it. */
   connectOptions?: (
     host: PluginSshHost,
     purpose: string,
-  ) => Record<string, unknown>;
+  ) => Record<string, unknown> | Promise<Record<string, unknown>>;
   /** Fills the ssh2 config for this host. Never connects. */
   prepare: (
     config: Record<string, unknown>,
     host: PluginSshHost,
     env: PluginSshAuthEnv,
   ) => Promise<PluginSshAuthOutcome>;
-  /** Claims keyboard-interactive rounds for hosts of this type. */
+  /**
+   * Claims keyboard-interactive rounds for hosts of this type. May return a
+   * Promise; one that takes over 5 seconds counts as null.
+   */
   onKeyboardInteractive?: (
     round: {
       name: string;
@@ -1294,8 +2312,14 @@ export interface PluginSshAuthProvider {
       prompts: PluginKeyboardInteractivePrompt[];
     },
     host: PluginSshHost,
-  ) => PluginKeyboardInteractiveDecision | null;
-  /** Synchronous: decide on a retry before the socket closes. */
+  ) =>
+    | PluginKeyboardInteractiveDecision
+    | null
+    | Promise<PluginKeyboardInteractiveDecision | null>;
+  /**
+   * Decide on a retry before the socket closes. In a plugin process this
+   * returns a Promise, so callers await it.
+   */
   onAuthFailed?: (
     host: PluginSshHost,
     env: PluginSshAuthEnv,
@@ -1305,7 +2329,10 @@ export interface PluginSshAuthProvider {
       canRetry: boolean;
       methodNotAvailable: boolean;
     },
-  ) => PluginSshAuthOutcome | undefined;
+  ) =>
+    | PluginSshAuthOutcome
+    | undefined
+    | Promise<PluginSshAuthOutcome | undefined>;
   /**
    * Claims an ssh2 "banner" event during the handshake, for a server that
    * holds the connection open pending an out-of-band step (Tailscale SSH
@@ -1317,7 +2344,10 @@ export interface PluginSshAuthProvider {
     banner: string,
     host: PluginSshHost,
     env: PluginSshAuthEnv,
-  ) => PluginSshBannerDecision | undefined;
+  ) =>
+    | PluginSshBannerDecision
+    | undefined
+    | Promise<PluginSshBannerDecision | undefined>;
   /** Starts the browser step behind an interaction-required outcome. */
   startInteraction?: (request: {
     userId: string;
@@ -1421,13 +2451,89 @@ export interface PluginLoginInstance {
    * instance that asks wins.
    */
   autoStart?: boolean;
+  /**
+   * Which page of the login screen shows it: "password" (the main one) or
+   * "external" (the other sign in methods). Both when unset.
+   */
+  views?: Array<"password" | "external">;
+}
+
+/** One field the login screen draws for a form method or a second factor. */
+export interface PluginLoginField {
+  /** The key the value goes under in the body sent to verify. */
+  name: string;
+  type: "text" | "password" | "code";
+  /** A key in this plugin's locales. */
+  labelKey: string;
+  /** The browser's autofill hint: "username", "current-password", "one-time-code". */
+  autocomplete?: string;
+}
+
+/**
+ * What the shell needs to run a WebAuthn step in the browser. `publicKey` is
+ * PublicKeyCredentialRequestOptionsJSON (or CreationOptionsJSON for a
+ * create ceremony), base64url fields as @simplewebauthn/server makes them.
+ */
+export interface PluginWebAuthnOptions {
+  publicKey: Record<string, unknown>;
+  /** Comes back unchanged beside the browser's answer, e.g. a challenge id. */
+  context?: Record<string, unknown>;
+}
+
+/**
+ * How the second factor step asks for the answer. The shell draws it and
+ * sends the answer to the factor's verify, so no plugin code runs on the
+ * login screen.
+ */
+export type PluginSecondFactorPrompt =
+  /** One code field. Its value goes under `field` ("code" by default). */
+  | { kind: "code"; field?: string; labelKey?: string; length?: number }
+  | { kind: "fields"; fields: PluginLoginField[] }
+  /**
+   * A security key. `challenge()` returns PluginWebAuthnOptions (or the
+   * request options JSON alone); verify gets `{ ...context, response }`.
+   */
+  | { kind: "webauthn" };
+
+/**
+ * A WebAuthn step a plugin's own screens run after login, such as adding a
+ * passkey or proving a key before removing one. Frames can't reach
+ * navigator.credentials, so the shell runs it: the frame names the ceremony,
+ * this plugin's backend makes the options and checks the answer, and the
+ * frame only gets what `finish` returns.
+ */
+export interface PluginWebAuthnCeremony {
+  /** Unique within this plugin. */
+  id: string;
+  type: "create" | "get";
+  options: (input: {
+    userId: string;
+    /** The page's origin, for the relying party id. */
+    origin: string;
+    /** Plain values the frame passed, such as a key name. */
+    extra: Record<string, unknown>;
+  }) => Promise<PluginWebAuthnOptions>;
+  /** Checks the browser's answer. What it returns goes back to the frame. */
+  finish: (input: {
+    userId: string;
+    origin: string;
+    extra: Record<string, unknown>;
+    context: Record<string, unknown>;
+    /** RegistrationResponseJSON or AuthenticationResponseJSON. */
+    response: Record<string, unknown>;
+  }) => Promise<Record<string, unknown> | void>;
 }
 
 export interface PluginLoginMethod {
   id: string;
   labelKey: string;
   icon?: string;
-  kind: "redirect" | "form";
+  /**
+   * "webauthn" (Termix 26.11.2, plugin API 2.8) is a passkey button the
+   * shell runs: it gets `options`, asks the browser, and sends
+   * `{ ...context, response }` to `verify`.
+   */
+  kind: "redirect" | "form" | "webauthn";
   /**
    * True for a method that authenticates against something other than a
    * password or key this server holds: SSO, an external directory, a
@@ -1445,11 +2551,40 @@ export interface PluginLoginMethod {
   ) => Promise<{ redirectUrl: string }>;
   /** Redirect methods: the provider's callback. */
   callback?: (request: PluginLoginRequest) => Promise<PluginVerifiedIdentity>;
-  /** Form methods: check what the user typed. */
+  /**
+   * Form methods: the fields the login screen draws for each instance
+   * (Termix 26.11.2, plugin API 2.8). The values go to `verify` by name.
+   */
+  fields?: PluginLoginField[];
+  /** Also drawn under the password form, for a method used instead of a password. */
+  placement?: "inline";
+  /** WebAuthn methods: the options for the browser's passkey prompt. */
+  options?: (
+    request: PluginLoginRequest,
+    instanceId: string | null,
+  ) => Promise<PluginWebAuthnOptions>;
+  /** Form and WebAuthn methods: check what the user gave. */
   verify?: (
     request: PluginLoginRequest,
     instanceId: string | null,
   ) => Promise<PluginVerifiedIdentity>;
+  /**
+   * Where to send the browser after a user signs out of a session this
+   * method made, such as the identity provider's own sign out page. Gets
+   * the `logoutClaims` the login carried and the server's address. Return
+   * null to stay in Termix. Only http and https addresses are used, and the
+   * desktop app ignores it (Termix 26.11.3, SDK 2.11).
+   */
+  logoutRedirect?: (session: PluginLogoutSession) => Promise<string | null>;
+}
+
+/** A session ending by sign out, for PluginLoginMethod.logoutRedirect. */
+export interface PluginLogoutSession {
+  providerId: number | null;
+  sub: string | null;
+  sid: string | null;
+  /** The address Termix is reached at, like https://termix.example.com. */
+  baseUrl: string;
 }
 
 export interface PluginSecondFactor {
@@ -1458,6 +2593,11 @@ export interface PluginSecondFactor {
   isEnrolled: (userId: string) => Promise<boolean>;
   /** Anything the client needs before the user answers. */
   challenge?: (userId: string) => Promise<unknown>;
+  /**
+   * How the login screen asks (Termix 26.11.2, plugin API 2.8). A factor
+   * without one can only be answered by a client that knows it.
+   */
+  prompt?: PluginSecondFactorPrompt;
   /**
    * True when the answer is right. Return an object to refuse with a specific
    * message, for example when the factor had to be reset.
@@ -1468,6 +2608,54 @@ export interface PluginSecondFactor {
   ) => Promise<boolean | { ok: false; error: string; code?: string }>;
   /** Removes the user's enrolment. Called by the admin reset. */
   reset?: (userId: string) => Promise<void>;
+}
+
+/** A login core is about to turn into a session. */
+export interface PluginAuthPolicyInput {
+  userId: string;
+  /** Login method id, `"proxy"` for a trusted proxy login. */
+  methodId: string;
+  /** The method signs in through an outside identity provider (SSO, LDAP). */
+  external: boolean;
+  deviceType: "web" | "desktop" | "mobile";
+  /** The device passed a second factor before and was remembered. */
+  trustedDevice: boolean;
+  /** The method itself proved a second factor, like a verified passkey. */
+  mfaSatisfied: boolean;
+  /** Every second factor core has, and whether this user set it up. */
+  secondFactors: { id: string; pluginId: string; enrolled: boolean }[];
+}
+
+export interface PluginAuthPolicyDecision {
+  /** False turns remember me off and ignores remembered devices. */
+  allowRememberDevice?: boolean;
+  /** Caps how long the session lasts. */
+  maxSessionSeconds?: number;
+  /** Ends the session after this many seconds without a request. */
+  idleTimeoutSeconds?: number;
+  /**
+   * Requires a second factor even for users who have none: they get a
+   * session that can only set one up. `"new-device"` skips it on a
+   * remembered device.
+   */
+  secondFactor?: "always" | "new-device";
+}
+
+/**
+ * Login rules from a plugin. Core asks every provider and the strictest
+ * answer wins. A provider that throws refuses the login.
+ */
+export interface PluginAuthPolicyProvider {
+  evaluate: (
+    input: PluginAuthPolicyInput,
+  ) => PluginAuthPolicyDecision | Promise<PluginAuthPolicyDecision>;
+  /** Whether the login page should offer remember me. */
+  allowRememberDevice?: () => boolean | Promise<boolean>;
+}
+
+export interface PluginAuthPolicyApi {
+  /** Needs auth:policy. Removed on deactivate. */
+  provide: (provider: PluginAuthPolicyProvider) => () => void;
 }
 
 export interface PluginUserTokenOptions {
@@ -1498,6 +2686,12 @@ export interface PluginAuth {
   ) => void;
   registerLoginMethod: (method: PluginLoginMethod) => void;
   registerSecondFactor: (factor: PluginSecondFactor) => void;
+  /**
+   * A WebAuthn step this plugin's frames can ask the shell to run with
+   * `app.auth.webauthn(id, extra)`. Needs auth:provide. Termix 26.11.2 and
+   * plugin API 2.8; optional in the types.
+   */
+  registerWebAuthnCeremony?: (ceremony: PluginWebAuthnCeremony) => void;
   /**
    * Marks a user as enrolled in one of this plugin's factors. Core keeps the
    * row even when the plugin is gone, so it can refuse the login instead of
@@ -1546,6 +2740,26 @@ export interface PluginAuth {
    */
   countLinkedUsers: (provider: string) => Promise<number>;
   /**
+   * The external identities tied to an account, so a signed in user can link
+   * one and sign in with it from then on. Every change is audited. Needs
+   * Termix 26.11.1.
+   */
+  identities: {
+    list: (userId: string) => Promise<PluginLinkedIdentity[]>;
+    /**
+     * Ties an identity to the user. Throws a LoginMethodError with code
+     * `identity_in_use` when another account has it, and `provider_linked`
+     * when the user already has a different one from this provider.
+     */
+    link: (userId: string, identity: PluginLinkedIdentity) => Promise<void>;
+    /**
+     * Removes the user's identities from a provider. Throws a
+     * LoginMethodError with code `last_login` when the user could no longer
+     * sign in.
+     */
+    unlink: (userId: string, provider: string) => Promise<void>;
+  };
+  /**
    * A short-lived session for an existing user, for calling core's own HTTP
    * API as them from work with no request behind it, like a scheduled task
    * driving the Termix CLI. The user's RBAC applies unchanged. Needs
@@ -1559,11 +2773,105 @@ export interface PluginAuth {
     userId: string,
     options: PluginUserTokenOptions,
   ) => Promise<PluginUserToken>;
+  /** Login rules: idle timeout, session length, remember me, second factors. */
+  policy: PluginAuthPolicyApi;
+  /** Second factors from every running plugin. Needs no capability. */
+  listSecondFactors: () => Promise<{ id: string; pluginId: string }[]>;
 }
 
-/** What a plugin may learn about a user. Needs users:read. */
-export interface PluginUsers {
-  /** The user's UI language, like "zh_CN", or null when they never chose one. */
+/** An account as ctx.users shows it. Never a password hash or second factors. */
+export interface PluginManagedUser {
+  id: string;
+  username: string;
+  displayName: string | null;
+  email: string | null;
+  isAdmin: boolean;
+  /** Turned off, or waiting for an admin to approve it. */
+  disabled: boolean;
+  /** Why it is off: "admin", "pending_approval" or what a plugin passed. */
+  disabledReason: string | null;
+  /** The plugin that made the account, or null. */
+  managedBy: string | null;
+}
+
+export interface PluginRoleSummary {
+  name: string;
+  displayName: string;
+  isSystem: boolean;
+}
+
+/**
+ * Account calls, for a plugin that provisions users (SCIM, HR sync). A
+ * failed call throws an error whose `code` is "not_found", "username_taken",
+ * "email_taken", "last_admin" or "invalid". Every change is audited under the
+ * plugin's name.
+ */
+export interface PluginUserAccounts {
+  /** Needs users:read. */
+  get: (userId: string) => Promise<PluginManagedUser | null>;
+  /** Needs users:read. */
+  findByUsername: (username: string) => Promise<PluginManagedUser | null>;
+  /** Needs users:read. */
+  findByEmail: (email: string) => Promise<PluginManagedUser | null>;
+  /** Every role, for a role picker. Needs users:read. */
+  listRoles: () => Promise<PluginRoleSummary[]>;
+  /**
+   * Makes an account with no password and the user role, managed by this
+   * plugin. Its first SSO or LDAP sign in with the same verified email is
+   * linked to it. Needs users:write.
+   */
+  create: (input: {
+    username: string;
+    displayName?: string | null;
+    email?: string | null;
+  }) => Promise<PluginManagedUser>;
+  /** Changes the username, display name or email. Needs users:write. */
+  update: (
+    userId: string,
+    input: {
+      username?: string;
+      displayName?: string | null;
+      email?: string | null;
+    },
+  ) => Promise<PluginManagedUser>;
+  /**
+   * Turns an account off (signed out everywhere, no sign in) or back on.
+   * `reason` is kept on the account. Never turns off the last admin. Needs
+   * users:write.
+   */
+  setDisabled: (
+    userId: string,
+    disabled: boolean,
+    reason?: string,
+  ) => Promise<void>;
+  /**
+   * Deletes an account. Its hosts and credentials go to `successorUserId`,
+   * or are deleted with it when none is given. Never the last admin. Needs
+   * users:write.
+   */
+  delete: (
+    userId: string,
+    options?: { successorUserId?: string },
+  ) => Promise<void>;
+  /**
+   * Gives the `desired` roles and takes away `managed` roles not in it.
+   * Other roles and the system roles are never touched. Needs users:write.
+   */
+  syncRoles: (
+    userId: string,
+    roles: { desired: string[]; managed: string[] },
+  ) => Promise<void>;
+  /** Makes an account an admin or takes it away. Needs users:write. */
+  setAdmin: (userId: string, isAdmin: boolean) => Promise<void>;
+}
+
+/**
+ * What a plugin may learn about a user, and with users:write, account calls.
+ * The account calls need Termix 26.11.2 and plugin API 2.9; optional in the
+ * types, so check `typeof ctx.users.create === "function"` first.
+ */
+export interface PluginUsers extends Partial<PluginUserAccounts> {
+  /** The user's UI language, like "zh_CN", or null when they never chose one. Needs users:read. */
   getLocale: (userId: string) => Promise<string | null>;
 }
 
@@ -1583,6 +2891,17 @@ export interface PluginOpenIsolatedWindowRequest {
  * Electron only: rejects when the server is not running embedded in the
  * desktop app. Needs desktop:window.
  */
+/** A page for ctx.desktop.grantView. */
+export interface PluginViewGrantRequest {
+  /** http(s) only, with no login in it. */
+  url: string;
+  /**
+   * Accept an invalid TLS certificate from this https address's own origin.
+   * Only the desktop app's native view honors it.
+   */
+  ignoreCert?: boolean;
+}
+
 /**
  * A host to open in the operating system's own client for a protocol. The
  * desktop app supports "rdp" (mstsc on Windows) today; any other protocol is
@@ -1607,8 +2926,171 @@ export interface PluginDesktop {
   launchExternalClient: (
     request: PluginExternalClientRequest,
   ) => Promise<{ success: boolean; error?: string }>;
+  /**
+   * Lets this plugin's frames show one page in a view the shell draws: a
+   * native view in the desktop app, a credentialless sandboxed iframe in a
+   * browser. Pass the grant to `NativeView` from @termix-ssh/plugin-sdk/ui.
+   * The frame only holds the grant, so it can't change the address or the
+   * certificate rule. Call it inside a person's request; the grant works for
+   * that person and session only and lasts ten minutes. Needs
+   * desktop:window. Termix 26.11.2 and plugin API 2.8; optional in the types,
+   * so call it as `ctx.desktop.grantView?.(...)`.
+   */
+  grantView?: (
+    request: PluginViewGrantRequest,
+  ) => Promise<{ grant: string; expiresAt: number }>;
   /** Whether the server runs embedded in the desktop app, so the calls above can work. */
-  available: () => boolean;
+  available: () => Promise<boolean>;
+  /**
+   * The user's own machine. Only works on the desktop app's embedded backend
+   * and needs desktop:local; every call is audited once per plugin start.
+   */
+  readonly local: PluginDesktopLocal;
+}
+
+export interface PluginLocalDirEntry {
+  name: string;
+  path: string;
+  type: "file" | "directory" | "link";
+  size: number;
+  modifiedTimestamp?: number;
+  linkTarget?: string;
+  hidden: boolean;
+}
+
+export interface PluginLocalWalkResult {
+  files: Array<{ localPath: string; relativePath: string; size: number }>;
+  emptyDirs: string[];
+  totalBytes: number;
+}
+
+export interface PluginLocalPty {
+  readonly pid: number;
+  /** The shell program that was started. */
+  readonly shell: string;
+  write: (data: string) => void;
+  resize: (cols: number, rows: number) => void;
+  kill: () => void;
+  onData: (handler: (data: string) => void) => () => void;
+  onExit: (handler: (exitCode: number) => void) => () => void;
+}
+
+/** A download being written next to its final name, published when done. */
+export interface PluginLocalDownload {
+  /** Final path inside the chosen folder, links inside it already refused. */
+  readonly path: string;
+  readonly stream: NodeJS.WritableStream;
+  /** Moves the finished partial onto its final name. */
+  publish: (options?: { overwrite?: boolean }) => Promise<string>;
+  /** Removes the partial file. Safe to call after publish. */
+  abort: () => Promise<void>;
+}
+
+export interface PluginLocalResponse {
+  readonly status: number;
+  readonly ok: boolean;
+  readonly headers: { get: (name: string) => string | null };
+  /** A web stream of the body, or null when there is none. */
+  readonly body: AsyncIterable<Uint8Array> | null;
+  text: () => Promise<string>;
+}
+
+export interface PluginDesktopLocal {
+  /** Whether local access is possible: embedded backend and capability granted. */
+  available: () => Promise<boolean>;
+  /**
+   * Calls this plugin's own HTTP routes on the embedded backend ("local") or
+   * on the server the desktop is linked to ("remote"), as the acting user.
+   * The path is under /plugin-api/<this plugin id>; nothing else is
+   * reachable. The link's proxy headers and certificate rules apply. A body
+   * may be a string, a buffer or a Node stream.
+   */
+  pluginFetch: (
+    origin: "local" | "remote",
+    subPath: string,
+    init?: {
+      method?: string;
+      headers?: Record<string, string>;
+      body?: string | Buffer | NodeJS.ReadableStream;
+      signal?: AbortSignal;
+    },
+  ) => Promise<PluginLocalResponse>;
+  info: () => Promise<{
+    home: string;
+    separator: string;
+    platform: NodeJS.Platform;
+    /** The desktop app's user data folder. */
+    userDataDir: string;
+    /** The port the embedded backend listens on. */
+    backendPort: number;
+    /** The server this desktop is linked to, or null. */
+    link: {
+      serverUrl: string;
+      token: string | null;
+      /**
+       * Headers for a request to the linked server: the session, plus the
+       * proxy headers and basic auth the link was set up with.
+       */
+      headers: Record<string, string>;
+      /** The link accepts a self-signed certificate. */
+      allowInvalidCertificate: boolean;
+    } | null;
+  }>;
+  /**
+   * GET a JSON route on the linked server with the link's session, proxy
+   * headers and certificate rules. Rejects with an error whose `kind` is
+   * "signed_out" when the server refused the session.
+   */
+  linkJson: (pathname: string) => Promise<unknown>;
+  readonly fs: {
+    list: (dirPath: string) => Promise<{
+      path: string;
+      parent: string | null;
+      entries: PluginLocalDirEntry[];
+    }>;
+    mkdir: (parentPath: string, name: string) => Promise<string>;
+    createFile: (parentPath: string, name: string) => Promise<string>;
+    /** Renames inside the same folder; never replaces an existing name. */
+    rename: (path: string, newName: string) => Promise<string>;
+    /** Creates a folder; with rootPath it must stay inside that folder. */
+    ensureDir: (dirPath: string, rootPath?: string) => Promise<string>;
+    /** Which of the given paths exist. */
+    exists: (paths: string[]) => Promise<string[]>;
+    walk: (rootPaths: string[]) => Promise<PluginLocalWalkResult>;
+    /** Sends entries to the operating system's trash. */
+    trash: (paths: string[]) => Promise<{
+      trashed: number;
+      failed: Array<{ path: string; error: string }>;
+    }>;
+    reveal: (path: string) => Promise<void>;
+    open: (path: string) => Promise<void>;
+    /**
+     * Opens a local file in the external editor the person picked in the
+     * desktop app's file dialog, or with its default app when none is set.
+     * With no editor set, a file the system would run (.exe, .bat, ...) is
+     * refused. The app starts the editor, so the plugin needs no process
+     * grant. Plugin API 2.8.
+     */
+    openInEditor: (path: string) => Promise<void>;
+    openRead: (path: string) => Promise<{
+      stream: NodeJS.ReadableStream;
+      size: number;
+    }>;
+    openDownload: (options: {
+      rootPath: string;
+      destPath: string;
+      transferId: string;
+      overwrite?: boolean;
+    }) => Promise<PluginLocalDownload>;
+  };
+  readonly pty: {
+    spawn: (options?: {
+      cols?: number;
+      rows?: number;
+      /** "wsl" on Windows starts WSL instead of PowerShell. */
+      shell?: string;
+    }) => Promise<PluginLocalPty>;
+  };
 }
 
 /**
@@ -1654,6 +3136,15 @@ export interface PluginSshKeyCredential {
   publicKey: string | null;
 }
 
+/** A saved credential without its secrets. */
+export interface PluginCredentialSummary {
+  id: number;
+  name: string;
+  username: string | null;
+  authType: string;
+  folder: string | null;
+}
+
 /** A key pair to save as a new credential for the acting user. */
 export interface PluginSshKeyCredentialInput {
   name: string;
@@ -1676,6 +3167,12 @@ export interface PluginCredentials {
    */
   listSshKeys: () => Promise<PluginSshKeyCredential[]>;
   /**
+   * The acting user's own credentials by name, with no secret material, so a
+   * plugin can point a host at one. Needs credentials:use and the core
+   * credentials.view permission. Audited.
+   */
+  list: () => Promise<PluginCredentialSummary[]>;
+  /**
    * Saves a key pair as a new encrypted credential owned by the acting user
    * and returns its id. Needs credentials:write, the core credentials.create
    * permission and an unlocked data key. Audited.
@@ -1684,12 +3181,24 @@ export interface PluginCredentials {
   /**
    * The host's login for one of this plugin's own contributes.protocols.
    * Null when the host does not exist or the acting user cannot connect to
-   * it. Needs credentials:read. Audited.
+   * it. Throws an error with `code` "access-denied" or "access-required"
+   * (and `requestTab`, `toJSON()` for a 403 body) when a connect policy
+   * refuses the session. Needs credentials:read. Audited.
    */
   resolveHostProtocol: (
     hostId: number,
     protocol: PluginHostProtocol,
   ) => Promise<PluginProtocolTarget | null>;
+  /**
+   * A saved credential's username and password, for a login the plugin
+   * makes itself (a Quick Connect session with no saved host). Only the
+   * acting user's own credentials or ones shared with them; null otherwise.
+   * Never send the result to a browser. Needs credentials:read. Audited.
+   * Termix 26.11.3.
+   */
+  resolveLogin: (
+    credentialId: number,
+  ) => Promise<{ username: string; password: string } | null>;
   /**
    * Registers this plugin as the resolver for "<scheme>://..." references in
    * a host's secret fields (secret-sources registers "op" for
@@ -1700,11 +3209,48 @@ export interface PluginCredentials {
    * and its result is cached briefly by the connect pipeline. A scheme with no
    * registered resolver fails the connect with a message naming the plugin
    * that would provide it.
+   *
+   * `options.unlockTab` names a tab of this plugin where a person unlocks
+   * what the resolver reads, like their own vault. When `resolve` throws an
+   * error whose `code` is "unlock-required" for the person connecting, the
+   * connect stops with an access-required answer pointing at that tab, so
+   * clients offer a Verify button. Termix 26.11.3; older versions ignore it
+   * and show the error.
    */
   registerSecretResolver: (
     scheme: string,
     resolve: (userId: string, reference: string) => Promise<string>,
+    options?: { unlockTab?: string },
   ) => void;
+  /**
+   * The public key line of an SSH key credential the acting user can see
+   * (their own, with the core credentials.view permission). Derived from the
+   * private key when none is stored, including a key kept behind a secret
+   * reference. Null when the credential is missing, is not a key, or cannot
+   * be read. Needs credentials:use. Audited.
+   */
+  publicKey: (credentialId: number) => Promise<string | null>;
+  /**
+   * Replaces secret references ("op://...") in a key and its passphrase with
+   * the real values, for the acting user. Plain values pass through. Hands
+   * private key material to the plugin. Needs credentials:read. Audited.
+   */
+  resolveKeyRefs: (
+    key: string,
+    passphrase?: string | null,
+  ) => Promise<{ key: string; passphrase?: string }>;
+  /**
+   * Stores a CA-signed OpenSSH certificate next to an existing SSH key
+   * credential, so core offers key plus certificate when it connects through
+   * that credential. Only key credentials can carry one; core refuses the
+   * other auth types instead of dropping the certificate silently. Pass null
+   * to clear a stored one. Needs credentials:write and the core
+   * credentials.update permission. Audited.
+   */
+  setSshKeyCertificate: (
+    credentialId: number,
+    certificate: string | null,
+  ) => Promise<{ id: number; changed: boolean }>;
 }
 
 /**
@@ -1727,6 +3273,111 @@ export interface PluginAudit {
      */
     request?: unknown;
   }) => Promise<void>;
+  /**
+   * Called for every audit line core or any plugin writes, after it is
+   * accepted. Fire and forget: a slow or throwing handler never delays or
+   * fails the audited action. Lines written before the plugin started are not
+   * replayed; read them with list or export. Returns an unsubscribe function;
+   * it is also removed when the plugin deactivates. Needs audit:read.
+   */
+  subscribe: (handler: (entry: PluginAuditEntry) => void) => () => void;
+  /** A page of stored lines, newest first. Needs audit:read. */
+  list: (options?: {
+    filters?: PluginAuditFilters;
+    limit?: number;
+    offset?: number;
+  }) => Promise<{ entries: PluginAuditEntry[]; total: number }>;
+  /**
+   * Stored lines in time order, in batches, so an export never holds the
+   * whole trail in memory. Needs audit:read.
+   */
+  exportBatches: (
+    filters?: PluginAuditFilters,
+    batchSize?: number,
+  ) => AsyncGenerator<PluginAuditEntry[]>;
+  /**
+   * The audit log's hash chain: every stored line carries the hash of the one
+   * before. Core checks it every hour and alerts admins when it breaks.
+   * Needs audit:read.
+   */
+  chain: PluginAuditChain;
+}
+
+/** The newest line of the chain: keep it somewhere else to compare later. */
+export interface PluginAuditChainHead {
+  id: number;
+  hash: string;
+  timestamp?: string;
+}
+
+export interface PluginAuditChainResult {
+  ok: boolean;
+  /** Chained lines checked. */
+  checked: number;
+  /** Lines written before the chain existed. */
+  unchained: number;
+  head: PluginAuditChainHead | null;
+  /** First line id where the chain stops holding. */
+  brokenAt?: number;
+  problem?: "row_changed" | "row_missing" | "hash_removed" | "head_mismatch";
+  /** ISO date-time. */
+  checkedAt: string;
+}
+
+export interface PluginAuditSavedHeadResult {
+  /** The saved line is still there with the same hash. */
+  found: boolean;
+  /** And the chain from it to now holds. */
+  ok: boolean;
+  /** The saved line was pruned since, so it can't be compared any more. */
+  pruned: boolean;
+  chain: PluginAuditChainResult;
+}
+
+export interface PluginAuditChain {
+  /** The last hourly check, or null before the first one ran. */
+  status: () => Promise<PluginAuditChainResult | null>;
+  /** Checks the whole chain now. */
+  verify: () => Promise<PluginAuditChainResult>;
+  /** Compares a head saved earlier with what the server holds now. */
+  checkHead: (
+    head: PluginAuditChainHead,
+  ) => Promise<PluginAuditSavedHeadResult>;
+}
+
+export interface PluginAuditFilters {
+  userId?: string;
+  action?: string;
+  resourceType?: string;
+  success?: boolean;
+  /** ISO date-time. */
+  startDate?: string;
+  /** ISO date-time. */
+  endDate?: string;
+}
+
+export interface PluginAuditEntry {
+  /** Only on stored lines (list and export). */
+  id?: number;
+  /** ISO date-time. */
+  timestamp: string;
+  userId: string | null;
+  username: string;
+  action: string;
+  resourceType: string;
+  resourceId: string | null;
+  resourceName: string | null;
+  details: string | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+  success: boolean;
+  errorMessage: string | null;
+  /**
+   * This line's chain hash and the one before it. Set on stored lines and on
+   * subscribed lines that were stored; null on lines from before the chain.
+   */
+  hash?: string | null;
+  prevHash?: string | null;
 }
 
 /** A notification channel a user set up. Its config never leaves the hub. */
@@ -1947,6 +3598,11 @@ export interface PluginSchedule {
     intervalMs: number,
     fn: () => void | Promise<void>,
     options?: {
+      /**
+       * One of the ids in the manifest's sandbox.schedules. Needed in the
+       * plugin's own process, where an undeclared job is refused.
+       */
+      id?: string;
       /** Delays the first run by up to this much, so many timers spread out. */
       jitterMs?: number;
       /** Also run once straight away. */
@@ -1955,6 +3611,15 @@ export interface PluginSchedule {
   ) => () => void;
   /** Runs `fn` once after `delayMs`. Returns a function that cancels it. */
   after: (delayMs: number, fn: () => void | Promise<void>) => () => void;
+  /**
+   * Plugin API 2.9: keeps this plugin's process running while any reason is
+   * set. A plugin that calls it (even with false) manages this itself: its
+   * jobs shorter than the idle time then run only while it is running, and
+   * core may stop it when idle. Call it with true while there is work
+   * (monitors to check, watches to run) and false when there is none. Older
+   * cores leave it out, so call it as `ctx.schedule.keepAwake?.(...)`.
+   */
+  keepAwake?: (reason: string, awake: boolean) => void;
 }
 
 /** The certificate core serves, read from its configured paths. */
@@ -2030,6 +3695,183 @@ export interface PluginPlugins {
   list: () => Promise<PluginSummary[]>;
 }
 
+/** A section this plugin adds to the diagnostics report admins make. */
+export interface PluginDiagnosticsSection {
+  /** Heading in the report. Defaults to the plugin id. */
+  title?: string;
+  /**
+   * Plain JSON about the plugin's own state, like open sessions or the last
+   * sync. Called each time an admin builds a report, with 3 seconds to answer.
+   * Core masks secret looking keys and text and refuses more than 64 KB, but
+   * leave out secrets, host addresses and user data yourself.
+   */
+  collect: () => unknown;
+}
+
+/**
+ * The diagnostics report. Only admins read it. Needs no capability. A plugin
+ * that is asleep when the report is made is not asked. Termix 26.11.3; check
+ * that ctx.diagnostics exists on older versions.
+ */
+export interface PluginDiagnostics {
+  /** One section per plugin; a second call replaces the first. */
+  provide: (section: PluginDiagnosticsSection) => () => void;
+}
+
+/** What a handler gets besides its input. */
+export interface PluginOperationContext {
+  hostId?: number;
+  /** The row a resource action targets. */
+  resourceKey?: string;
+  /** Null for a background read. */
+  runId: string | null;
+  /** Nothing may change when this is set. */
+  dryRun: boolean;
+  /** Fires when the run is cancelled, times out or the plugin stops. */
+  signal: AbortSignal;
+  log: (line: string) => void;
+}
+
+export interface PluginOperationHandler {
+  run: (
+    input: Record<string, unknown>,
+    context: PluginOperationContext,
+  ) => Promise<OperationResult> | OperationResult;
+  /** The dry run text for an action declared with dryRun "describe". */
+  describe?: (
+    input: Record<string, unknown>,
+    context: PluginOperationContext,
+  ) => string | Promise<string>;
+}
+
+export interface PluginOperationInvokeOptions {
+  hostId?: number;
+  resourceKey?: string;
+  input?: Record<string, unknown>;
+  dryRun?: boolean;
+  /** A person agreed to a destructive action. */
+  confirmed?: boolean;
+  idempotencyKey?: string;
+  batchId?: string;
+  /** What this plugin is doing: automation, assistant, mcp, rollout and so on. */
+  via?: string;
+}
+
+export interface PluginOperationOutcome {
+  runId: string | null;
+  status: string;
+  summary?: string;
+  changed?: boolean;
+  data?: unknown;
+  error?: string;
+  errorCode?: string;
+  approvalId?: string;
+}
+
+export interface PluginOperationApprovalInput {
+  actionId: string;
+  pluginId: string;
+  risk: OperationRisk;
+  /** What rules should use. Plugins not signed as official count as change. */
+  effectiveRisk: OperationRisk;
+  origin: { kind: string; pluginId?: string; via?: string };
+  userId: string;
+  hostId?: number;
+  hostTags?: string[];
+  batchId?: string;
+}
+
+export interface PluginOperationApprovalDecision {
+  decision: "allow" | "approve" | "deny";
+  reason?: string;
+  allowSelf?: boolean;
+  expiresInMinutes?: number;
+}
+
+export interface PluginOperationEvent {
+  id: string;
+  eventId: string;
+  pluginId: string;
+  hostId?: number;
+  severity?: string;
+  payload?: unknown;
+  runId?: string;
+  depth: number;
+  at: string;
+}
+
+/**
+ * Declared actions and events. See contributes.operations in the manifest.
+ * register and emit need operations:provide. invoke, list and onEvent need
+ * operations:invoke, and invoke only reaches ids in the manifest's invokes list.
+ */
+export interface PluginOperations {
+  register: (id: string, handler: PluginOperationHandler) => void;
+  /**
+   * Runs one of this plugin's own actions from its route, so a button press
+   * goes through the same checks and lands in the same history.
+   */
+  run: (
+    actionId: string,
+    options?: PluginOperationInvokeOptions,
+  ) => Promise<PluginOperationOutcome>;
+  invoke: (
+    actionId: string,
+    options?: PluginOperationInvokeOptions,
+  ) => Promise<PluginOperationOutcome>;
+  list: (options?: {
+    lang?: string;
+    surface?: keyof OperationSurfaces;
+  }) => Promise<unknown>;
+  emit: (
+    eventId: string,
+    payload?: unknown,
+    options?: { hostId?: number },
+  ) => Promise<void>;
+  onEvent: (subscription: {
+    pattern: string;
+    handler: (event: PluginOperationEvent) => void | Promise<void>;
+    userId?: string;
+    cooldownMs?: number;
+  }) => () => void;
+  /**
+   * Cancel or undo a run. Needs operations:invoke and works only inside one
+   * of the plugin's own requests: the person on that request acts, with
+   * their own rights. Requests made with an API key are refused.
+   */
+  runs: {
+    /** Stops a running action, or withdraws one waiting for approval. */
+    cancel: (input: { runId: string }) => Promise<{ cancelled: boolean }>;
+    /** Runs the action's undo with the input the run recorded. */
+    undo: (input: {
+      runId: string;
+      confirmed?: boolean;
+    }) => Promise<PluginOperationOutcome>;
+  };
+  /** Rules for what needs a person, and deciding. Needs operations:approve. */
+  approvals: {
+    /**
+     * Approves or rejects a waiting action. Works only inside one of the
+     * plugin's own requests: the person on that request decides, with their
+     * own rights. Requests made with an API key are refused.
+     */
+    decide: (input: {
+      approvalId: string;
+      approve: boolean;
+      comment?: string;
+    }) => Promise<PluginOperationOutcome>;
+    provide: (
+      provider: (
+        input: PluginOperationApprovalInput,
+      ) =>
+        | PluginOperationApprovalDecision
+        | null
+        | undefined
+        | Promise<PluginOperationApprovalDecision | null | undefined>,
+    ) => () => void;
+  };
+}
+
 export interface PluginContext {
   readonly pluginId: string;
   readonly manifest: PluginManifest;
@@ -2070,14 +3912,20 @@ export interface PluginContext {
   readonly schedule: PluginSchedule;
   /** Core's notification channels. Needs notify:send. */
   readonly notify: PluginNotify;
+  /** Declared actions and events, reachable from every surface. */
+  readonly operations: PluginOperations;
   /** Outbound HTTP through core's SSRF guard. Needs network:outbound. */
   readonly fetch: PluginFetch;
+  /** Plain reachability checks. Needs network:probe. */
+  readonly network: PluginNetwork;
   /** Programs on the Termix server. Needs process:spawn. */
   readonly process: PluginProcess;
   /** The server certificate. Needs system:tls. */
   readonly system: PluginSystem;
   /** The installed plugins and whether each runs. Needs plugins:read. */
   readonly plugins: PluginPlugins;
+  /** A section in the diagnostics report. Termix 26.11.3. */
+  readonly diagnostics: PluginDiagnostics;
 
   /**
    * Runs `fn` with `userId` as the acting user, for background work that has

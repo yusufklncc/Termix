@@ -1,70 +1,72 @@
 const {
   app,
   BrowserWindow,
+  WebContentsView,
+  utilityProcess,
+  MessageChannelMain,
   shell,
   ipcMain,
   dialog,
   Menu,
   session,
+  protocol,
   safeStorage,
   Tray,
   clipboard,
   nativeImage,
+  Notification,
 } = require("electron");
 const path = require("path");
 const { getUnpackedAppRoot } = require("./backend-paths.cjs");
 const { classifyBackendFailure } = require("./backend-failure.cjs");
+const {
+  killProcessTree,
+  wrapUtilityProcess,
+  stopBackendProcess,
+} = require("./backend-process.cjs");
 const fs = require("fs");
-const { renameLocalPath } = require("./rename-local-path.cjs");
-const os = require("os");
-const https = require("https");
 const http = require("http");
 const net = require("net");
 const tls = require("tls");
 const zlib = require("zlib");
 const crypto = require("crypto");
-const { URL, pathToFileURL } = require("url");
-const { fork, spawn } = require("child_process");
-const pty = require("node-pty");
-const WebSocket = require("ws");
+const { isLocalBackendUrl } = require("./local-backend.cjs");
+
+// Proves a request to the local backend comes from this app, not another
+// program on the machine. New every launch, never written to disk.
+const LAUNCH_SECRET = crypto.randomBytes(32).toString("hex");
+const { URL } = require("url");
+const appProtocol = require("./app-protocol.cjs");
+const { createIpcGuard } = require("./ipc-guard.cjs");
+const { IPC_ARGS } = require("./ipc-args.cjs");
+const {
+  REVOCATIONS_URL,
+  createReleaseVerifier,
+  sigstoreBundleVerifier,
+} = require("./update-verify.cjs");
+const { migrateFileStorage } = require("./storage-migrate.cjs");
+const { createPluginSandboxHost } = require("./plugin-sandbox.cjs");
+const { checkRuntime } = require("./plugin-runtime.cjs");
+const { shouldRelax, relaxFrameHeaders } = require("./frame-headers.cjs");
+const { openInEditor } = require("./open-in-editor.cjs");
+const deepLink = require("./deep-link.cjs");
+const pluginNodePin = require("./plugin-node.json");
 const linkedServer = require("./linked-server.cjs");
 const desktopSettings = require("./desktop-settings.cjs");
 const autoUpdates = require("./auto-updater.cjs");
-const { launchNativeRdp } = require("./native-rdp.cjs");
-const { isCloseActiveTabInput } = require("./keyboard-shortcuts.cjs");
-const { quitApp } = require("./app-quit.cjs");
+const { windowsLinuxMenuTemplate } = require("./keyboard-shortcuts.cjs");
+const { quitApp, closeAction, showTrayNotice } = require("./app-quit.cjs");
 const { selectLinuxPasswordStore } = require("./linux-password-store.cjs");
-const { resolveLocalShell, repairSpawnHelpers } = require("./local-shell.cjs");
-const {
-  registerLocalFileHandlers,
-  setLocalBackendPort,
-} = require("./local-files.cjs");
-const {
-  EXTERNAL_EDITOR_SETTING,
-  isLaunchableFileName,
-} = require("./external-editor.cjs");
+const { forcedScaleFactor } = require("./linux-scale.cjs");
+// Saved by the file manager after the user picks an editor in a file dialog.
+const EXTERNAL_EDITOR_SETTING = "fileManager.externalEditorPath";
+
+// The height of the title bar the app draws itself. The renderer uses the
+// same number, so the bar and the window controls always line up.
+const TITLE_BAR_HEIGHT = 40;
 const { isExternalLoginUrl, isCallbackPort } = require("./external-login.cjs");
 
-const localTerminalSessions = new Map();
-
-function ownedLocalTerminal(event, sessionId) {
-  if (typeof sessionId !== "string" || !/^[a-f0-9-]{36}$/.test(sessionId)) {
-    return null;
-  }
-  const session = localTerminalSessions.get(sessionId);
-  return session?.ownerId === event.sender.id ? session : null;
-}
-
-function closeLocalTerminalsFor(ownerId) {
-  for (const [sessionId, session] of localTerminalSessions) {
-    if (session.ownerId !== ownerId) continue;
-    session.process.kill();
-    localTerminalSessions.delete(sessionId);
-  }
-}
-
-// The main process's Node.js networking (the `https`/`http` modules used by
-// httpFetch below and the global `fetch`) only
+// The main process's Node.js networking (the global `fetch`) only
 // trusts Node's bundled Mozilla CA list by default, not the OS/system trust
 // store. Chromium (the renderer, i.e. the web app and the login iframe) uses
 // the OS trust store instead, so a certificate that's valid in-browser --
@@ -336,7 +338,12 @@ function rememberElectronAuthCookieFromHeader(url, header) {
   const origin = getCookieOrigin(url);
   if (!origin) return;
 
-  const cookie = parseSetCookieHeader(header);
+  const parsed = parseSetCookieHeader(header);
+  // Over HTTPS the server names it __Host-jwt; it reads either name.
+  const cookie =
+    parsed && parsed.name === "__Host-jwt"
+      ? { ...parsed, name: "jwt" }
+      : parsed;
   if (!cookie || cookie.name !== "jwt") return;
 
   const key = getElectronAuthCookieKey(cookie.name, origin);
@@ -491,99 +498,8 @@ function isInvalidCertificateAllowedForUrl(url) {
 function getTlsVerificationOptions(url) {
   return {
     rejectUnauthorized: !isInvalidCertificateAllowedForUrl(url),
+    ...linkedServer.clientCertOptionsFor(url),
   };
-}
-
-function getWebSocketOptions(url, options = {}) {
-  return {
-    ...options,
-    ...(String(url).startsWith("wss:") ? getTlsVerificationOptions(url) : {}),
-  };
-}
-
-function httpFetch(url, options = {}) {
-  return new Promise((resolve, reject) => {
-    const urlObj = new URL(url);
-    const isHttps = urlObj.protocol === "https:";
-    const client = isHttps ? https : http;
-
-    const requestOptions = {
-      method: options.method || "GET",
-      headers: options.headers || {},
-      timeout: options.timeout || 10000,
-      ...(isHttps
-        ? options.allowInvalidCertificate
-          ? { rejectUnauthorized: false }
-          : getTlsVerificationOptions(url)
-        : {}),
-    };
-
-    const req = client.request(url, requestOptions, (res) => {
-      const chunks = [];
-      // Reverse proxies (nginx and friends) commonly gzip/deflate/br-compress
-      // responses regardless of client Accept-Encoding. Unlike browser fetch,
-      // Node's http/https modules never auto-decompress, so an unhandled
-      // content-encoding here silently turns the body into garbage bytes.
-      let stream = res;
-      const maxResponseBytes = options.maxResponseBytes || 10 * 1024 * 1024;
-      let responseBytes = 0;
-      let settled = false;
-      const fail = (error) => {
-        if (settled) return;
-        settled = true;
-        stream.destroy();
-        req.destroy();
-        reject(error);
-      };
-      const encoding = (res.headers["content-encoding"] || "")
-        .toLowerCase()
-        .trim();
-      try {
-        if (encoding === "gzip" || encoding === "x-gzip") {
-          stream = res.pipe(zlib.createGunzip());
-        } else if (encoding === "br") {
-          stream = res.pipe(zlib.createBrotliDecompress());
-        } else if (encoding === "deflate") {
-          stream = res.pipe(zlib.createInflate());
-        }
-      } catch (decompressError) {
-        reject(decompressError);
-        return;
-      }
-
-      stream.on("data", (chunk) => {
-        responseBytes += chunk.length;
-        if (responseBytes > maxResponseBytes) {
-          fail(new Error(`Response exceeds ${maxResponseBytes} bytes`));
-          return;
-        }
-        chunks.push(chunk);
-      });
-      stream.on("end", () => {
-        if (settled) return;
-        settled = true;
-        const data = Buffer.concat(chunks).toString("utf8");
-        resolve({
-          ok: res.statusCode >= 200 && res.statusCode < 300,
-          status: res.statusCode,
-          text: () => Promise.resolve(data),
-          json: () => Promise.resolve(JSON.parse(data)),
-        });
-      });
-      stream.on("error", fail);
-    });
-
-    req.on("error", reject);
-    req.on("timeout", () => {
-      req.destroy();
-      reject(new Error("Request timeout"));
-    });
-
-    if (options.body) {
-      req.write(options.body);
-    }
-    req.end();
-  });
 }
 
 if (process.platform === "linux") {
@@ -591,10 +507,10 @@ if (process.platform === "linux") {
 
   app.commandLine.appendSwitch("--enable-features=VaapiVideoDecoder");
 
-  // Fix click-coordinate misalignment with fractional display scaling on KDE/Wayland.
-  // Chromium's hit-testing uses unscaled coords while the compositor scales visually,
-  // so forcing scale factor 1 keeps them in sync. See: https://github.com/brave/brave-browser/issues/50028
-  app.commandLine.appendSwitch("--force-device-scale-factor", "1");
+  const scaleFactor = forcedScaleFactor(process.env);
+  if (scaleFactor) {
+    app.commandLine.appendSwitch("--force-device-scale-factor", scaleFactor);
+  }
 
   const passwordStore = selectLinuxPasswordStore(app.commandLine, process.env);
   if (passwordStore) {
@@ -618,12 +534,59 @@ if (isInsecureModeEnabled()) {
 }
 app.commandLine.appendSwitch("--enable-features=NetworkService");
 
+// Before ready: the UI is served from app://termix, not file://.
+appProtocol.registerAppScheme(protocol);
+
 let mainWindow = null;
+// Hidden windows open and close while saved settings move over, which must
+// not count as the user closing the app.
+let movingStorage = false;
 const { createIsolatedWindows } = require("./isolated-window.cjs");
+const { createEmbeddedViews } = require("./embedded-view.cjs");
 const isolatedWindows = createIsolatedWindows({
   BrowserWindow,
   session,
   getMainWindow: () => mainWindow,
+});
+
+const embeddedViews = createEmbeddedViews({
+  WebContentsView,
+  session,
+  getMainWindow: () => mainWindow,
+  log: logToFile,
+});
+
+// Only the app's own page, in the main window's top frame, may call main.
+const DEV_APP_ORIGIN = "http://localhost:5173";
+function isOwnPageUrl(url) {
+  if (isDev) {
+    try {
+      return new URL(url).origin === DEV_APP_ORIGIN;
+    } catch {
+      return false;
+    }
+  }
+  return appProtocol.isAppUrl(url);
+}
+const ipc = createIpcGuard({
+  ipcMain,
+  getMainWindow: () => mainWindow,
+  isAppUrl: isOwnPageUrl,
+  args: IPC_ARGS,
+  log: logToFile,
+});
+
+ipc.handle("embedded-view-open", (_event, options) =>
+  embeddedViews.open(options),
+);
+ipc.handle("embedded-view-bounds", (_event, id, bounds) => {
+  embeddedViews.setBounds(id, bounds);
+});
+ipc.handle("embedded-view-visible", (_event, id, visible) => {
+  embeddedViews.setVisible(id, visible);
+});
+ipc.handle("embedded-view-close", (_event, id) => {
+  embeddedViews.destroy(id);
 });
 
 // Requests from the embedded backend over the fork IPC channel (the other
@@ -631,19 +594,59 @@ const isolatedWindows = createIsolatedWindows({
 // ctx.desktop.openIsolatedWindow is the one caller today.
 const BACKEND_REQUEST_HANDLERS = {
   "open-isolated-window": (payload) => isolatedWindows.open(payload),
-  // The OS client for a protocol. Only RDP has one wired up.
-  "launch-external-client": (payload) =>
-    payload?.protocol === "rdp"
-      ? launchNativeRdp(payload)
-      : {
-          success: false,
-          error: `No external client for ${payload?.protocol ?? "this protocol"}`,
-        },
+  // A plugin's backend lets its frames show one page (ctx.desktop.grantView).
+  "web-view-grant": (payload) => embeddedViews.addGrant(payload),
+  // Plugins open OS clients themselves now (desktop:local), so none is wired here.
+  "launch-external-client": (payload) => ({
+    success: false,
+    error: `No external client for ${payload?.protocol ?? "this protocol"}`,
+  }),
+  // Generic shell actions for a plugin's desktop:local file work.
+  "shell-trash-item": async (payload) => {
+    await shell.trashItem(localPath(payload));
+    return { success: true };
+  },
+  "shell-show-item": (payload) => {
+    shell.showItemInFolder(localPath(payload));
+    return { success: true };
+  },
+  "shell-open-path": async (payload) => {
+    const error = await shell.openPath(localPath(payload));
+    return error ? { success: false, error } : { success: true };
+  },
+  // The editor is only ever the one picked in a file dialog (set-setting).
+  "shell-open-editor": (payload) =>
+    openInEditor(localPath(payload), {
+      editorPath: () => {
+        const value = readSetting(EXTERNAL_EDITOR_SETTING);
+        return typeof value === "string" && value ? value : null;
+      },
+      openPath: (target) => shell.openPath(target),
+    }),
   "sync-proxy-config": (payload) => {
+    if (payload !== null && typeof payload !== "object") {
+      throw new Error("Bad link config");
+    }
     linkedServer.setLinkedServer(payload);
     return { success: true };
   },
 };
+
+// A plain absolute path on this machine, never a URL or a relative path.
+function localPath(payload) {
+  const value = payload?.path;
+  if (
+    typeof value !== "string" ||
+    !value ||
+    value.length > 4096 ||
+    value.includes("\0") ||
+    !path.isAbsolute(value) ||
+    /^[a-z][a-z0-9+.-]+:\/\//i.test(value)
+  ) {
+    throw new Error("Bad path");
+  }
+  return path.normalize(value);
+}
 
 function isDevRunner() {
   return (
@@ -684,6 +687,8 @@ async function handleBackendRequest(msg) {
 }
 
 let backendProcess = null;
+// Starts the embedded backend's plugin processes (see plugin-sandbox.cjs).
+let pluginSandbox = null;
 let backendStartFailed = false;
 // Why the embedded backend died, once it has. Null while it is healthy
 // or still starting. The renderer polls this to tell "still booting"
@@ -699,7 +704,6 @@ let backendStderrTail = "";
 let tray = null;
 let isQuitting = false;
 const tempFiles = new Map();
-const externalEditorSessions = new Map();
 // Paths the user picked in an open dialog this session. Only these may be
 // saved as the external editor, so the renderer cannot name an executable.
 const dialogChosenPaths = new Set();
@@ -740,6 +744,12 @@ function createManagedTempFile(fileName, content, encoding = "utf8") {
   return { tempId, path: filePath };
 }
 
+function dragIcon() {
+  // Windows cancels a drag with an empty icon
+  const buf = Buffer.alloc(16 * 16 * 4, 0x99);
+  return nativeImage.createFromBitmap(buf, { width: 16, height: 16 });
+}
+
 function cleanupManagedTempFile(tempId) {
   const temp = tempFiles.get(tempId);
   if (!temp) return;
@@ -751,120 +761,38 @@ function cleanupManagedTempFile(tempId) {
   tempFiles.delete(tempId);
 }
 
-function closeExternalEditorSession(editId) {
-  const session = externalEditorSessions.get(editId);
-  if (!session) return;
-  if (session.timer) clearTimeout(session.timer);
-  try {
-    session.watcher.close();
-  } catch {
-    // watcher may already be closed
-  }
-  externalEditorSessions.delete(editId);
-  cleanupManagedTempFile(editId);
-}
+// Mutual TLS for the linked server: Chromium asks which certificate from the
+// OS store to present. Other origins keep Chromium's default (none).
+const chosenClientCerts = new Map();
 
-function notifyExternalEditorSaved(editId) {
-  const session = externalEditorSessions.get(editId);
-  if (!session || !mainWindow || mainWindow.isDestroyed()) return;
-
-  try {
-    const stat = fs.statSync(session.path);
-    if (stat.mtimeMs === session.lastMtimeMs) return;
-    session.lastMtimeMs = stat.mtimeMs;
-
-    const content = fs.readFileSync(session.path, "utf8");
-    mainWindow.webContents.send("external-editor-saved", {
-      editId,
-      content,
-      encoding: "utf8",
-      path: session.path,
-    });
-  } catch (error) {
-    logToFile("Failed to read external editor file:", error.message);
-  }
-}
-
-function openPathWithEditor(filePath, editorPath) {
-  if (!editorPath) {
-    return shell.openPath(filePath);
-  }
-
-  return new Promise((resolve) => {
-    let settled = false;
-    const child = spawn(editorPath, [filePath], {
-      detached: true,
-      stdio: "ignore",
-    });
-
-    child.once("error", (error) => {
-      if (settled) return;
-      settled = true;
-      resolve(error.message);
-    });
-
-    setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.unref();
-      resolve("");
-    }, 500);
-  });
-}
-
-// Origins the renderer has explicitly marked as allowed to present an invalid
-// certificate, for web endpoints whose ignoreCert is set. Session scoped and
-// never persisted.
-//
-// Deliberately NOT wired into isInvalidCertificateAllowedForUrl: that function
-// also governs this process's own outbound TLS via getTlsVerificationOptions,
-// and widening it would grant more privilege than the feature needs.
-//
-// Entries expire rather than living until the app restarts (days, on a
-// desktop app). Main has no host-database access, so it cannot verify a
-// renderer's claim that an origin really is a configured web endpoint -- an
-// unbounded allowance would make that an indefinite window rather than a
-// momentary one. The renderer re-registers before each load, which refreshes
-// the expiry, so a live endpoint keeps working while a stale entry lapses.
-const WEB_ENDPOINT_CERTIFICATE_ALLOWLIST_TTL_MS = 5 * 60 * 1000;
-const webEndpointCertificateAllowlist = new Map();
-
-function isWebEndpointCertificateAllowed(url) {
-  try {
-    const parsed = new URL(url);
-    // The allowance exists solely to suppress a TLS certificate error, so a
-    // non-https origin in the map is meaningless at best.
-    if (parsed.protocol !== "https:") return false;
-
-    const expiresAt = webEndpointCertificateAllowlist.get(parsed.origin);
-    if (expiresAt === undefined) return false;
-    if (Date.now() >= expiresAt) {
-      webEndpointCertificateAllowlist.delete(parsed.origin);
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-ipcMain.handle("allow-invalid-certificate-for-origin", (_event, origin) => {
-  try {
-    // Store the PARSED origin, never the caller's string, so a path or a
-    // wildcard cannot widen the allowance.
-    const parsed = new URL(String(origin));
-    if (parsed.protocol !== "https:") {
-      return { success: false };
-    }
-    webEndpointCertificateAllowlist.set(
-      parsed.origin,
-      Date.now() + WEB_ENDPOINT_CERTIFICATE_ALLOWLIST_TTL_MS,
+app.on(
+  "select-client-certificate",
+  async (event, _webContents, url, list, callback) => {
+    if (!linkedServer.isLinkedOrigin(url) || !list.length) return;
+    event.preventDefault();
+    const origin = new URL(url).origin;
+    const remembered = list.find(
+      (cert) => cert.fingerprint === chosenClientCerts.get(origin),
     );
-    return { success: true };
-  } catch {
-    return { success: false };
-  }
-});
+    let chosen = remembered || (list.length === 1 ? list[0] : null);
+    if (!chosen) {
+      const { response } = await dialog.showMessageBox(mainWindow, {
+        type: "question",
+        title: "Client certificate",
+        message: "Choose the certificate for this server",
+        detail: origin,
+        buttons: [
+          ...list.slice(0, 8).map((cert) => cert.subjectName),
+          "Cancel",
+        ],
+        cancelId: Math.min(list.length, 8),
+      });
+      chosen = list[response] || null;
+    }
+    if (chosen) chosenClientCerts.set(origin, chosen.fingerprint);
+    callback(chosen || undefined);
+  },
+);
 
 app.on(
   "certificate-error",
@@ -873,18 +801,10 @@ app.on(
       isolatedWindows.handleCertificateError(event, _webContents, url, callback)
     )
       return;
-    if (isWebEndpointCertificateAllowed(url)) {
-      event.preventDefault();
-      logToFile("Allowed invalid certificate for configured web endpoint", {
-        url,
-        error,
-        issuer: certificate?.issuerName,
-        subject: certificate?.subjectName,
-      });
-      callback(true);
+    if (
+      embeddedViews.handleCertificateError(event, _webContents, url, callback)
+    )
       return;
-    }
-
     if (isInvalidCertificateAllowedForUrl(url)) {
       event.preventDefault();
       logToFile("Allowed invalid certificate for configured server", {
@@ -1016,7 +936,10 @@ async function clearElectronJwtCookiesAtStartup() {
 
   for (const targetSession of targetSessions) {
     try {
-      const cookies = await targetSession.cookies.get({ name: "jwt" });
+      const cookies = [
+        ...(await targetSession.cookies.get({ name: "jwt" })),
+        ...(await targetSession.cookies.get({ name: "__Host-jwt" })),
+      ];
       await Promise.all(
         cookies.map((cookie) =>
           targetSession.cookies.remove(
@@ -1045,7 +968,7 @@ function getBackendPaths() {
       backendCwd: backendDir,
     };
   }
-  // fork() does not go through Electron's asar redirector, use the unpacked path.
+  // The backend process does not read from the asar, use the unpacked path.
   // On macOS multi-arch builds (mergeASARs: false), electron-builder names the ASAR
   // app-arm64.asar / app-x64.asar instead of app.asar, so match all variants.
   const unpackedRoot = getUnpackedAppRoot(appRoot);
@@ -1107,11 +1030,7 @@ function reapOrphanedBackendProcess() {
   logToFile(
     `Found orphaned backend process from a previous session (pid ${recordedPid}), terminating it before starting a new one`,
   );
-  try {
-    process.kill(recordedPid, "SIGKILL");
-  } catch {
-    // already gone
-  }
+  killProcessTree(recordedPid);
   try {
     fs.unlinkSync(pidFilePath);
   } catch {
@@ -1178,29 +1097,64 @@ function startBackendServer() {
     logToFile("  dataDir exists:", fs.existsSync(dataDir));
     logToFile("  backendCwd exists:", fs.existsSync(backendCwd));
 
-    backendProcess = fork(entryPath, [], {
-      cwd:
-        fs.existsSync(backendCwd) && fs.statSync(backendCwd).isDirectory()
-          ? backendCwd
-          : dataDir,
-      env: {
-        ...process.env,
-        DATA_DIR: dataDir,
-        NODE_ENV: "production",
-        ELECTRON_EMBEDDED: "true",
-        PORT: String(backendPort),
-        EMBEDDED_BACKEND_PORT: String(backendPort),
-        VERSION: app.getVersion(),
-      },
-      stdio: ["pipe", "pipe", "pipe", "ipc"],
+    // A utility process runs Node without the runAsNode fuse, so that fuse
+    // stays off and the app binary can never be used as a plain node.
+    backendProcess = wrapUtilityProcess(
+      utilityProcess.fork(entryPath, [], {
+        cwd:
+          fs.existsSync(backendCwd) && fs.statSync(backendCwd).isDirectory()
+            ? backendCwd
+            : dataDir,
+        env: {
+          ...process.env,
+          DATA_DIR: dataDir,
+          NODE_ENV: "production",
+          ELECTRON_EMBEDDED: "true",
+          TERMIX_DESKTOP_LAUNCH_SECRET: LAUNCH_SECRET,
+          PORT: String(backendPort),
+          EMBEDDED_BACKEND_PORT: String(backendPort),
+          ELECTRON_USER_DATA: app.getPath("userData"),
+          VERSION: app.getVersion(),
+          // Plugin processes run on the app's pinned Node, not Electron's.
+          TERMIX_PLUGIN_NODE_MAJOR: String(
+            Number(pluginNodePin.version.split(".")[0]),
+          ),
+        },
+        stdio: "pipe",
+        serviceName: "Termix backend",
+        // A plugin process must not be able to open the backend's inspector.
+        execArgv: ["--disable-sigusr1"],
+      }),
+    );
+
+    pluginSandbox?.stopAll();
+    pluginSandbox = createPluginSandboxHost({
+      MessageChannelMain,
+      backendDir: path.dirname(entryPath),
+      dataRoot: dataDir,
+      mas: process.mas === true,
+      getRuntime: () =>
+        checkRuntime({
+          isPackaged: app.isPackaged,
+          resourcesPath: process.resourcesPath,
+          appRoot,
+          appBundle:
+            process.platform === "darwin" && app.isPackaged
+              ? path.resolve(process.execPath, "..", "..", "..")
+              : null,
+        }),
+      log: logToFile,
     });
 
-    logToFile("Backend process spawned, pid:", backendProcess.pid);
-    try {
-      fs.writeFileSync(getBackendPidFilePath(), String(backendProcess.pid));
-    } catch {
-      // Non-fatal: only means a future crash won't self-heal via reap.
-    }
+    const spawned = backendProcess;
+    spawned.once("spawn", () => {
+      logToFile("Backend process spawned, pid:", spawned.pid);
+      try {
+        fs.writeFileSync(getBackendPidFilePath(), String(spawned.pid));
+      } catch {
+        // Non-fatal: only means a future crash won't self-heal via reap.
+      }
+    });
 
     let resolved = false;
     const readyTimeout = setTimeout(() => {
@@ -1235,6 +1189,7 @@ function startBackendServer() {
     });
 
     backendProcess.on("message", (msg) => {
+      if (pluginSandbox?.handle(msg, spawned)) return;
       if (!resolved && msg?.type === "backend-ready") {
         resolved = true;
         clearTimeout(readyTimeout);
@@ -1246,6 +1201,7 @@ function startBackendServer() {
 
     backendProcess.on("exit", (code, signal) => {
       logToFile(`Backend process exited with code ${code}, signal ${signal}`);
+      pluginSandbox?.stopAll();
       if (!resolved && code !== 0) {
         backendStartFailed = true;
       }
@@ -1268,8 +1224,12 @@ function startBackendServer() {
       }
     });
 
+    // A utility process reports a fatal V8 error here, not an Error.
     backendProcess.on("error", (err) => {
-      logToFile("Failed to start backend process:", err.message);
+      logToFile(
+        "Failed to start backend process:",
+        err?.message || err?.type || String(err),
+      );
       backendFailure = { reason: "crashed", port: null };
       backendProcess = null;
       if (!resolved) {
@@ -1289,35 +1249,39 @@ function clearBackendPidFile() {
   }
 }
 
+let backendStopping = null;
+
+// Resolves once the backend and everything it started are gone.
 function stopBackendServer() {
-  if (!backendProcess) return;
+  if (backendStopping) return backendStopping;
+  const child = backendProcess;
+  if (!child) return Promise.resolve();
 
-  console.log("Stopping embedded backend server...");
+  logToFile("Stopping embedded backend server...");
   backendStopRequested = true;
-
-  try {
-    backendProcess.send({ type: "shutdown" });
-  } catch {
-    // IPC channel may already be closed
-  }
-
-  const forceKillTimeout = setTimeout(() => {
-    if (backendProcess) {
-      console.log("Force killing backend process...");
-      backendProcess.kill("SIGKILL");
-      backendProcess = null;
-    }
-  }, 5000);
-
-  backendProcess.on("exit", () => {
-    clearTimeout(forceKillTimeout);
-    backendProcess = null;
-    clearBackendPidFile();
-  });
+  backendStopping = stopBackendProcess(child, { log: logToFile }).then(
+    (how) => {
+      logToFile(`Embedded backend stopped (${how})`);
+      if (backendProcess === child) backendProcess = null;
+      clearBackendPidFile();
+      backendStopping = null;
+    },
+  );
+  return backendStopping;
 }
 
 // App Sandbox denies the singleton socket bind, which reads as a held lock and
 // quits the app on every launch. macOS reactivates bundled apps anyway.
+const links = deepLink.createLinkQueue();
+for (const link of deepLink.linksFromArgv(process.argv)) links.push(link);
+// macOS hands a link over this event, also before ready on a cold start.
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  const link = deepLink.parseLink(url);
+  if (link) links.push({ url: link, source: "os-scheme" });
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show();
+});
+
 const gotTheLock = process.mas || app.requestSingleInstanceLock();
 if (!gotTheLock) {
   console.log("Another instance is already running, quitting...");
@@ -1325,6 +1289,7 @@ if (!gotTheLock) {
   process.exit(0);
 } else {
   app.on("second-instance", (event, commandLine, workingDirectory) => {
+    for (const link of deepLink.linksFromArgv(commandLine)) links.push(link);
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
@@ -1333,7 +1298,21 @@ if (!gotTheLock) {
   });
 }
 
+function setMacTrayIcon(style) {
+  desktopSettings.saveDesktopSettings({ macTrayIcon: style });
+  if (tray && !tray.isDestroyed()) tray.destroy();
+  tray = null;
+  createTray();
+  createMenu();
+  if (style === "hidden" && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    mainWindow.focus();
+  }
+}
+
 function createTray() {
+  const macStyle = desktopSettings.getDesktopSettings().macTrayIcon;
+  if (process.platform === "darwin" && macStyle === "hidden") return;
   try {
     const { nativeImage } = require("electron");
 
@@ -1341,19 +1320,18 @@ function createTray() {
     // use the unpacked path so the OS sees a real file.
     const publicRoot = isDev
       ? path.join(appRoot, "public")
-      : path.join(
-          appRoot.replace(
-            /app(-[a-z0-9]+)?\.asar(?!\.unpacked)/,
-            "app.asar.unpacked",
-          ),
-          "public",
-        );
+      : path.join(getUnpackedAppRoot(appRoot), "public");
 
     let trayIcon;
     if (process.platform === "darwin") {
-      const iconPath = path.join(publicRoot, "icons", "16x16.png");
+      const monochrome = macStyle !== "color";
+      const iconPath = path.join(
+        publicRoot,
+        "icons",
+        monochrome ? "trayTemplate.png" : "16x16.png",
+      );
       trayIcon = nativeImage.createFromPath(iconPath);
-      trayIcon.setTemplateImage(true);
+      trayIcon.setTemplateImage(monochrome);
     } else if (process.platform === "win32") {
       trayIcon = path.join(publicRoot, "icon.ico");
     } else {
@@ -1427,6 +1405,48 @@ function loadLinuxTrayIcon(nativeImage, publicRoot) {
   return null;
 }
 
+const CLIPBOARD_PERMISSIONS = new Set([
+  "clipboard-read",
+  "clipboard-write",
+  "clipboard-sanitized-write",
+]);
+
+/** A web link the user may open in their browser: http(s), no login in it. */
+function isExternalLinkUrl(value) {
+  try {
+    const url = new URL(value);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      !url.username &&
+      !url.password
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Any web contents not set up by this file gets no webviews and no windows.
+app.on("web-contents-created", (_event, contents) => {
+  contents.on("will-attach-webview", (event) => event.preventDefault());
+  contents.setWindowOpenHandler(() => ({ action: "deny" }));
+});
+
+/** Makes termix:// links open this app. Installers register it too. */
+function registerLinkScheme() {
+  if (process.mas) return;
+  try {
+    if (process.defaultApp && process.argv.length >= 2) {
+      app.setAsDefaultProtocolClient(deepLink.SCHEME, process.execPath, [
+        path.resolve(process.argv[1]),
+      ]);
+    } else {
+      app.setAsDefaultProtocolClient(deepLink.SCHEME);
+    }
+  } catch (error) {
+    logToFile("Could not register termix:// links:", String(error));
+  }
+}
+
 function createWindow() {
   const appVersion = app.getVersion();
   const electronVersion = process.versions.electron;
@@ -1437,12 +1457,27 @@ function createWindow() {
         ? "macOS"
         : "Linux";
 
+  const isMac = process.platform === "darwin";
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 800,
     minHeight: 600,
     title: "Termix",
+    // The app draws its own title bar so it follows the active theme. macOS
+    // keeps the traffic lights on top of it, Windows and Linux get the
+    // native controls as an overlay whose colors the renderer keeps in sync.
+    titleBarStyle: isMac ? "hiddenInset" : "hidden",
+    ...(isMac
+      ? { trafficLightPosition: { x: 14, y: 16 } }
+      : {
+          titleBarOverlay: {
+            color: "#0f0f14",
+            symbolColor: "#e6e6ea",
+            height: TITLE_BAR_HEIGHT,
+          },
+        }),
     icon: path.join(
       appRoot,
       "public",
@@ -1463,18 +1498,12 @@ function createWindow() {
     show: true,
   });
 
-  mainWindow.webContents.session.setPermissionRequestHandler(
-    (webContents, permission, callback) => {
-      if (
-        permission === "clipboard-read" ||
-        permission === "clipboard-write" ||
-        permission === "clipboard-sanitized-write"
-      ) {
-        callback(true);
-        return;
-      }
-      callback(false);
-    },
+  const ses = mainWindow.webContents.session;
+  ses.setPermissionRequestHandler((_contents, permission, callback) => {
+    callback(CLIPBOARD_PERMISSIONS.has(permission));
+  });
+  ses.setPermissionCheckHandler((_contents, permission) =>
+    CLIPBOARD_PERMISSIONS.has(permission),
   );
 
   if (process.platform !== "darwin") {
@@ -1484,16 +1513,13 @@ function createWindow() {
   const customUserAgent = `Termix-Desktop/${appVersion} (${platform}; Electron/${electronVersion})`;
   mainWindow.webContents.setUserAgent(customUserAgent);
 
-  mainWindow.webContents.on("before-input-event", (event, input) => {
-    if (process.platform !== "win32" || !isCloseActiveTabInput(input)) return;
-
-    event.preventDefault();
-    mainWindow.webContents.send("close-active-tab");
-  });
-
   mainWindow.webContents.session.webRequest.onBeforeSendHeaders(
     (details, callback) => {
       details.requestHeaders["X-Electron-App"] = "true";
+      // Only the local backend gets the launch secret, never a linked server.
+      if (isLocalBackendUrl(details.url, backendPort)) {
+        details.requestHeaders["X-Termix-Launch"] = LAUNCH_SECRET;
+      }
 
       details.requestHeaders["User-Agent"] = customUserAgent;
 
@@ -1527,8 +1553,7 @@ function createWindow() {
     mainWindow.loadURL("http://localhost:5173");
     mainWindow.webContents.openDevTools();
   } else {
-    const indexPath = path.join(appRoot, "dist", "index.html");
-    mainWindow.loadFile(indexPath).catch((err) => {
+    mainWindow.loadURL(appProtocol.APP_INDEX_URL).catch((err) => {
       console.error("Failed to load file:", err);
     });
   }
@@ -1538,30 +1563,17 @@ function createWindow() {
       const headers = details.responseHeaders;
 
       if (headers) {
-        delete headers["x-frame-options"];
-        delete headers["X-Frame-Options"];
-
-        if (headers["content-security-policy"]) {
-          headers["content-security-policy"] = headers[
-            "content-security-policy"
-          ]
-            .map((value) => value.replace(/frame-ancestors[^;]*/gi, ""))
-            .filter((value) => value.trim().length > 0);
-
-          if (headers["content-security-policy"].length === 0) {
-            delete headers["content-security-policy"];
-          }
-        }
-        if (headers["Content-Security-Policy"]) {
-          headers["Content-Security-Policy"] = headers[
-            "Content-Security-Policy"
-          ]
-            .map((value) => value.replace(/frame-ancestors[^;]*/gi, ""))
-            .filter((value) => value.trim().length > 0);
-
-          if (headers["Content-Security-Policy"].length === 0) {
-            delete headers["Content-Security-Policy"];
-          }
+        if (
+          shouldRelax(details, {
+            dev: isDev,
+            serverOrigins: [
+              `http://127.0.0.1:${backendPort}`,
+              `http://localhost:${backendPort}`,
+              linkedServer.getLinkedServer()?.origin,
+            ].filter(Boolean),
+          })
+        ) {
+          relaxFrameHeaders(headers);
         }
 
         const setCookieHeaderName = getHeaderName(headers, "Set-Cookie");
@@ -1635,53 +1647,120 @@ function createWindow() {
   });
 
   mainWindow.on("close", (event) => {
-    if (!isQuitting && tray && !tray.isDestroyed()) {
+    const action = closeAction({
+      isQuitting,
+      hasTray: !!tray && !tray.isDestroyed(),
+      platform: process.platform,
+      env: process.env,
+      closeToTray: desktopSettings.getDesktopSettings().closeToTray,
+    });
+    if (action === "quit") {
+      isQuitting = true;
+      app.quit();
+    } else if (action === "hide") {
       event.preventDefault();
-      // Stock GNOME has no tray to bring a hidden window back from.
-      if (
-        process.platform === "linux" &&
-        /gnome/i.test(process.env.XDG_CURRENT_DESKTOP || "")
-      ) {
-        mainWindow.minimize();
-      } else {
-        mainWindow.hide();
-      }
+      mainWindow.hide();
+      showTrayNoticeOnce();
     }
   });
 
+  mainWindow.webContents.on("did-start-navigation", (details) => {
+    if (details.isMainFrame && !details.isSameDocument) {
+      embeddedViews.destroyAll();
+    }
+  });
+
+  const sendTitleBarVisible = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send(
+      "title-bar-visible-changed",
+      titleBarVisible(mainWindow),
+    );
+  };
+  mainWindow.on("enter-full-screen", sendTitleBarVisible);
+  mainWindow.on("leave-full-screen", sendTitleBarVisible);
+
   mainWindow.on("closed", () => {
+    embeddedViews.destroyAll();
+    links.detach();
     mainWindow = null;
   });
 
+  // Links open in the system browser; the app never opens a window of its
+  // own for them.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    try {
-      const parsed = new URL(url);
-      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-        shell.openExternal(url);
-      }
-    } catch {
-      // invalid URL, ignore
-    }
+    if (isExternalLinkUrl(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
 
-  mainWindow.webContents.on("will-navigate", (event, url) => {
-    const allowedUrl = isDev
-      ? url.startsWith("http://localhost:5173/")
-      : url === pathToFileURL(path.join(appRoot, "dist", "index.html")).href;
-    if (!allowedUrl) event.preventDefault();
-  });
+  for (const name of ["will-navigate", "will-redirect"]) {
+    // Frames inside the page (a linked server's login) move on their own.
+    mainWindow.webContents.on(name, (event, url, _inPlace, isMainFrame) => {
+      if ((event.isMainFrame ?? isMainFrame) === false) return;
+      if (!isOwnPageUrl(url)) event.preventDefault();
+    });
+  }
 }
 
-ipcMain.handle("get-app-version", () => {
+ipc.handle("get-app-version", () => {
   return app.getVersion();
 });
 
-ipcMain.handle("get-platform", () => {
+/** The window an IPC call came from, so the main window and the extra
+ * windows (isolated views, sign-in) can each answer for themselves. */
+function windowFor(event) {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win && !win.isDestroyed()) return win;
+  if (mainWindow && !mainWindow.isDestroyed()) return mainWindow;
+  return null;
+}
+
+ipc.handle("get-platform", () => {
   return process.platform;
 });
 
-ipcMain.handle("get-embedded-server-status", () => {
+// The renderer asks once it listens, and gets the links that came first.
+ipc.handle("deep-link:take", () => {
+  links.attach((link) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("deep-link", link);
+    }
+  });
+  return links.take();
+});
+
+// Whether the app-drawn title bar shows in the window that asks. Only the
+// main window hides the native bar, and in full screen macOS hides the
+// traffic lights, so the bar goes away there too.
+function titleBarVisible(win) {
+  return !!win && win === mainWindow && !win.isFullScreen();
+}
+
+ipc.handle("get-title-bar-visible", (event) => {
+  return titleBarVisible(windowFor(event));
+});
+
+// The renderer sends the colors of the active theme so the window controls
+// the system draws (Windows and Linux) match the app.
+ipc.handle("set-title-bar-overlay", (event, colors) => {
+  const win = windowFor(event);
+  if (!win || process.platform === "darwin") return;
+  const options = {};
+  if (typeof colors?.color === "string" && colors.color) {
+    options.color = colors.color;
+  }
+  if (typeof colors?.symbolColor === "string" && colors.symbolColor) {
+    options.symbolColor = colors.symbolColor;
+  }
+  if (Object.keys(options).length === 0) return;
+  try {
+    win.setTitleBarOverlay(options);
+  } catch (error) {
+    logToFile("setTitleBarOverlay failed:", error);
+  }
+});
+
+ipc.handle("get-embedded-server-status", () => {
   return {
     running:
       backendProcess !== null && !backendProcess.killed && !backendStartFailed,
@@ -1694,104 +1773,130 @@ ipcMain.handle("get-embedded-server-status", () => {
 });
 
 // External login through the system browser (RFC 8252)
-ipcMain.handle(
-  "external-browser-login",
-  async (_event, authUrl, callbackPort) => {
-    if (!isExternalLoginUrl(authUrl)) {
-      return { success: false, error: "Invalid authentication URL" };
-    }
-    if (!isCallbackPort(callbackPort)) {
-      return { success: false, error: "Invalid callback port" };
-    }
-    const http = require("http");
+ipc.handle("external-browser-login", async (_event, authUrl, callbackPort) => {
+  if (!isExternalLoginUrl(authUrl)) {
+    return { success: false, error: "Invalid authentication URL" };
+  }
+  if (!isCallbackPort(callbackPort)) {
+    return { success: false, error: "Invalid callback port" };
+  }
+  const http = require("http");
 
-    return new Promise((resolve) => {
-      let timeout;
-      let settled = false;
-      const server = http.createServer((req, res) => {
-        const url = new URL(req.url || "/", `http://localhost:${callbackPort}`);
-        if (url.pathname === "/oidc-callback") {
-          const success = url.searchParams.get("success");
-          const error = url.searchParams.get("error");
-          const token = url.searchParams.get("token");
-          const secondFactor = url.searchParams.get("second_factor") === "1";
+  return new Promise((resolve) => {
+    let timeout;
+    let settled = false;
+    const server = http.createServer((req, res) => {
+      const url = new URL(req.url || "/", `http://localhost:${callbackPort}`);
+      if (url.pathname === "/oidc-callback") {
+        const success = url.searchParams.get("success");
+        const error = url.searchParams.get("error");
+        const token = url.searchParams.get("token");
+        const secondFactor = url.searchParams.get("second_factor") === "1";
 
-          res.writeHead(200, { "Content-Type": "text/html" });
-          res.end(
-            `<html><body><h2>${success === "true" || secondFactor ? "Authentication successful!" : "Authentication failed."}</h2><p>You can close this tab and return to Termix.</p><script>window.close()</script></body></html>`,
-          );
+        res.writeHead(200, { "Content-Type": "text/html" });
+        res.end(
+          `<html><body><h2>${success === "true" || secondFactor ? "Authentication successful!" : "Authentication failed."}</h2><p>You can close this tab and return to Termix.</p><script>window.close()</script></body></html>`,
+        );
 
-          if (secondFactor) {
-            finish({
-              success: false,
-              secondFactor: true,
-              tempToken: url.searchParams.get("temp_token"),
-              factors: url.searchParams.get("second_factors"),
-            });
-          } else if (success === "true") {
-            finish({ success: true, token });
-          } else {
-            finish({
-              success: false,
-              error: error || "Authentication failed",
-            });
-          }
-          return;
+        if (secondFactor) {
+          finish({
+            success: false,
+            secondFactor: true,
+            tempToken: url.searchParams.get("temp_token"),
+            factors: url.searchParams.get("second_factors"),
+          });
+        } else if (success === "true") {
+          finish({ success: true, token });
+        } else {
+          finish({
+            success: false,
+            error: error || "Authentication failed",
+          });
         }
+        return;
+      }
 
-        res.writeHead(404, { "Content-Type": "text/plain" });
-        res.end("Not found");
-      });
-
-      const finish = (result) => {
-        if (settled) return;
-        settled = true;
-        if (timeout) clearTimeout(timeout);
-        try {
-          server.close();
-        } catch {
-          // Server may not have started yet.
-        }
-        resolve(result);
-      };
-
-      const fail = (error) => {
-        finish({
-          success: false,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      };
-
-      server.once("error", fail);
-
-      server.listen(callbackPort, "localhost", async () => {
-        try {
-          await shell.openExternal(authUrl);
-        } catch (error) {
-          fail(error);
-        }
-      });
-
-      // Timeout after 5 minutes
-      timeout = setTimeout(
-        () => {
-          fail(new Error("External login timed out"));
-        },
-        5 * 60 * 1000,
-      );
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found");
     });
-  },
-);
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      try {
+        server.close();
+      } catch {
+        // Server may not have started yet.
+      }
+      resolve(result);
+    };
+
+    const fail = (error) => {
+      finish({
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    };
+
+    server.once("error", fail);
+
+    server.listen(callbackPort, "localhost", async () => {
+      try {
+        await shell.openExternal(authUrl);
+      } catch (error) {
+        fail(error);
+      }
+    });
+
+    // Timeout after 5 minutes
+    timeout = setTimeout(
+      () => {
+        fail(new Error("External login timed out"));
+      },
+      5 * 60 * 1000,
+    );
+  });
+});
 
 // Desktop-only settings, such as whether hosts connect from this device or
 // through the linked server by default.
-ipcMain.handle("get-desktop-settings", () => {
+ipc.handle("get-desktop-settings", () => {
   return desktopSettings.getDesktopSettings();
 });
 
-ipcMain.handle("save-desktop-settings", (_event, settings) => {
-  return desktopSettings.saveDesktopSettings(settings);
+ipc.handle("save-desktop-settings", (_event, settings) => {
+  return desktopSettings.saveDesktopSettings(
+    desktopSettings.rendererSettings(settings),
+  );
 });
+
+// Text for the first close to tray notice, in the user's language. The main
+// process has no translations of its own.
+let trayNoticeText = null;
+
+ipc.on("set-tray-notice-text", (_event, text) => {
+  trayNoticeText = text;
+});
+
+function markTrayNoticeShown() {
+  desktopSettings.saveDesktopSettings({ trayNoticeShown: true });
+}
+
+function showTrayNoticeOnce() {
+  if (desktopSettings.getDesktopSettings().trayNoticeShown) return;
+  try {
+    showTrayNotice({
+      platform: process.platform,
+      tray,
+      Notification,
+      text: trayNoticeText,
+      onShown: markTrayNoticeShown,
+    });
+  } catch (error) {
+    logToFile("Failed to show the tray notice:", error.message);
+  }
+}
 
 let appUpdater = null;
 
@@ -1836,1373 +1941,55 @@ function startAppUpdater() {
     beforeInstall: () => {
       isQuitting = true;
     },
+    verifier: createReleaseVerifier({
+      fetchAsset: async (tag, name) => {
+        const { net } = require("electron");
+        const response = await net.fetch(
+          `${autoUpdates.DOWNLOAD_BASE}${encodeURIComponent(tag)}/${encodeURIComponent(name)}`,
+        );
+        if (response.status === 404) return null;
+        if (!response.ok) {
+          throw new Error(`${name} returned ${response.status}`);
+        }
+        return Buffer.from(await response.arrayBuffer());
+      },
+      verifyBundle: sigstoreBundleVerifier({
+        cachePath: path.join(app.getPath("userData"), "sigstore-tuf"),
+      }),
+      fetchRevocations: async () => {
+        const { net } = require("electron");
+        const response = await net.fetch(REVOCATIONS_URL);
+        if (!response.ok) {
+          throw new Error(`revocation list returned ${response.status}`);
+        }
+        const text = await response.text();
+        if (text.length > 1024 * 1024)
+          throw new Error("revocation list too big");
+        return JSON.parse(text);
+      },
+      fs,
+      log: logToFile,
+    }),
+    removeFile: (file) => {
+      if (typeof file === "string" && file) fs.rmSync(file, { force: true });
+    },
   });
   appUpdater.start();
 }
 
-ipcMain.handle(
-  "desktop-update-get-state",
-  () => appUpdater?.getState() ?? null,
-);
-ipcMain.handle("desktop-update-check", () => appUpdater?.check() ?? null);
-ipcMain.handle("desktop-update-download", () => appUpdater?.download() ?? null);
-ipcMain.handle("desktop-update-install", () => appUpdater?.install() ?? false);
-ipcMain.handle(
+ipc.handle("desktop-update-get-state", () => appUpdater?.getState() ?? null);
+ipc.handle("desktop-update-check", () => appUpdater?.check() ?? null);
+ipc.handle("desktop-update-download", () => appUpdater?.download() ?? null);
+ipc.handle("desktop-update-install", () => appUpdater?.install() ?? false);
+ipc.handle(
   "desktop-update-set-mode",
   (_event, mode) => appUpdater?.setMode(mode) ?? null,
 );
 
 // The server an older version of the app was pointed at, offered again when
 // linking so upgraded installs do not have to look it up.
-ipcMain.handle("get-previous-server-url", () => {
+ipc.handle("get-previous-server-url", () => {
   return { serverUrl: desktopSettings.getPreviousServerUrl() };
-});
-
-function getC2STunnelConfigPath() {
-  return path.join(app.getPath("userData"), "c2s-tunnels.json");
-}
-
-ipcMain.handle("get-c2s-tunnel-config", () => {
-  try {
-    const configPath = getC2STunnelConfigPath();
-    if (!fs.existsSync(configPath)) {
-      return [];
-    }
-    const configData = fs.readFileSync(configPath, "utf8");
-    const parsed = JSON.parse(configData);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (error) {
-    console.error("Error reading C2S tunnel config:", error);
-    return [];
-  }
-});
-
-ipcMain.handle("save-c2s-tunnel-config", async (_event, config) => {
-  try {
-    if (!Array.isArray(config)) {
-      return { success: false, error: "C2S tunnel config must be an array" };
-    }
-    const autoStartListeners = new Set();
-    const autoStartRemoteListeners = new Set();
-    for (const tunnel of config) {
-      if (!tunnel?.autoStart) continue;
-      const mode = tunnel.mode || tunnel.tunnelType || "local";
-      if (mode === "remote") {
-        const sourceHostId = Number(tunnel.sourceHostId);
-        const sourcePort = Number(tunnel.sourcePort);
-        const remoteAddress = getC2SRemoteAddress(tunnel);
-        if (
-          !Number.isInteger(sourceHostId) ||
-          sourceHostId < 1 ||
-          !Number.isInteger(sourcePort) ||
-          sourcePort < 1 ||
-          sourcePort > 65535
-        ) {
-          return {
-            success: false,
-            error: "Invalid remote client tunnel endpoint or port",
-          };
-        }
-        const listenerKey = `${sourceHostId}:${remoteAddress}:${sourcePort}`;
-        if (autoStartRemoteListeners.has(listenerKey)) {
-          return {
-            success: false,
-            error: `Another auto-start client tunnel already uses remote ${listenerKey}`,
-          };
-        }
-        autoStartRemoteListeners.add(listenerKey);
-        continue;
-      }
-
-      const bindHost = getC2SLocalAddress(tunnel);
-      const sourcePort = Number(tunnel.sourcePort);
-      const listenerKey = `${bindHost}:${sourcePort}`;
-      if (autoStartListeners.has(listenerKey)) {
-        return {
-          success: false,
-          error: `Another auto-start client tunnel already uses ${listenerKey}`,
-        };
-      }
-      autoStartListeners.add(listenerKey);
-    }
-    for (const listenerKey of autoStartListeners) {
-      const sourcePortSeparator = listenerKey.lastIndexOf(":");
-      const bindHost = listenerKey.slice(0, sourcePortSeparator);
-      const sourcePort = listenerKey.slice(sourcePortSeparator + 1);
-      const result = await checkLocalPortAvailable(
-        bindHost,
-        Number(sourcePort),
-      );
-      const ownedByClientTunnel = Array.from(c2sTunnelRuntimes.values()).some(
-        (runtime) =>
-          runtime.bindHost === bindHost &&
-          runtime.sourcePort === Number(sourcePort),
-      );
-      if (!result.available && !ownedByClientTunnel) {
-        return {
-          success: false,
-          error: `Cannot auto-start client tunnel on ${listenerKey}: ${result.error || "port is already in use"}`,
-        };
-      }
-    }
-    const userDataPath = app.getPath("userData");
-    if (!fs.existsSync(userDataPath)) {
-      fs.mkdirSync(userDataPath, { recursive: true });
-    }
-    fs.writeFileSync(getC2STunnelConfigPath(), JSON.stringify(config, null, 2));
-    return { success: true };
-  } catch (error) {
-    console.error("Error saving C2S tunnel config:", error);
-    return { success: false, error: error.message };
-  }
-});
-
-function checkLocalPortAvailable(host, port) {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    server.once("error", (error) => {
-      resolve({ available: false, error: error.message });
-    });
-    server.once("listening", () => {
-      server.close(() => resolve({ available: true }));
-    });
-    server.listen({ host, port });
-  });
-}
-
-function checkTcpConnection(host, port) {
-  return new Promise((resolve) => {
-    const socket = net.createConnection({ host, port });
-    const timer = setTimeout(() => {
-      socket.destroy();
-      resolve({ success: false, error: "Connection timed out" });
-    }, 5000);
-
-    socket.once("connect", () => {
-      clearTimeout(timer);
-      socket.destroy();
-      resolve({ success: true });
-    });
-    socket.once("error", (error) => {
-      clearTimeout(timer);
-      socket.destroy();
-      resolve({ success: false, error: error.message });
-    });
-  });
-}
-
-function getC2SAddress(value, fallback) {
-  const address = typeof value === "string" ? value.trim() : "";
-  return address || fallback;
-}
-
-function getC2SLocalAddress(tunnel) {
-  return getC2SAddress(tunnel?.localAddress || tunnel?.bindHost, "127.0.0.1");
-}
-
-function getC2SRemoteAddress(tunnel) {
-  return getC2SAddress(
-    tunnel?.remoteAddress || tunnel?.targetHost,
-    "127.0.0.1",
-  );
-}
-
-function normalizeC2STunnelAddresses(tunnel) {
-  const localAddress = getC2SLocalAddress(tunnel);
-  const remoteAddress = getC2SRemoteAddress(tunnel);
-  return {
-    ...tunnel,
-    localAddress,
-    remoteAddress,
-    bindHost: localAddress,
-    targetHost: remoteAddress,
-  };
-}
-
-const c2sTunnelRuntimes = new Map();
-const C2S_WS_HIGH_WATERMARK = 1024 * 1024;
-const C2S_WS_LOW_WATERMARK = 256 * 1024;
-const C2S_STREAM_WRITE_LIMIT = 8 * 1024 * 1024;
-
-// A proxy in front of the server may drop an idle WebSocket, which stopped
-// the tunnel. Pings count as traffic.
-function keepC2SSocketAlive(ws) {
-  const timer = setInterval(() => {
-    if (ws.readyState === WebSocket.OPEN) ws.ping();
-  }, 25_000);
-  timer.unref?.();
-  ws.once("close", () => clearInterval(timer));
-}
-
-// C2S (client-to-server) tunnels relay through the server this desktop is
-// linked to, not the embedded backend.
-function getC2SRemoteBaseUrl() {
-  const serverUrl = linkedServer.getLinkedServer()?.serverUrl;
-  if (!serverUrl) {
-    throw new Error(
-      "This device is not linked to a Termix server. Link it in Sync first.",
-    );
-  }
-  return serverUrl.replace(/\/$/, "");
-}
-
-// The socket path on the linked server that relays C2S streams. The plugin
-// that owns the relay tells us where it is, so nothing here names it.
-let c2sRelayPath = null;
-const C2S_RELAY_PATH_PATTERN =
-  /^\/plugin-ws\/[a-z0-9][a-z0-9-]*\/[A-Za-z0-9/_-]+$/;
-
-ipcMain.handle("set-c2s-relay-path", (_event, relayPath) => {
-  if (
-    typeof relayPath !== "string" ||
-    !C2S_RELAY_PATH_PATTERN.test(relayPath)
-  ) {
-    return { success: false, error: "Invalid relay path" };
-  }
-  c2sRelayPath = relayPath;
-  return { success: true };
-});
-
-function getC2SRelayUrl() {
-  if (!c2sRelayPath) {
-    throw new Error("Client tunnels are not available yet. Try again shortly.");
-  }
-  const relayHttpUrl = `${getC2SRemoteBaseUrl()}${c2sRelayPath}`;
-  return relayHttpUrl.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
-}
-
-const C2S_REMOTE_SESSION_EXPIRED_ERROR =
-  "This device was signed out of its server. Sign in again from Sync and try again.";
-
-function normalizeC2SAuthToken(authToken) {
-  return typeof authToken === "string" ? authToken.trim() : "";
-}
-
-function isC2SAuthError(message) {
-  const value = String(message || "")
-    .trim()
-    .toLowerCase();
-  return (
-    value === "authentication required" ||
-    value === "missing authentication token" ||
-    value === "invalid token" ||
-    value === "session expired" ||
-    value === "session not found" ||
-    // The plugin relay refuses an unauthenticated upgrade before any message.
-    value === "unexpected server response: 401"
-  );
-}
-
-function normalizeC2SErrorMessage(message, fallback = "Client tunnel failed") {
-  const value = message || fallback;
-  return isC2SAuthError(value) ? C2S_REMOTE_SESSION_EXPIRED_ERROR : value;
-}
-
-function createC2SFailure(message, fallback) {
-  const error = normalizeC2SErrorMessage(message, fallback);
-  return {
-    success: false,
-    error,
-    ...(error === C2S_REMOTE_SESSION_EXPIRED_ERROR
-      ? { code: "REMOTE_SESSION_EXPIRED" }
-      : {}),
-  };
-}
-
-async function fetchC2SRemoteJson(pathname) {
-  if (!linkedServer.getLinkedServer()?.token) {
-    throw new Error(C2S_REMOTE_SESSION_EXPIRED_ERROR);
-  }
-
-  const url = `${getC2SRemoteBaseUrl()}${pathname}`;
-  const response = await httpFetch(url, {
-    headers: linkedServer.linkedRequestHeaders(),
-  });
-  if (response.status === 401 || response.status === 403) {
-    throw new Error(C2S_REMOTE_SESSION_EXPIRED_ERROR);
-  }
-  if (!response.ok) {
-    throw new Error(`Request failed (${response.status}): ${url}`);
-  }
-  return response.json();
-}
-
-async function resolveC2SRemoteSourceHost(tunnel) {
-  const normalized = normalizeC2STunnelAddresses(tunnel);
-  const sourceHostSyncId =
-    typeof normalized.sourceHostSyncId === "string"
-      ? normalized.sourceHostSyncId.trim()
-      : "";
-  if (!sourceHostSyncId) return normalized;
-
-  let remoteHost = null;
-  try {
-    remoteHost = await fetchC2SRemoteJson(
-      `/sync/v2/hosts/${encodeURIComponent(sourceHostSyncId)}`,
-    );
-  } catch (error) {
-    if (error.message === C2S_REMOTE_SESSION_EXPIRED_ERROR) throw error;
-  }
-  const remoteHostId = Number(remoteHost?.id);
-  if (!Number.isInteger(remoteHostId) || remoteHostId < 1) {
-    throw new Error(
-      "The intermediate host is not on the server yet. Sync, then try again.",
-    );
-  }
-
-  return {
-    ...normalized,
-    sourceHostId: remoteHostId,
-    sourceHostSyncId,
-    sourceHostName: remoteHost.name || normalized.sourceHostName,
-    endpointHost: normalized.endpointHost || remoteHost.name,
-  };
-}
-
-async function getC2SRelayHeaders(relayUrl) {
-  if (linkedServer.getLinkedServer()?.token) {
-    return linkedServer.linkedRequestHeaders();
-  }
-  const headers = { "X-Electron-App": "true" };
-
-  if (!mainWindow?.webContents?.session) {
-    throw new Error(C2S_REMOTE_SESSION_EXPIRED_ERROR);
-  }
-
-  const cookieUrl = relayUrl
-    .replace(/^ws:/, "http:")
-    .replace(/^wss:/, "https:");
-  const cookies = await mainWindow.webContents.session.cookies.get({
-    url: cookieUrl,
-    name: "jwt",
-  });
-  const jwt = cookies[0]?.value;
-  if (!jwt) {
-    throw new Error(C2S_REMOTE_SESSION_EXPIRED_ERROR);
-  }
-
-  headers.Cookie = `jwt=${encodeURIComponent(jwt)}`;
-  return headers;
-}
-
-const attachC2SAuth = require("./c2s-auth.cjs").createC2SAuthBridge(
-  ipcMain,
-  () => mainWindow,
-);
-
-function getC2STunnelName(tunnel, index = 0) {
-  if (tunnel.name) return tunnel.name;
-  const localAddress = getC2SLocalAddress(tunnel);
-  const remoteAddress = getC2SRemoteAddress(tunnel);
-  return [
-    "c2s",
-    index,
-    tunnel.sourceHostId || 0,
-    tunnel.mode || tunnel.tunnelType || "local",
-    localAddress,
-    remoteAddress,
-    tunnel.sourcePort,
-    tunnel.endpointPort || 0,
-  ].join("::");
-}
-
-function getC2STunnelStatus(tunnelName) {
-  return (
-    c2sTunnelRuntimes.get(tunnelName)?.status || {
-      connected: false,
-      status: "DISCONNECTED",
-    }
-  );
-}
-
-function getAllC2STunnelStatuses() {
-  const statuses = {};
-  for (const [tunnelName] of c2sTunnelRuntimes.entries()) {
-    statuses[tunnelName] = getC2STunnelStatus(tunnelName);
-  }
-  return statuses;
-}
-
-function emitC2STunnelStatuses() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.webContents.send("c2s-tunnel-statuses", getAllC2STunnelStatuses());
-}
-
-function setC2STunnelStatus(tunnelName, status) {
-  const runtime = c2sTunnelRuntimes.get(tunnelName);
-  if (runtime) {
-    runtime.status = status;
-    emitC2STunnelStatuses();
-  }
-}
-
-function setC2STunnelError(tunnelName, message) {
-  logToFile(`[c2s] ${tunnelName} failed:`, message);
-  setC2STunnelStatus(tunnelName, {
-    connected: false,
-    status: "ERROR",
-    reason: message,
-  });
-}
-
-function parseSocks5Target(buffer) {
-  if (buffer.length < 7 || buffer[0] !== 0x05 || buffer[1] !== 0x01) {
-    return null;
-  }
-
-  const addressType = buffer[3];
-  let offset = 4;
-  let host;
-
-  if (addressType === 0x01) {
-    if (buffer.length < offset + 4 + 2) return null;
-    host = Array.from(buffer.subarray(offset, offset + 4)).join(".");
-    offset += 4;
-  } else if (addressType === 0x03) {
-    const length = buffer[offset];
-    offset += 1;
-    if (buffer.length < offset + length + 2) return null;
-    host = buffer.subarray(offset, offset + length).toString("utf8");
-    offset += length;
-  } else if (addressType === 0x04) {
-    if (buffer.length < offset + 16 + 2) return null;
-    const parts = [];
-    for (let i = 0; i < 16; i += 2) {
-      parts.push(buffer.readUInt16BE(offset + i).toString(16));
-    }
-    host = parts.join(":");
-    offset += 16;
-  } else {
-    throw new Error("Unsupported SOCKS5 address type");
-  }
-
-  const port = buffer.readUInt16BE(offset);
-  return { host, port, bytesRead: offset + 2 };
-}
-
-async function openC2SRelay(
-  tunnel,
-  targetHost,
-  targetPort,
-  socket,
-  initialData,
-  authToken,
-) {
-  const tunnelConfig = normalizeC2STunnelAddresses(tunnel);
-  const tunnelName = tunnel.name || getC2STunnelName(tunnel);
-  const relayUrl = getC2SRelayUrl();
-  const headers = await getC2SRelayHeaders(relayUrl, authToken);
-  logToFile(`[c2s] opening relay for ${tunnelName}`, {
-    relayUrl,
-    targetHost,
-    targetPort,
-  });
-  const ws = new WebSocket(
-    relayUrl,
-    getWebSocketOptions(relayUrl, { headers }),
-  );
-  attachC2SAuth(ws, tunnel.name || getC2STunnelName(tunnel));
-  keepC2SSocketAlive(ws);
-  const pendingChunks = [];
-  let ready = false;
-  let closed = false;
-
-  const cleanup = () => {
-    if (closed) return;
-    closed = true;
-    try {
-      socket.destroy();
-    } catch {
-      // expected during shutdown
-    }
-    try {
-      ws.close();
-    } catch {
-      // expected during shutdown
-    }
-  };
-
-  const sendChunk = (chunk) => {
-    if (ready && ws.readyState === WebSocket.OPEN) {
-      ws.send(chunk);
-    } else {
-      pendingChunks.push(chunk);
-    }
-  };
-
-  socket.on("data", sendChunk);
-  socket.on("close", cleanup);
-  // One connection failing must not stop the tunnel: the listener refuses
-  // new connections while the tunnel is not connected, and a browser opens
-  // many at once.
-  socket.on("error", (error) => {
-    logToFile(`[c2s] ${tunnelName} local socket error:`, error.message);
-    cleanup();
-  });
-  ws.on("close", cleanup);
-  ws.on("error", (error) => {
-    logToFile(`[c2s] ${tunnelName} relay error:`, error.message);
-    cleanup();
-  });
-
-  ws.on("open", () => {
-    logToFile(`[c2s] relay connected for ${tunnelName}`);
-    ws.send(
-      JSON.stringify({
-        type: "open",
-        tunnelConfig,
-        targetHost,
-        targetPort,
-      }),
-    );
-  });
-
-  ws.on("message", (data, isBinary) => {
-    if (isBinary) {
-      socket.write(Buffer.isBuffer(data) ? data : Buffer.from(data));
-      return;
-    }
-
-    try {
-      const message = JSON.parse(data.toString());
-      if (message.type === "ready") {
-        ready = true;
-        logToFile(`[c2s] relay ready for ${tunnelName}`);
-        if (initialData?.length) {
-          ws.send(initialData);
-        }
-        while (pendingChunks.length > 0) {
-          ws.send(pendingChunks.shift());
-        }
-      } else if (message.type === "error") {
-        const relayError = normalizeC2SErrorMessage(
-          message.error,
-          "Relay rejected the client tunnel",
-        );
-        logToFile("[c2s] relay error:", relayError);
-        if (relayError === C2S_REMOTE_SESSION_EXPIRED_ERROR) {
-          setC2STunnelError(tunnelName, relayError);
-        }
-        cleanup();
-      }
-    } catch (error) {
-      logToFile("[c2s] invalid relay message:", error.message);
-      cleanup();
-    }
-  });
-}
-
-async function testC2SRelay(
-  tunnel,
-  targetHost,
-  targetPort,
-  authToken,
-  runtime,
-) {
-  const tunnelConfig = normalizeC2STunnelAddresses(tunnel);
-  const relayUrl = getC2SRelayUrl();
-  const headers = await getC2SRelayHeaders(relayUrl, authToken);
-  if (runtime && c2sTunnelRuntimes.get(tunnel.name) !== runtime) {
-    return { success: false, error: "Tunnel stopped" };
-  }
-  const ws = new WebSocket(
-    relayUrl,
-    getWebSocketOptions(relayUrl, { headers }),
-  );
-  attachC2SAuth(ws, tunnel.name || getC2STunnelName(tunnel));
-  keepC2SSocketAlive(ws);
-
-  if (runtime) runtime.authSocket = ws;
-  return new Promise((resolve) => {
-    let settled = false;
-    // The relay sends its reason and then closes; keep the reason.
-    let relayError = null;
-    const settle = (result) => {
-      if (settled) return;
-      settled = true;
-      try {
-        if (!runtime || !result.success) ws.close();
-      } catch {
-        // expected during shutdown
-      }
-      resolve(result);
-    };
-
-    const timer = setTimeout(() => {
-      settle({ success: false, error: "Tunnel test timed out" });
-    }, 180_000);
-
-    ws.on("open", () => {
-      ws.send(
-        JSON.stringify({
-          type: "test",
-          keepAlive: !!runtime,
-          tunnelConfig,
-          targetHost,
-          targetPort,
-        }),
-      );
-    });
-    ws.on("message", (data, isBinary) => {
-      if (isBinary) return;
-
-      try {
-        const message = JSON.parse(data.toString());
-        if (message.type === "ready") {
-          clearTimeout(timer);
-          settle({ success: true });
-        } else if (message.type === "error") {
-          clearTimeout(timer);
-          relayError = normalizeC2SErrorMessage(
-            message.error,
-            "Tunnel test failed",
-          );
-          settle(createC2SFailure(message.error, "Tunnel test failed"));
-        }
-      } catch (error) {
-        clearTimeout(timer);
-        settle(createC2SFailure(error.message, "Tunnel test failed"));
-      }
-    });
-    ws.on("error", (error) => {
-      clearTimeout(timer);
-      settle(createC2SFailure(error.message, "Tunnel test failed"));
-    });
-    ws.on("close", () => {
-      if (runtime && c2sTunnelRuntimes.get(tunnel.name) === runtime) {
-        setC2STunnelError(
-          tunnel.name,
-          relayError || "Endpoint SSH connection closed",
-        );
-      }
-      clearTimeout(timer);
-      settle({ success: false, error: "Tunnel test connection closed" });
-    });
-  });
-}
-
-async function testC2STunnel(tunnel, index = 0, authToken) {
-  const resolvedTunnel = await resolveC2SRemoteSourceHost(tunnel);
-  const mode = resolvedTunnel.mode || resolvedTunnel.tunnelType || "local";
-  const testTunnel = {
-    ...normalizeC2STunnelAddresses(resolvedTunnel),
-    name: `${getC2STunnelName(resolvedTunnel, index)}::test`,
-    mode,
-  };
-  const localAddress = getC2SLocalAddress(testTunnel);
-  const remoteAddress = getC2SRemoteAddress(testTunnel);
-  const sourcePort = Number(resolvedTunnel.sourcePort);
-  const endpointPort = Number(resolvedTunnel.endpointPort);
-
-  if (!resolvedTunnel.sourceHostId) {
-    return { success: false, error: "Endpoint SSH host is required" };
-  }
-
-  if (mode === "remote") {
-    const localTarget = await checkTcpConnection(localAddress, endpointPort);
-    if (!localTarget.success) {
-      return {
-        success: false,
-        error: `Local target ${localAddress}:${endpointPort} is not reachable: ${localTarget.error}`,
-      };
-    }
-
-    return testC2SRelay(testTunnel, undefined, undefined, authToken);
-  }
-
-  if (!Number.isInteger(sourcePort) || sourcePort < 1 || sourcePort > 65535) {
-    return { success: false, error: "Invalid local port" };
-  }
-
-  const runtime = c2sTunnelRuntimes.get(
-    getC2STunnelName(resolvedTunnel, index),
-  );
-  if (!runtime) {
-    const availability = await checkLocalPortAvailable(
-      localAddress,
-      sourcePort,
-    );
-    if (!availability.available) {
-      return {
-        success: false,
-        error: `Local listener ${localAddress}:${sourcePort} is not available: ${availability.error}`,
-      };
-    }
-  }
-
-  if (mode === "dynamic") {
-    return testC2SRelay(testTunnel, undefined, undefined, authToken);
-  }
-
-  if (!Number.isInteger(endpointPort) || endpointPort < 1) {
-    return { success: false, error: "Invalid remote port" };
-  }
-
-  return testC2SRelay(testTunnel, remoteAddress, endpointPort, authToken);
-}
-
-function handleC2SDynamicConnection(tunnel, socket, authToken) {
-  const tunnelName = tunnel.name || getC2STunnelName(tunnel);
-  let buffer = Buffer.alloc(0);
-  let stage = "greeting";
-
-  const fail = (code = 0x01, message = "SOCKS5 request failed") => {
-    setC2STunnelError(tunnelName, message);
-    if (!socket.destroyed) {
-      socket.write(Buffer.from([0x05, code, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
-      socket.destroy();
-    }
-  };
-
-  const onData = (chunk) => {
-    buffer = Buffer.concat([buffer, chunk]);
-
-    try {
-      if (stage === "greeting") {
-        if (buffer.length < 2) return;
-        if (buffer[0] !== 0x05) {
-          fail(0x01, "Invalid SOCKS5 greeting");
-          return;
-        }
-        const methodsLength = buffer[1];
-        if (buffer.length < 2 + methodsLength) return;
-        socket.write(Buffer.from([0x05, 0x00]));
-        buffer = buffer.subarray(2 + methodsLength);
-        stage = "connect";
-      }
-
-      if (stage === "connect") {
-        const target = parseSocks5Target(buffer);
-        if (!target) return;
-
-        stage = "piping";
-        socket.off("data", onData);
-        const remainder = buffer.subarray(target.bytesRead);
-        socket.write(Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
-        openC2SRelay(
-          tunnel,
-          target.host,
-          target.port,
-          socket,
-          remainder,
-          authToken,
-        ).catch((error) => {
-          const message = normalizeC2SErrorMessage(
-            error.message,
-            "Dynamic relay failed",
-          );
-          logToFile("[c2s] dynamic relay failed:", message);
-          fail(0x05, message);
-        });
-      }
-    } catch (error) {
-      logToFile("[c2s] SOCKS5 parse failed:", error.message);
-      fail(0x01, error.message || "SOCKS5 parse failed");
-    }
-  };
-
-  socket.on("data", onData);
-  socket.on("error", () => socket.destroy());
-}
-
-function handleC2SLocalConnection(tunnel, socket, authToken) {
-  const tunnelName = tunnel.name || getC2STunnelName(tunnel);
-  const targetHost = getC2SRemoteAddress(tunnel);
-  const targetPort = Number(tunnel.endpointPort);
-  openC2SRelay(
-    tunnel,
-    targetHost,
-    targetPort,
-    socket,
-    undefined,
-    authToken,
-  ).catch((error) => {
-    const message = normalizeC2SErrorMessage(
-      error.message,
-      "Local relay failed",
-    );
-    logToFile("[c2s] local relay failed:", message);
-    if (message === C2S_REMOTE_SESSION_EXPIRED_ERROR) {
-      setC2STunnelError(tunnelName, message);
-    }
-    socket.destroy();
-  });
-}
-
-function pauseSourceForC2SWebSocket(ws, source) {
-  if (!source?.pause || !source?.resume) return;
-  if (ws.bufferedAmount <= C2S_WS_HIGH_WATERMARK) return;
-
-  source.pause();
-  const resumeTimer = setInterval(() => {
-    if (
-      ws.readyState !== WebSocket.OPEN ||
-      source.destroyed ||
-      ws.bufferedAmount <= C2S_WS_LOW_WATERMARK
-    ) {
-      clearInterval(resumeTimer);
-      if (ws.readyState === WebSocket.OPEN && !source.destroyed) {
-        source.resume();
-      }
-    }
-  }, 25);
-}
-
-function sendC2SRemoteMessage(ws, message, source) {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(message), (error) => {
-      if (error && source?.destroy) {
-        source.destroy(error);
-      }
-    });
-    pauseSourceForC2SWebSocket(ws, source);
-  }
-}
-
-function writeC2SRemoteChunk(target, chunk, ws, closeTarget) {
-  if (!target || target.destroyed) return;
-
-  if (target.writableLength > C2S_STREAM_WRITE_LIMIT) {
-    closeTarget();
-    return;
-  }
-
-  const canContinue = target.write(chunk);
-  if (!canContinue && typeof ws.pause === "function") {
-    ws.pause();
-    target.once("drain", () => {
-      if (ws.readyState === WebSocket.OPEN && typeof ws.resume === "function") {
-        ws.resume();
-      }
-    });
-  }
-}
-
-async function startC2SRemoteTunnel(tunnel, index = 0, authToken) {
-  const tunnelName = getC2STunnelName(tunnel, index);
-  const tunnelConfig = normalizeC2STunnelAddresses(tunnel);
-  const localHost = getC2SLocalAddress(tunnelConfig);
-  const remoteHost = getC2SRemoteAddress(tunnelConfig);
-  const localPort = Number(tunnel.endpointPort);
-  const remotePort = Number(tunnel.sourcePort);
-
-  if (!tunnel.sourceHostId) {
-    return { success: false, error: "Endpoint SSH host is required" };
-  }
-  if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) {
-    return { success: false, error: "Invalid remote port" };
-  }
-  if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) {
-    return { success: false, error: "Invalid local port" };
-  }
-
-  const localTarget = await checkTcpConnection(localHost, localPort);
-  if (!localTarget.success) {
-    return {
-      success: false,
-      error: `Local target ${localHost}:${localPort} is not reachable: ${localTarget.error}`,
-    };
-  }
-
-  const existing = c2sTunnelRuntimes.get(tunnelName);
-  if (existing) {
-    return { success: true, tunnelName };
-  }
-
-  for (const runtime of c2sTunnelRuntimes.values()) {
-    if (
-      runtime.mode === "remote" &&
-      runtime.sourceHostId === Number(tunnel.sourceHostId) &&
-      runtime.remoteAddress === remoteHost &&
-      runtime.sourcePort === remotePort
-    ) {
-      return {
-        success: false,
-        error: `Another client remote tunnel already uses ${remoteHost}:${remotePort} on this endpoint`,
-      };
-    }
-  }
-
-  const relayUrl = getC2SRelayUrl();
-  const headers = await getC2SRelayHeaders(relayUrl, authToken);
-  const ws = new WebSocket(
-    relayUrl,
-    getWebSocketOptions(relayUrl, { headers }),
-  );
-  attachC2SAuth(ws, tunnel.name || getC2STunnelName(tunnel));
-  keepC2SSocketAlive(ws);
-  const sockets = new Map();
-  let closed = false;
-
-  const cleanup = () => {
-    if (closed) return;
-    closed = true;
-    for (const socket of sockets.values()) {
-      socket.destroy();
-    }
-    sockets.clear();
-    try {
-      ws.close();
-    } catch {
-      // expected during shutdown
-    }
-  };
-
-  c2sTunnelRuntimes.set(tunnelName, {
-    ws,
-    sockets,
-    mode: "remote",
-    sourceHostId: Number(tunnel.sourceHostId),
-    sourcePort: remotePort,
-    bindHost: localHost,
-    remoteAddress: remoteHost,
-    status: { connected: false, status: "CONNECTING" },
-    close: cleanup,
-  });
-  emitC2STunnelStatuses();
-
-  return new Promise((resolve) => {
-    let settled = false;
-    const settle = (result) => {
-      if (settled) return;
-      settled = true;
-      resolve(result);
-    };
-
-    ws.on("open", () => {
-      logToFile(`[c2s] opening remote tunnel ${tunnelName}`, {
-        relayUrl,
-        remoteHost,
-        remotePort,
-        localHost,
-        localPort,
-      });
-      ws.send(
-        JSON.stringify({
-          type: "open",
-          tunnelConfig: { ...tunnelConfig, name: tunnelName, mode: "remote" },
-        }),
-      );
-    });
-
-    ws.on("message", (data, isBinary) => {
-      if (isBinary) return;
-
-      let message;
-      try {
-        message = JSON.parse(data.toString());
-      } catch (error) {
-        const message = normalizeC2SErrorMessage(
-          error.message,
-          "Invalid relay message",
-        );
-        setC2STunnelError(tunnelName, message);
-        cleanup();
-        settle(createC2SFailure(message, "Invalid relay message"));
-        return;
-      }
-
-      if (message.type === "ready") {
-        setC2STunnelStatus(tunnelName, {
-          connected: true,
-          status: "CONNECTED",
-        });
-        settle({ success: true, tunnelName });
-        return;
-      }
-
-      if (message.type === "error") {
-        const error = normalizeC2SErrorMessage(
-          message.error,
-          "Relay rejected the client tunnel",
-        );
-        setC2STunnelError(tunnelName, error);
-        cleanup();
-        c2sTunnelRuntimes.delete(tunnelName);
-        emitC2STunnelStatuses();
-        settle(createC2SFailure(error, "Relay rejected the client tunnel"));
-        return;
-      }
-
-      if (message.type === "connection" && message.streamId) {
-        const socket = net.createConnection(
-          { host: localHost, port: localPort },
-          () => {
-            logToFile(`[c2s] remote stream ${message.streamId} connected`, {
-              tunnelName,
-              localHost,
-              localPort,
-            });
-          },
-        );
-        sockets.set(message.streamId, socket);
-        socket.on("data", (chunk) => {
-          sendC2SRemoteMessage(
-            ws,
-            {
-              type: "data",
-              streamId: message.streamId,
-              data: chunk.toString("base64"),
-            },
-            socket,
-          );
-        });
-        socket.on("close", () => {
-          sockets.delete(message.streamId);
-          sendC2SRemoteMessage(ws, {
-            type: "close",
-            streamId: message.streamId,
-          });
-        });
-        socket.on("error", (error) => {
-          logToFile(`[c2s] remote stream ${message.streamId} failed:`, {
-            tunnelName,
-            error: error.message,
-          });
-          sockets.delete(message.streamId);
-          sendC2SRemoteMessage(ws, {
-            type: "close",
-            streamId: message.streamId,
-            error: error.message,
-          });
-        });
-        return;
-      }
-
-      if (message.type === "data" && message.streamId && message.data) {
-        const socket = sockets.get(message.streamId);
-        writeC2SRemoteChunk(
-          socket,
-          Buffer.from(message.data, "base64"),
-          ws,
-          () => {
-            if (socket) {
-              sockets.delete(message.streamId);
-              socket.destroy();
-            }
-          },
-        );
-        return;
-      }
-
-      if (message.type === "close" && message.streamId) {
-        const socket = sockets.get(message.streamId);
-        if (socket) {
-          sockets.delete(message.streamId);
-          socket.destroy();
-        }
-      }
-    });
-
-    ws.on("close", () => {
-      cleanup();
-      c2sTunnelRuntimes.delete(tunnelName);
-      emitC2STunnelStatuses();
-      settle({ success: false, error: "Remote tunnel relay closed" });
-    });
-
-    ws.on("error", (error) => {
-      const message = normalizeC2SErrorMessage(
-        error.message,
-        "Relay connection failed",
-      );
-      setC2STunnelError(tunnelName, message);
-      cleanup();
-      c2sTunnelRuntimes.delete(tunnelName);
-      emitC2STunnelStatuses();
-      settle(createC2SFailure(message, "Relay connection failed"));
-    });
-  });
-}
-
-async function startC2STunnel(tunnel, index = 0, authToken) {
-  const resolvedTunnel = await resolveC2SRemoteSourceHost(tunnel);
-  const mode = resolvedTunnel.mode || resolvedTunnel.tunnelType || "local";
-  const tunnelName = getC2STunnelName(resolvedTunnel, index);
-  const tunnelConfig = {
-    ...normalizeC2STunnelAddresses(resolvedTunnel),
-    sessionId: crypto.randomUUID(),
-  };
-  const bindHost = getC2SLocalAddress(tunnelConfig);
-  const sourcePort = Number(resolvedTunnel.sourcePort);
-  logToFile(`[c2s] starting tunnel ${tunnelName}`, {
-    mode,
-    bindHost,
-    remoteAddress: getC2SRemoteAddress(tunnelConfig),
-    sourcePort,
-    sourceHostId: resolvedTunnel.sourceHostId,
-    sourceHostSyncId: resolvedTunnel.sourceHostSyncId,
-    endpointPort: resolvedTunnel.endpointPort,
-  });
-
-  if (mode === "remote") {
-    return startC2SRemoteTunnel(resolvedTunnel, index, authToken);
-  }
-  if (!resolvedTunnel.sourceHostId) {
-    return { success: false, error: "Endpoint SSH host is required" };
-  }
-  if (!Number.isInteger(sourcePort) || sourcePort < 1 || sourcePort > 65535) {
-    return { success: false, error: "Invalid local port" };
-  }
-
-  const existing = c2sTunnelRuntimes.get(tunnelName);
-  if (existing) {
-    return { success: true, tunnelName };
-  }
-
-  for (const runtime of c2sTunnelRuntimes.values()) {
-    if (
-      runtime.mode !== "remote" &&
-      runtime.bindHost === bindHost &&
-      runtime.sourcePort === sourcePort
-    ) {
-      return {
-        success: false,
-        error: `Another client tunnel already uses ${bindHost}:${sourcePort}`,
-      };
-    }
-  }
-
-  const availability = await checkLocalPortAvailable(bindHost, sourcePort);
-  if (!availability.available) {
-    return {
-      success: false,
-      error: availability.error || "Port is already in use",
-    };
-  }
-
-  const sockets = new Set();
-  const server = net.createServer((socket) => {
-    if (!c2sTunnelRuntimes.get(tunnelName)?.status.connected) {
-      socket.destroy();
-      return;
-    }
-    sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
-    if (mode === "dynamic") {
-      handleC2SDynamicConnection(
-        { ...tunnelConfig, name: tunnelName, mode },
-        socket,
-        authToken,
-      );
-    } else {
-      handleC2SLocalConnection(
-        { ...tunnelConfig, name: tunnelName, mode },
-        socket,
-        authToken,
-      );
-    }
-  });
-
-  c2sTunnelRuntimes.set(tunnelName, {
-    server,
-    sockets,
-    bindHost,
-    sourcePort,
-    status: { connected: false, status: "CONNECTING" },
-  });
-
-  return new Promise((resolve) => {
-    server.once("error", (error) => {
-      c2sTunnelRuntimes.delete(tunnelName);
-      logToFile(`[c2s] failed to listen for ${tunnelName}:`, error.message);
-      emitC2STunnelStatuses();
-      resolve({ success: false, error: error.message });
-    });
-    server.listen({ host: bindHost, port: sourcePort }, () => {
-      logToFile(
-        `[c2s] listening for ${tunnelName} on ${bindHost}:${sourcePort}`,
-      );
-      setC2STunnelStatus(tunnelName, {
-        connected: false,
-        status: "CONNECTING",
-        reason: "Verifying endpoint SSH connection",
-      });
-
-      const runtime = c2sTunnelRuntimes.get(tunnelName);
-      const verifyTunnel = testC2SRelay(
-        { ...tunnelConfig, name: tunnelName, mode },
-        mode === "dynamic" ? undefined : getC2SRemoteAddress(tunnelConfig),
-        mode === "dynamic" ? undefined : Number(tunnelConfig.endpointPort),
-        authToken,
-        runtime,
-      );
-
-      verifyTunnel
-        .then((result) => {
-          if (c2sTunnelRuntimes.get(tunnelName) !== runtime) return;
-          if (result.success) {
-            setC2STunnelStatus(tunnelName, {
-              connected: true,
-              status: "CONNECTED",
-            });
-          } else {
-            setC2STunnelError(
-              tunnelName,
-              result.error || "Endpoint SSH connection failed",
-            );
-          }
-        })
-        .catch((error) => {
-          if (c2sTunnelRuntimes.get(tunnelName) === runtime) {
-            setC2STunnelError(
-              tunnelName,
-              error.message || "Endpoint SSH connection failed",
-            );
-          }
-        });
-
-      resolve({ success: true, tunnelName });
-    });
-  });
-}
-
-async function stopC2STunnel(tunnelName) {
-  const runtime = c2sTunnelRuntimes.get(tunnelName);
-  if (!runtime) {
-    return { success: true };
-  }
-
-  setC2STunnelStatus(tunnelName, {
-    connected: false,
-    status: "DISCONNECTING",
-  });
-  runtime.authSocket?.close();
-
-  return new Promise((resolve) => {
-    if (typeof runtime.close === "function") {
-      runtime.close();
-      c2sTunnelRuntimes.delete(tunnelName);
-      emitC2STunnelStatuses();
-      resolve({ success: true });
-      return;
-    }
-
-    for (const socket of runtime.sockets || []) {
-      socket.destroy();
-    }
-    runtime.server?.close(() => {
-      c2sTunnelRuntimes.delete(tunnelName);
-      emitC2STunnelStatuses();
-      resolve({ success: true });
-    });
-  });
-}
-
-function stopAllC2STunnels() {
-  for (const [tunnelName, runtime] of c2sTunnelRuntimes.entries()) {
-    try {
-      runtime.authSocket?.close();
-      if (typeof runtime.close === "function") {
-        runtime.close();
-      } else {
-        for (const socket of runtime.sockets || []) {
-          socket.destroy();
-        }
-        runtime.server?.close();
-      }
-    } catch (error) {
-      logToFile(`[c2s] failed to stop tunnel ${tunnelName}:`, error.message);
-    }
-    c2sTunnelRuntimes.delete(tunnelName);
-  }
-  emitC2STunnelStatuses();
-}
-
-async function startC2SAutoStartTunnels() {
-  const configPath = getC2STunnelConfigPath();
-  if (!fs.existsSync(configPath)) {
-    return { success: true, started: 0, errors: [] };
-  }
-
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  const tunnels = Array.isArray(config) ? config : [];
-  const errors = [];
-  let started = 0;
-
-  for (let index = 0; index < tunnels.length; index += 1) {
-    const tunnel = tunnels[index];
-    if (!tunnel?.autoStart) continue;
-    const result = await startC2STunnel(tunnel, index);
-    if (result.success) {
-      started += 1;
-    } else {
-      errors.push(result.error || "Failed to start client tunnel");
-    }
-  }
-
-  return { success: errors.length === 0, started, errors };
-}
-
-ipcMain.handle("check-local-port-available", async (_event, host, port) => {
-  const sourcePort = Number(port);
-  if (
-    !host ||
-    !Number.isInteger(sourcePort) ||
-    sourcePort < 1 ||
-    sourcePort > 65535
-  ) {
-    return { available: false, error: "Invalid local bind address or port" };
-  }
-  return checkLocalPortAvailable(host, sourcePort);
-});
-
-ipcMain.handle("start-c2s-tunnel", async (_event, tunnel, index, authToken) => {
-  try {
-    return await startC2STunnel(
-      tunnel,
-      Number(index) || 0,
-      normalizeC2SAuthToken(authToken),
-    );
-  } catch (error) {
-    return createC2SFailure(error.message, "Failed to start client tunnel");
-  }
-});
-
-ipcMain.handle("test-c2s-tunnel", async (_event, tunnel, index, authToken) => {
-  try {
-    return await testC2STunnel(
-      tunnel,
-      Number(index) || 0,
-      normalizeC2SAuthToken(authToken),
-    );
-  } catch (error) {
-    return createC2SFailure(error.message, "Failed to test client tunnel");
-  }
-});
-
-ipcMain.handle("stop-c2s-tunnel", async (_event, tunnelName) => {
-  try {
-    return await stopC2STunnel(tunnelName);
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
-
-ipcMain.handle("get-c2s-tunnel-statuses", () => {
-  return getAllC2STunnelStatuses();
-});
-
-ipcMain.handle("start-c2s-autostart-tunnels", async () => {
-  try {
-    return await startC2SAutoStartTunnels();
-  } catch (error) {
-    return { success: false, started: 0, errors: [error.message] };
-  }
-});
-
-ipcMain.handle("get-c2s-tunnel-preset-default-name", () => {
-  const now = new Date();
-  const date = now.toISOString().slice(0, 10);
-  const platform =
-    process.platform === "darwin"
-      ? "macOS"
-      : process.platform === "win32"
-        ? "Windows"
-        : "Linux";
-  const release = os.release();
-  const computerName = os.hostname();
-  return `[${date}] ${computerName} (${platform} ${release})`;
 });
 
 function readSetting(key) {
@@ -3212,7 +1999,7 @@ function readSetting(key) {
   return settings[key] !== undefined ? settings[key] : null;
 }
 
-ipcMain.handle("get-setting", (event, key) => {
+ipc.handle("get-setting", (event, key) => {
   try {
     return readSetting(key);
   } catch (error) {
@@ -3221,10 +2008,7 @@ ipcMain.handle("get-setting", (event, key) => {
   }
 });
 
-ipcMain.handle("set-setting", (event, key, value) => {
-  if (typeof key !== "string") {
-    return { success: false, error: "Invalid setting key" };
-  }
+ipc.handle("set-setting", (_event, key, value) => {
   if (
     key === EXTERNAL_EDITOR_SETTING &&
     value &&
@@ -3255,7 +2039,14 @@ ipcMain.handle("set-setting", (event, key, value) => {
   }
 });
 
-ipcMain.handle("clear-session-cookies", async () => {
+ipc.handle("clear-session-cookies", async () => {
+  // First, so a failure in the cookie work below cannot skip it: logins kept
+  // in embedded views end with the Termix login.
+  try {
+    void embeddedViews.forgetSessions();
+  } catch (error) {
+    console.error("Failed to forget embedded view sessions:", error);
+  }
   try {
     clearPersistedElectronAuthCookies();
     const ses = mainWindow?.webContents?.session;
@@ -3270,373 +2061,24 @@ ipcMain.handle("clear-session-cookies", async () => {
   }
 });
 
-ipcMain.handle("clipboard-write-text", (_event, text) => {
-  clipboard.writeText(typeof text === "string" ? text : String(text ?? ""));
+ipc.handle("clipboard-write-text", (_event, text) => {
+  clipboard.writeText(text);
   return true;
 });
 
-ipcMain.handle("clipboard-read-text", () => clipboard.readText());
+ipc.handle("clipboard-read-text", () => clipboard.readText());
 
-ipcMain.handle("local-terminal-start", (event, dimensions = {}) => {
-  const cols = Math.min(500, Math.max(2, Number(dimensions.cols) || 80));
-  const rows = Math.min(300, Math.max(1, Number(dimensions.rows) || 24));
-  const sessionId = crypto.randomUUID();
-  const shellConfig = resolveLocalShell(process.platform, dimensions.shell);
-  const spawnShell = () =>
-    pty.spawn(shellConfig.file, shellConfig.args, {
-      name: "xterm-256color",
-      cols,
-      rows,
-      cwd: os.homedir(),
-      env: {
-        ...process.env,
-        TERM: "xterm-256color",
-        COLORTERM: "truecolor",
-      },
-    });
-  let child;
-  try {
-    child = spawnShell();
-  } catch (error) {
-    const ptyDir = path.dirname(require.resolve("node-pty/package.json"));
-    if (
-      !String(error?.message).includes("posix_spawnp") ||
-      repairSpawnHelpers(ptyDir) === 0
-    ) {
-      throw error;
-    }
-    logToFile("[local-terminal] restored the spawn-helper execute bit");
-    child = spawnShell();
-  }
-  const ownerId = event.sender.id;
-  const session = { ownerId, process: child, ready: false, buffered: "" };
-  localTerminalSessions.set(sessionId, session);
-  child.onData((data) => {
-    if (!session.ready) {
-      session.buffered = (session.buffered + data).slice(-1024 * 1024);
-      return;
-    }
-    if (!event.sender.isDestroyed()) {
-      event.sender.send(`local-terminal:data:${sessionId}`, data);
-    }
-  });
-  child.onExit(({ exitCode }) => {
-    localTerminalSessions.delete(sessionId);
-    if (!event.sender.isDestroyed()) {
-      event.sender.send(`local-terminal:exit:${sessionId}`, exitCode);
-    }
-  });
-  event.sender.once("destroyed", () => closeLocalTerminalsFor(ownerId));
-  return { sessionId, shell: shellConfig.file };
+ipc.handle("show-save-dialog", async (_event, options) => {
+  return dialog.showSaveDialog(mainWindow, options);
 });
 
-ipcMain.handle("local-terminal-ready", (event, sessionId) => {
-  const session = ownedLocalTerminal(event, sessionId);
-  if (!session) return false;
-  session.ready = true;
-  if (session.buffered && !event.sender.isDestroyed()) {
-    event.sender.send(`local-terminal:data:${sessionId}`, session.buffered);
-    session.buffered = "";
-  }
-  return true;
-});
-
-ipcMain.handle("local-terminal-write", (event, sessionId, data) => {
-  const session = ownedLocalTerminal(event, sessionId);
-  if (!session || typeof data !== "string" || data.length > 64 * 1024) {
-    return false;
-  }
-  session.process.write(data);
-  return true;
-});
-
-ipcMain.handle("local-terminal-resize", (event, sessionId, cols, rows) => {
-  const session = ownedLocalTerminal(event, sessionId);
-  const width = Number(cols);
-  const height = Number(rows);
-  if (
-    !session ||
-    !Number.isInteger(width) ||
-    !Number.isInteger(height) ||
-    width < 2 ||
-    width > 500 ||
-    height < 1 ||
-    height > 300
-  ) {
-    return false;
-  }
-  session.process.resize(width, height);
-  return true;
-});
-
-ipcMain.handle("local-terminal-close", (event, sessionId) => {
-  const session = ownedLocalTerminal(event, sessionId);
-  if (!session) return false;
-  localTerminalSessions.delete(sessionId);
-  session.process.kill();
-  return true;
-});
-
-ipcMain.handle("show-save-dialog", async (_event, options) => {
-  return dialog.showSaveDialog(mainWindow, options || {});
-});
-
-ipcMain.handle("show-open-dialog", async (_event, options) => {
-  const result = await dialog.showOpenDialog(mainWindow, options || {});
+ipc.handle("show-open-dialog", async (_event, options) => {
+  const result = await dialog.showOpenDialog(mainWindow, options);
   for (const filePath of result.filePaths) dialogChosenPaths.add(filePath);
   return result;
 });
 
-function toLocalFileType(stat) {
-  if (stat.isDirectory()) return "directory";
-  if (stat.isFile()) return "file";
-  if (stat.isSymbolicLink()) return "link";
-  return "other";
-}
-
-function getLocalEntry(entryPath, name = path.basename(entryPath)) {
-  const stat = fs.lstatSync(entryPath);
-  return {
-    name,
-    path: entryPath,
-    type: toLocalFileType(stat),
-    size: stat.isFile() ? stat.size : 0,
-    created: stat.birthtime.toISOString(),
-    modified: stat.mtime.toISOString(),
-    modifiedTimestamp: stat.mtimeMs,
-    hidden: name.startsWith("."),
-    permissions: (stat.mode & 0o777).toString(8).padStart(3, "0"),
-    owner: String(stat.uid),
-    group: String(stat.gid),
-  };
-}
-
-function normalizeRelativeLocalPath(relativePath) {
-  return relativePath.split(path.sep).join("/");
-}
-
-function validateLocalName(name) {
-  if (typeof name !== "string" || !name.trim()) {
-    throw new Error("Missing name");
-  }
-  const trimmed = name.trim();
-  if (
-    trimmed.includes("/") ||
-    trimmed.includes("\\") ||
-    trimmed === "." ||
-    trimmed === ".."
-  ) {
-    throw new Error("Name cannot contain path separators");
-  }
-  return trimmed;
-}
-
-function ensureLocalDirectory(dirPath) {
-  if (typeof dirPath !== "string" || !dirPath) {
-    throw new Error("Missing directory path");
-  }
-  const stat = fs.statSync(dirPath);
-  if (!stat.isDirectory()) {
-    throw new Error("Path is not a directory");
-  }
-}
-
-function collectLocalFilesFromPath(rootPath, rootName, files, limit) {
-  if (files.length >= limit) return;
-
-  const stat = fs.lstatSync(rootPath);
-  if (stat.isSymbolicLink()) return;
-
-  if (stat.isFile()) {
-    files.push({
-      path: rootPath,
-      name: path.basename(rootPath),
-      relativePath: normalizeRelativeLocalPath(rootName),
-      size: stat.size,
-      created: stat.birthtime.toISOString(),
-      modified: stat.mtime.toISOString(),
-    });
-    return;
-  }
-
-  if (!stat.isDirectory()) return;
-
-  for (const childName of fs.readdirSync(rootPath)) {
-    if (files.length >= limit) return;
-    const childPath = path.join(rootPath, childName);
-    collectLocalFilesFromPath(
-      childPath,
-      path.join(rootName, childName),
-      files,
-      limit,
-    );
-  }
-}
-
-ipcMain.handle("get-local-home-directory", () => os.homedir());
-
-ipcMain.handle("list-local-directory", (_event, dirPath) => {
-  try {
-    const requestedPath =
-      typeof dirPath === "string" && dirPath.trim() ? dirPath : os.homedir();
-    const stat = fs.statSync(requestedPath);
-    if (!stat.isDirectory()) {
-      return {
-        success: false,
-        path: requestedPath,
-        entries: [],
-        error: "Path is not a directory",
-      };
-    }
-
-    const entries = fs
-      .readdirSync(requestedPath, { withFileTypes: true })
-      .map((entry) => {
-        try {
-          return getLocalEntry(
-            path.join(requestedPath, entry.name),
-            entry.name,
-          );
-        } catch {
-          return null;
-        }
-      })
-      .filter(Boolean)
-      .sort((a, b) => {
-        if (a.type === "directory" && b.type !== "directory") return -1;
-        if (a.type !== "directory" && b.type === "directory") return 1;
-        return a.name.localeCompare(b.name);
-      });
-
-    return {
-      success: true,
-      path: requestedPath,
-      parent: path.dirname(requestedPath),
-      entries,
-    };
-  } catch (error) {
-    return {
-      success: false,
-      path: typeof dirPath === "string" ? dirPath : "",
-      entries: [],
-      error: error instanceof Error ? error.message : "Failed to list path",
-    };
-  }
-});
-
-ipcMain.handle("stat-local-paths", (_event, paths) => {
-  const pathList = Array.isArray(paths) ? paths : [];
-  return pathList.map((entryPath) => {
-    try {
-      return { success: true, ...getLocalEntry(entryPath) };
-    } catch (error) {
-      return {
-        success: false,
-        path: entryPath,
-        error: error instanceof Error ? error.message : "Failed to stat path",
-      };
-    }
-  });
-});
-
-ipcMain.handle("collect-local-files", (_event, paths) => {
-  try {
-    const pathList = Array.isArray(paths) ? paths : [];
-    const files = [];
-    const limit = 10000;
-
-    for (const entryPath of pathList) {
-      if (typeof entryPath !== "string" || !entryPath) continue;
-      collectLocalFilesFromPath(
-        entryPath,
-        path.basename(entryPath),
-        files,
-        limit + 1,
-      );
-      if (files.length > limit) break;
-    }
-
-    return {
-      success: true,
-      files: files.slice(0, limit),
-      truncated: files.length > limit,
-    };
-  } catch (error) {
-    return {
-      success: false,
-      files: [],
-      error: error instanceof Error ? error.message : "Failed to collect files",
-    };
-  }
-});
-
-ipcMain.handle("create-local-folder", (_event, parentPath, folderName) => {
-  try {
-    ensureLocalDirectory(parentPath);
-    const safeName = validateLocalName(folderName);
-    const targetPath = path.join(parentPath, safeName);
-    fs.mkdirSync(targetPath);
-    return { success: true, ...getLocalEntry(targetPath, safeName) };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Failed to create folder",
-    };
-  }
-});
-
-ipcMain.handle("rename-local-path", (_event, entryPath, newName) => {
-  try {
-    if (typeof entryPath !== "string" || !entryPath) {
-      throw new Error("Missing path");
-    }
-    const safeName = validateLocalName(newName);
-    const targetPath = path.join(path.dirname(entryPath), safeName);
-    renameLocalPath(entryPath, targetPath);
-    return { success: true, ...getLocalEntry(targetPath, safeName) };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Failed to rename path",
-    };
-  }
-});
-
-ipcMain.handle("trash-local-path", async (_event, entryPath) => {
-  try {
-    if (typeof entryPath !== "string" || !entryPath) {
-      throw new Error("Missing path");
-    }
-    await shell.trashItem(entryPath);
-    return { success: true };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Failed to delete path",
-    };
-  }
-});
-
-ipcMain.handle("chmod-local-path", (_event, entryPath, permissions) => {
-  try {
-    if (typeof entryPath !== "string" || !entryPath) {
-      throw new Error("Missing path");
-    }
-    if (typeof permissions !== "string" || !/^[0-7]{3,4}$/.test(permissions)) {
-      throw new Error("Permissions must be an octal value");
-    }
-    fs.chmodSync(entryPath, parseInt(permissions, 8));
-    return { success: true, ...getLocalEntry(entryPath) };
-  } catch (error) {
-    return {
-      success: false,
-      error:
-        error instanceof Error ? error.message : "Failed to update permissions",
-    };
-  }
-});
-
-ipcMain.handle("create-temp-file", async (_event, fileData) => {
+ipc.handle("create-temp-file", async (_event, fileData) => {
   try {
     const result = createManagedTempFile(
       fileData?.fileName,
@@ -3649,7 +2091,7 @@ ipcMain.handle("create-temp-file", async (_event, fileData) => {
   }
 });
 
-ipcMain.handle("create-temp-folder", async (_event, folderData) => {
+ipc.handle("create-temp-folder", async (_event, folderData) => {
   try {
     const tempId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const tempDir = fs.mkdtempSync(path.join(getTempRoot(), `${tempId}-`));
@@ -3681,7 +2123,7 @@ ipcMain.handle("create-temp-folder", async (_event, folderData) => {
   }
 });
 
-ipcMain.handle("start-drag-to-desktop", (event, dragData) => {
+ipc.handle("start-drag-to-desktop", (event, dragData) => {
   try {
     const temp = tempFiles.get(dragData?.tempId);
     if (!temp) return { success: false, error: "Temporary file not found" };
@@ -3696,7 +2138,24 @@ ipcMain.handle("start-drag-to-desktop", (event, dragData) => {
   }
 });
 
-ipcMain.handle("cleanup-temp-file", (_event, tempId) => {
+// Must run synchronously inside the renderer's dragstart, files must exist.
+ipc.on("start-drag-files", (event, tempIds) => {
+  try {
+    const files = (Array.isArray(tempIds) ? tempIds : [])
+      .map((id) => tempFiles.get(id)?.path)
+      .filter((p) => p && fs.existsSync(p));
+    if (files.length === 0) return;
+    event.sender.startDrag({
+      file: files[0],
+      files,
+      icon: dragIcon(),
+    });
+  } catch (error) {
+    logToFile("Failed to start drag:", error.message);
+  }
+});
+
+ipc.handle("cleanup-temp-file", (_event, tempId) => {
   try {
     cleanupManagedTempFile(tempId);
     return { success: true };
@@ -3705,63 +2164,6 @@ ipcMain.handle("cleanup-temp-file", (_event, tempId) => {
   }
 });
 
-ipcMain.handle("open-external-editor", async (_event, fileData) => {
-  try {
-    // The editor comes from the saved setting, never from the caller.
-    const editorPath = readSetting(EXTERNAL_EDITOR_SETTING) || null;
-    if (!editorPath && isLaunchableFileName(fileData?.fileName)) {
-      return {
-        success: false,
-        error: "Choose an external editor to open this file type",
-      };
-    }
-
-    const result = createManagedTempFile(
-      fileData?.fileName,
-      fileData?.content,
-      fileData?.encoding,
-    );
-    const editId = result.tempId;
-    const stat = fs.statSync(result.path);
-    const watcher = fs.watch(result.path, { persistent: false }, () => {
-      const session = externalEditorSessions.get(editId);
-      if (!session) return;
-      if (session.timer) clearTimeout(session.timer);
-      session.timer = setTimeout(() => notifyExternalEditorSaved(editId), 500);
-    });
-
-    externalEditorSessions.set(editId, {
-      path: result.path,
-      watcher,
-      timer: null,
-      lastMtimeMs: stat.mtimeMs,
-    });
-
-    const openError = await openPathWithEditor(result.path, editorPath);
-    if (openError) {
-      closeExternalEditorSession(editId);
-      return { success: false, error: openError };
-    }
-
-    return { success: true, editId, path: result.path };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
-
-ipcMain.handle("close-external-editor", (_event, editId) => {
-  try {
-    closeExternalEditorSession(editId);
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
-
-// Local disk browsing + streamed local<->remote transfers for the file
-// manager's dual-pane mode (see electron/local-files.cjs).
-registerLocalFileHandlers({ ipcMain, shell });
-
 function createMenu() {
   if (process.platform === "darwin") {
     const template = [
@@ -3769,6 +2171,20 @@ function createMenu() {
         label: app.name,
         submenu: [
           { role: "about" },
+          {
+            label: "Menu Bar Icon",
+            submenu: [
+              ["monochrome", "Monochrome"],
+              ["color", "Color"],
+              ["hidden", "Hidden"],
+            ].map(([style, label]) => ({
+              label,
+              type: "radio",
+              checked:
+                desktopSettings.getDesktopSettings().macTrayIcon === style,
+              click: () => setMacTrayIcon(style),
+            })),
+          },
           { type: "separator" },
           { role: "services" },
           { type: "separator" },
@@ -3813,17 +2229,33 @@ function createMenu() {
           { type: "separator" },
           { role: "front" },
           { type: "separator" },
+          {
+            label: app.name,
+            accelerator: "CmdOrCtrl+0",
+            click: () => {
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                if (mainWindow.isMinimized()) mainWindow.restore();
+                mainWindow.show();
+                mainWindow.focus();
+              } else {
+                createWindow();
+              }
+            },
+          },
           { role: "window" },
         ],
       },
     ];
     const menu = Menu.buildFromTemplate(template);
     Menu.setApplicationMenu(menu);
+  } else {
+    Menu.setApplicationMenu(Menu.buildFromTemplate(windowsLinuxMenuTemplate()));
   }
 }
 
 app.whenReady().then(async () => {
   logToFile("=== App ready ===");
+  registerLinkScheme();
   logToFile(
     "isDev:",
     isDev,
@@ -3841,7 +2273,6 @@ app.whenReady().then(async () => {
 
   if (!isDev) {
     backendPort = await findBackendPort();
-    setLocalBackendPort(backendPort);
     const result = await startBackendServer();
     logToFile("startBackendServer result:", result);
   } else {
@@ -3853,6 +2284,37 @@ app.whenReady().then(async () => {
     }
   }
 
+  if (!isDev) {
+    appProtocol.serveApp(
+      session.fromPartition(termixSessionPartition),
+      path.join(appRoot, "dist"),
+    );
+    movingStorage = true;
+    try {
+      await migrateFileStorage({
+        BrowserWindow,
+        partition: termixSessionPartition,
+        markerPath: path.join(app.getPath("userData"), "app-origin.json"),
+        // Where Chromium keeps localStorage of the persist:termix partition.
+        storageDir: path.join(
+          app.getPath("userData"),
+          "Partitions",
+          "termix",
+          "Local Storage",
+          "leveldb",
+        ),
+        appBlankUrl: appProtocol.APP_BLANK_URL,
+        fs,
+        path,
+        log: logToFile,
+      });
+    } catch (error) {
+      logToFile("Could not move saved settings:", error?.message || error);
+    } finally {
+      movingStorage = false;
+    }
+  }
+
   createTray();
   createWindow();
   startAppUpdater();
@@ -3861,7 +2323,12 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
-  if (!tray || tray.isDestroyed()) {
+  if (movingStorage) return;
+  if (
+    !tray ||
+    tray.isDestroyed() ||
+    desktopSettings.getDesktopSettings().closeToTray === false
+  ) {
     app.quit();
   }
 });
@@ -3879,16 +2346,21 @@ app.on("before-quit", () => {
   isQuitting = true;
 });
 
-app.on("will-quit", () => {
-  console.log("App will quit...");
-  for (const editId of externalEditorSessions.keys()) {
-    closeExternalEditorSession(editId);
-  }
+let backendStoppedForQuit = false;
+
+// The app waits for the backend to exit before it goes, or the backend and
+// its plugins keep their ports after the window is gone.
+app.on("will-quit", (event) => {
   for (const tempId of tempFiles.keys()) {
     cleanupManagedTempFile(tempId);
   }
-  stopAllC2STunnels();
-  stopBackendServer();
+  if (backendStoppedForQuit || !backendProcess) return;
+  event.preventDefault();
+  if (backendStopping) return;
+  void stopBackendServer().finally(() => {
+    backendStoppedForQuit = true;
+    app.quit();
+  });
 });
 
 process.on("uncaughtException", (error) => {

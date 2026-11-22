@@ -70,6 +70,11 @@ vi.mock("../../../utils/crypto-migration/raw-rows.js", () => ({
 }));
 
 const registryProviders = new Map<string, unknown>();
+const canWrite = vi.fn(async () => true);
+vi.mock("../../../plugins/settings-access.js", () => ({
+  canWriteSettingField: (...args: unknown[]) => canWrite(...(args as [])),
+}));
+
 vi.mock("../../../plugins/registry.js", () => ({
   consume: (key: string) => registryProviders.get(key),
 }));
@@ -110,6 +115,8 @@ beforeEach(() => {
   loaded.length = 0;
   setCalls.length = 0;
   registryProviders.clear();
+  canWrite.mockReset();
+  canWrite.mockResolvedValue(true);
   getAllForScopeIds.mockClear();
   set.mockClear();
 });
@@ -229,20 +236,20 @@ describe("loadHostPluginSettings", () => {
 });
 
 describe("attachHostPluginSettings", () => {
-  it("attaches values to the matching host", () => {
+  it("attaches values to the matching host", async () => {
     const hosts = [{ id: 1 }, { id: 2 }] as Record<string, unknown>[];
     const settings = new Map([[1, { docker: { enableDocker: true } }]]);
 
-    attachHostPluginSettings(hosts, settings);
+    await attachHostPluginSettings(hosts, settings);
 
     expect(hosts[0].pluginSettings).toEqual({ docker: { enableDocker: true } });
     expect(hosts[1].pluginSettings).toBeUndefined();
   });
 
-  it("leaves hosts alone when there is nothing to attach", () => {
+  it("leaves hosts alone when there is nothing to attach", async () => {
     const hosts = [{ id: 1 }] as Record<string, unknown>[];
 
-    attachHostPluginSettings(hosts, new Map());
+    await attachHostPluginSettings(hosts, new Map());
 
     expect(hosts[0]).toEqual({ id: 1 });
   });
@@ -371,7 +378,7 @@ describe("share levels, legacy fields and generic writes", () => {
     ],
   });
 
-  it("hides a field above a recipient's share level", () => {
+  it("hides a field above a recipient's share level", async () => {
     loaded.push({ id: "remote-desktop", manifest: DESKTOP, state: "active" });
     const values = new Map([
       [
@@ -384,7 +391,7 @@ describe("share levels, legacy fields and generic writes", () => {
     const connect = { id: 1, isShared: true, permissionLevel: "connect" };
     const edit = { id: 1, isShared: true, permissionLevel: "edit" };
     const owner = { id: 1 };
-    attachHostPluginSettings([connect, edit, owner], values);
+    await attachHostPluginSettings([connect, edit, owner], values);
 
     expect(connect).toMatchObject({
       pluginSettings: { "remote-desktop": { enableRdp: true } },
@@ -401,7 +408,7 @@ describe("share levels, legacy fields and generic writes", () => {
     });
   });
 
-  it("adds a plugin's legacy payload fields without overwriting core's", () => {
+  it("adds a plugin's legacy payload fields without overwriting core's", async () => {
     loaded.push({ id: "docker", manifest: DOCKER, state: "active" });
     registryProviders.set(
       "docker.hostPayloadLegacy",
@@ -411,7 +418,7 @@ describe("share levels, legacy fields and generic writes", () => {
       }),
     );
     const host: Record<string, unknown> = { id: 2, name: "web" };
-    attachHostPluginSettings(
+    await attachHostPluginSettings(
       [host],
       new Map([[2, { docker: { enableDocker: true } }]]),
     );
@@ -419,7 +426,45 @@ describe("share levels, legacy fields and generic writes", () => {
     expect(host.name).toBe("web");
   });
 
-  it("adds a plugin's keys to an object core already sends, never over core's", () => {
+  it("awaits a legacy hook from a plugin running in its own process", async () => {
+    loaded.push({ id: "docker", manifest: DOCKER, state: "active" });
+    registryProviders.set(
+      "docker.hostPayloadLegacy",
+      async (own: Record<string, unknown>) => ({
+        enableDocker: own.enableDocker,
+      }),
+    );
+    const host: Record<string, unknown> = { id: 2 };
+    await attachHostPluginSettings(
+      [host],
+      new Map([[2, { docker: { enableDocker: true } }]]),
+    );
+    expect(host.enableDocker).toBe(true);
+  });
+
+  it("asks a plugin for many hosts' legacy fields at once, not one by one", async () => {
+    loaded.push({ id: "docker", manifest: DOCKER, state: "active" });
+    let open = 0;
+    let most = 0;
+    registryProviders.set("docker.hostPayloadLegacy", async () => {
+      open++;
+      most = Math.max(most, open);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      open--;
+      return { enableDocker: true };
+    });
+    const hosts = Array.from({ length: 20 }, (_, i) => ({ id: i + 1 }));
+    await attachHostPluginSettings(
+      hosts,
+      new Map(hosts.map((h) => [h.id, { docker: { enableDocker: true } }])),
+    );
+    expect(most).toBe(20);
+    expect(
+      hosts.every((h) => (h as Record<string, unknown>).enableDocker),
+    ).toBe(true);
+  });
+
+  it("adds a plugin's keys to an object core already sends, never over core's", async () => {
     loaded.push({ id: "docker", manifest: DOCKER, state: "active" });
     registryProviders.set("docker.hostPayloadLegacy", () => ({
       terminalConfig: { theme: "nord", startupSnippetId: 99 },
@@ -428,7 +473,7 @@ describe("share levels, legacy fields and generic writes", () => {
       id: 2,
       terminalConfig: { startupSnippetId: 1 },
     };
-    attachHostPluginSettings(
+    await attachHostPluginSettings(
       [host],
       new Map([[2, { docker: { enableDocker: true } }]]),
     );
@@ -449,17 +494,40 @@ describe("share levels, legacy fields and generic writes", () => {
 
   it("flips a plugin's host switch for many hosts", async () => {
     loaded.push({ id: "docker", manifest: DOCKER, state: "active" });
-    expect(await setHostPluginEnabled("docker", [3, 4], true)).toBe(true);
+    expect(await setHostPluginEnabled("docker", [3, 4], true)).toBe("ok");
     expect(setCalls.map((call) => [call[2], call[3], call[4]])).toEqual([
       ["3", "enableDocker", "true"],
       ["4", "enableDocker", "true"],
     ]);
-    expect(await setHostPluginEnabled("missing", [3], true)).toBe(false);
+    expect(await setHostPluginEnabled("missing", [3], true)).toBe("missing");
+  });
+
+  it("refuses a host switch the user may not change", async () => {
+    loaded.push({ id: "docker", manifest: DOCKER, state: "active" });
+    canWrite.mockResolvedValue(false);
+    expect(await setHostPluginEnabled("docker", [3], false, "u2")).toBe(
+      "forbidden",
+    );
+    expect(setCalls).toEqual([]);
+  });
+
+  it("skips imported values the user may not change", async () => {
+    loaded.push({ id: "docker", manifest: DOCKER, state: "active" });
+    canWrite.mockImplementation(
+      (async (...args: unknown[]) =>
+        (args[3] as { key: string }).key !== "enableDocker") as never,
+    );
+    await applyPluginHostImportSettings(
+      5,
+      { pluginSettings: { docker: { enableDocker: false, socketPath: "/s" } } },
+      "u2",
+    );
+    expect(setCalls.map((call) => call[3])).toEqual(["socketPath"]);
   });
 });
 
 describe("checkHostPluginSettingsInput", () => {
-  it("passes declared keys through to the plugin that owns them", () => {
+  it("passes declared keys through to the plugin that owns them", async () => {
     loaded.push({ id: "docker", manifest: DOCKER, state: "active" });
     const result = checkHostPluginSettingsInput({
       docker: { enableDocker: true, socketPath: "/run/docker.sock" },
@@ -474,7 +542,7 @@ describe("checkHostPluginSettingsInput", () => {
     ]);
   });
 
-  it("refuses a key the plugin does not declare and a value it rejects", () => {
+  it("refuses a key the plugin does not declare and a value it rejects", async () => {
     loaded.push({ id: "docker", manifest: DOCKER, state: "active" });
     const { errors } = checkHostPluginSettingsInput({
       docker: { dockerConfig: {}, enableDocker: "sure" },
@@ -484,7 +552,7 @@ describe("checkHostPluginSettingsInput", () => {
     expect(errors[1]).toContain("docker.enableDocker");
   });
 
-  it("skips a plugin that is not running", () => {
+  it("skips a plugin that is not running", async () => {
     loaded.push({ id: "docker", manifest: DOCKER, state: "disabled" });
     const result = checkHostPluginSettingsInput({
       docker: { enableDocker: true },

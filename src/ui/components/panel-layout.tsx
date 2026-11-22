@@ -1,23 +1,144 @@
 /* eslint-disable react-refresh/only-export-components */
 import { Children, Fragment, isValidElement, useRef } from "react";
 import type React from "react";
-import { ArrowLeft, Grid3X3, List, Rows3, Search, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Columns3,
+  Grid3X3,
+  List,
+  RefreshCw,
+  Rows3,
+  Search,
+  X,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/separator";
 import { DocsLink } from "@/components/docs-link";
+import { useInSeamlessTile } from "@/components/tile-grid/context";
+import { FooterClosed } from "@/components/tile-grid/edge";
+import { AddButton } from "@/components/list-kit";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/select";
 
 /** One spacing rhythm for every panel and tab. */
 export const PANEL = {
-  body: "p-2.5",
+  body: "p-3",
+  section: "flex flex-col gap-3 py-3",
   gap: "gap-2",
   band: "px-3 py-2",
   cardHead: "px-3 py-2.5",
   header: "h-12.5",
 } as const;
 
+/** Makes every control in a toolbar row the same 32px height. */
+export const TOOLBAR_FIT =
+  "[&_[data-slot=button][data-size=sm]]:h-8 [&_[data-slot=button][data-size=xs]]:h-8 [&_[data-slot=button][data-size=icon-sm]]:size-8 [&_[data-slot=button][data-size=icon-xs]]:size-8 [&_[data-slot=input]]:h-8 [&_[data-slot=select-trigger]]:h-8";
+
+/** A small unlabelled select for toolbar rows, as tall as the other controls. */
+export function ToolbarSelect<T extends string>({
+  value,
+  onChange,
+  options,
+  label,
+  disabled,
+  className,
+  contentClassName,
+}: {
+  value: T;
+  onChange: (value: NoInfer<T>) => void;
+  options: { value: NoInfer<T>; label: string }[];
+  /** Read by screen readers, since the select has no visible label. */
+  label: string;
+  disabled?: boolean;
+  className?: string;
+  /** For menus opened over layers above z-50. */
+  contentClassName?: string;
+}) {
+  return (
+    <Select
+      value={value}
+      onValueChange={(next) => onChange(next as T)}
+      disabled={disabled}
+    >
+      <SelectTrigger
+        aria-label={label}
+        className={cn("h-8 w-auto text-xs", className)}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent className={contentClassName}>
+        {options.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/** A toolbar row for controls outside the PanelShell toolbar slot. */
+export function ToolbarBand({
+  className,
+  children,
+}: {
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      data-slot="toolbar-band"
+      className={cn(
+        "flex shrink-0 flex-wrap items-center gap-2 border-b border-border",
+        PANEL.band,
+        TOOLBAR_FIT,
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
 export type PanelViewMode = "grid" | "list";
 export type PanelDensity = "comfortable" | "compact";
+
+/** Cards per row. "auto" fits as many as the pane has room for. */
+export type GridSize = "auto" | "1" | "2" | "3" | "4" | "5" | "6";
+
+export const GRID_SIZES: readonly GridSize[] = [
+  "auto",
+  "1",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+];
+
+// Sized off the pane's own width, not the window. Cards keep a min width,
+// so narrow panes drop columns on their own.
+export function gridSizeStyle(
+  size: GridSize,
+  minCardWidth = 320,
+  gap = "0.5rem",
+): React.CSSProperties {
+  if (size === "auto") {
+    return {
+      gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${minCardWidth}px), 1fr))`,
+    };
+  }
+  const n = Number(size);
+  return {
+    gridTemplateColumns: `repeat(auto-fill, minmax(max(min(100%, 220px), calc((100% - ${n - 1} * ${gap}) / ${n} - 0.5px)), 1fr))`,
+  };
+}
 
 /** The header, toolbar band and body every tab and panel draws. */
 export function PanelShell({
@@ -64,27 +185,31 @@ export function PanelShell({
         className,
       )}
     >
-      {children}
+      <FooterClosed closed={!!footer}>{children}</FooterClosed>
     </div>
   );
 
   const bands = (
     <>
+      {tabs && (
+        <div className={`shrink-0 border-b border-border px-1 ${TOOLBAR_FIT}`}>
+          {tabs}
+        </div>
+      )}
       {toolbar && (
         <div
-          className={`flex shrink-0 items-center gap-2 border-b border-border ${PANEL.band}`}
+          className={`flex shrink-0 items-center gap-2 border-b border-border ${PANEL.band} ${TOOLBAR_FIT}`}
         >
           {toolbar}
         </div>
-      )}
-      {tabs && (
-        <div className="shrink-0 border-b border-border px-1">{tabs}</div>
       )}
     </>
   );
 
   const foot = footer && (
-    <div className="flex shrink-0 items-center gap-2 border-t border-border px-3 py-2">
+    <div
+      className={`flex shrink-0 items-center gap-2 border-t border-border px-3 py-2 ${TOOLBAR_FIT}`}
+    >
       {footer}
     </div>
   );
@@ -169,6 +294,109 @@ export function BackButton({
 }
 
 /** Search box sized to match toolbar buttons. Esc clears it. */
+/** The refresh button panel headers show, spinning while it loads. */
+export function RefreshButton({
+  onClick,
+  loading = false,
+  disabled,
+  label,
+  className,
+}: {
+  onClick: () => void;
+  loading?: boolean;
+  disabled?: boolean;
+  label?: string;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  const text = label ?? t("common.refresh");
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled ?? loading}
+      title={text}
+      aria-label={text}
+      className={cn(
+        "flex size-8 shrink-0 items-center justify-center text-accent-brand transition-colors hover:bg-muted/40 disabled:opacity-60",
+        className,
+      )}
+    >
+      <RefreshCw className={cn("size-4", loading && "animate-spin")} />
+    </button>
+  );
+}
+
+/**
+ * The outer box of a plugin tab: fills the tab and clips, so the PanelShell
+ * inside can scroll its own body.
+ */
+export function PanelFrame({
+  className,
+  children,
+}: {
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={cn("h-full w-full overflow-hidden", className)}>
+      <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A sidebar panel's toolbar on one row: search, the panel's own icon
+ * buttons, then an icon only add button. `below` holds anything that needs
+ * its own line, like a target picker.
+ */
+export function PanelToolbar({
+  search,
+  onSearchChange,
+  searchPlaceholder,
+  onAdd,
+  addLabel,
+  children,
+  below,
+  className,
+}: {
+  search: string;
+  onSearchChange: (next: string) => void;
+  searchPlaceholder?: string;
+  /** Shows the add button. */
+  onAdd?: () => void;
+  addLabel?: string;
+  /** Icon buttons and menus, between search and add. */
+  children?: React.ReactNode;
+  below?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      data-panel-toolbar=""
+      className={cn(
+        "flex shrink-0 flex-col gap-2 border-b border-border px-3 py-2",
+        TOOLBAR_FIT,
+        className,
+      )}
+    >
+      <div className="flex min-w-0 items-center gap-1.5">
+        <PanelSearch
+          value={search}
+          onChange={onSearchChange}
+          placeholder={searchPlaceholder}
+          fill
+        />
+        {children}
+        {onAdd && <AddButton compact label={addLabel} onClick={onAdd} />}
+      </div>
+      {below}
+    </div>
+  );
+}
+
 export function PanelSearch({
   value,
   onChange,
@@ -233,7 +461,7 @@ export function PanelSearch({
             onEnter();
           }
         }}
-        className="h-8 w-full min-w-0 border border-input bg-transparent pl-8 pr-7 text-xs outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30"
+        className="h-8 w-full min-w-0 border border-border bg-(--field) pl-8 pr-7 text-xs outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
       />
       {value && (
         <button
@@ -274,7 +502,11 @@ export function Segmented<T extends string>({
   return (
     <div
       role="radiogroup"
-      className={cn("flex items-center border border-border", className)}
+      data-slot="segmented"
+      className={cn(
+        "flex h-8 w-fit shrink-0 items-center border border-border bg-popover",
+        className,
+      )}
     >
       {options.map((option, i) => {
         const active = option.value === value;
@@ -287,7 +519,7 @@ export function Segmented<T extends string>({
             title={option.title ?? option.label}
             onClick={() => onChange(option.value)}
             className={cn(
-              "flex h-8 items-center justify-center gap-1.5 px-2.5 text-[11px] font-medium transition-colors focus-visible:relative focus-visible:z-10 focus-visible:ring-1 focus-visible:ring-ring",
+              "flex h-full items-center justify-center gap-1.5 px-2.5 text-[11px] font-medium transition-colors focus-visible:relative focus-visible:z-10 focus-visible:ring-1 focus-visible:ring-ring",
               i > 0 && "border-l border-border",
               active
                 ? "bg-accent-brand/10 text-accent-brand"
@@ -308,21 +540,29 @@ export function Segmented<T extends string>({
   );
 }
 
-/** Grid or list, plus the compact rows toggle. */
+/** Grid or list, plus the compact rows toggle and the cards per row picker. */
 export function ViewToggle({
   view,
   onView,
   density,
   onDensity,
+  columns,
+  onColumns,
 }: {
   view: PanelViewMode;
   onView: (next: PanelViewMode) => void;
   density?: PanelDensity;
   onDensity?: (next: PanelDensity) => void;
+  /** Cards per row in grid view. Pass with onColumns to show the picker. */
+  columns?: GridSize;
+  onColumns?: (next: GridSize) => void;
 }) {
   const { t } = useTranslation();
-  return (
-    <div className="flex items-center border border-border">
+  const toggle = (
+    <div
+      data-slot="view-toggle"
+      className="flex h-8 items-center border border-border bg-popover"
+    >
       <ToggleButton
         active={view === "grid"}
         onClick={() => onView("grid")}
@@ -356,6 +596,34 @@ export function ViewToggle({
       )}
     </div>
   );
+
+  if (!columns || !onColumns || view !== "grid") return toggle;
+
+  return (
+    <div className="flex items-center gap-2">
+      <Select value={columns} onValueChange={(v) => onColumns(v as GridSize)}>
+        <SelectTrigger
+          size="sm"
+          className="w-auto gap-1.5 text-xs"
+          title={t("panel.columns.title")}
+          aria-label={t("panel.columns.title")}
+        >
+          <Columns3 className="size-3.5 text-muted-foreground" />
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {GRID_SIZES.map((size) => (
+            <SelectItem key={size} value={size} className="text-xs">
+              {size === "auto"
+                ? t("panel.columns.auto")
+                : t("panel.columns.count", { count: Number(size) })}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {toggle}
+    </div>
+  );
 }
 
 function ToggleButton({
@@ -379,7 +647,7 @@ function ToggleButton({
       aria-label={title}
       aria-pressed={active}
       className={cn(
-        "flex size-8 items-center justify-center transition-colors focus-visible:relative focus-visible:z-10 focus-visible:ring-1 focus-visible:ring-ring",
+        "flex aspect-square h-full items-center justify-center transition-colors focus-visible:relative focus-visible:z-10 focus-visible:ring-1 focus-visible:ring-ring",
         bordered && "border-l border-border",
         active
           ? "bg-accent-brand/10 text-accent-brand"
@@ -434,13 +702,18 @@ export function GroupHeading({
   title,
   count,
   action,
+  plain,
   className,
 }: {
   title: string;
   count?: number;
   action?: React.ReactNode;
+  /** No rule after the title. The default inside a tile layout. */
+  plain?: boolean;
   className?: string;
 }) {
+  const tiled = useInSeamlessTile();
+  const noRule = plain ?? tiled;
   return (
     <div className={cn("flex items-center gap-2", className)}>
       <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
@@ -451,7 +724,11 @@ export function GroupHeading({
           {count}
         </span>
       )}
-      <div className="h-px flex-1 bg-border" />
+      {noRule ? (
+        <div className="flex-1" />
+      ) : (
+        <div className="h-px flex-1 bg-border" />
+      )}
       {action}
     </div>
   );

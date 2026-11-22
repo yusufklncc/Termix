@@ -25,6 +25,7 @@ import {
   type RegistryListing,
 } from "@/api/plugins-api";
 import { useConfirm } from "@/components/surface/surface-scope";
+import { isAdminHoldTicket } from "@/api/user-management-api";
 import { pluginDescription, pluginName } from "@/lib/plugin-i18n";
 import { mergePlugins, uploadEntry, type PluginEntry } from "./plugin-model";
 import type { ConsentRequest } from "./PluginConsentPrompt";
@@ -61,6 +62,8 @@ export function usePluginsManager() {
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [consent, setConsent] = useState<ConsentRequest | null>(null);
+  // Plugins "Update all" skipped because they ask for something new.
+  const [reviewQueue, setReviewQueue] = useState<string[]>([]);
   const [developer, setDeveloper] = useState<DeveloperModeState>({
     enabled: false,
     signedOnly: false,
@@ -146,6 +149,8 @@ export function usePluginsManager() {
       const info = readError(error, t("plugins.manager.errors.generic"));
       if (info.code === "MANAGED_BY_SERVER") {
         toast.error(t("plugins.manager.errors.managedByServer"));
+      } else if (info.code === "DEFAULT_LOOK") {
+        toast.error(t("plugins.manager.errors.defaultLook", { name }));
       } else if (info.code === "HAS_DEPENDENTS") {
         toast.error(
           t("plugins.manager.errors.hasDependents", {
@@ -331,11 +336,17 @@ export function usePluginsManager() {
     [run, t, failToast],
   );
 
-  /** Reads a picked .tmxplug and asks for consent before anything loads. */
+  /**
+   * Reads a picked .tmxplug, with its .sig when one was picked too, and asks
+   * for consent before anything loads.
+   */
   const requestUpload = useCallback(
-    async (file: File) => {
+    async (file: File, signatureFile?: File) => {
       try {
-        const preview = await uploadPlugin(file);
+        const preview = await uploadPlugin(
+          file,
+          signatureFile ? await signatureFile.text() : undefined,
+        );
         setConsent({
           plugin: uploadEntry(preview),
           mode: "upload",
@@ -358,7 +369,14 @@ export function usePluginsManager() {
             version: request.version,
             capabilities: request.capabilities,
           });
-          if (result.state === "failed" || result.state === "blocked") {
+          if (isAdminHoldTicket(result)) {
+            toast.info(
+              t("plugins.manager.toast.held", {
+                name: request.plugin.name,
+                minutes: result.minutes,
+              }),
+            );
+          } else if (result.state === "failed" || result.state === "blocked") {
             toast.error(
               t("plugins.manager.toast.failedToStart", {
                 name: request.plugin.name,
@@ -446,7 +464,14 @@ export function usePluginsManager() {
       await run(plugin.id, async () => {
         try {
           const result = await setPluginState(plugin.id, enable);
-          if (result.state === "failed" || result.state === "blocked") {
+          if (isAdminHoldTicket(result)) {
+            toast.info(
+              t("plugins.manager.toast.held", {
+                name: plugin.name,
+                minutes: result.minutes,
+              }),
+            );
+          } else if (result.state === "failed" || result.state === "blocked") {
             toast.error(
               t("plugins.manager.toast.failedToStart", { name: plugin.name }),
             );
@@ -613,12 +638,37 @@ export function usePluginsManager() {
               }),
             );
           }
+          if (result.needsReview.length > 0) {
+            toast.info(
+              t("plugins.manager.toast.needsReview", {
+                count: result.needsReview.length,
+              }),
+            );
+            setReviewQueue(result.needsReview.map((entry) => entry.id));
+          }
         } catch (error) {
           failToast(error, "plugins.manager.errors.updateAll", "");
         }
       }),
     [run, t, failToast, nameOf],
   );
+
+  // Walks through the skipped plugins one review at a time.
+  useEffect(() => {
+    if (consent || busy.size > 0 || reviewQueue.length === 0) return;
+    const [next, ...rest] = reviewQueue;
+    setReviewQueue(rest);
+    const plugin = plugins.find((p) => p.id === next);
+    if (plugin?.updateAvailable && !plugin.pinnedVersion) {
+      void requestUpdate(plugin);
+    }
+  }, [consent, busy, reviewQueue, plugins, requestUpdate]);
+
+  /** Closing a review also stops the rest of the queue. */
+  const cancelConsent = useCallback(() => {
+    setConsent(null);
+    setReviewQueue([]);
+  }, []);
 
   return {
     plugins,
@@ -632,6 +682,7 @@ export function usePluginsManager() {
     busy,
     consent,
     setConsent,
+    cancelConsent,
     developerMode: developer.enabled,
     signedOnly: developer.signedOnly,
     requestUpload,

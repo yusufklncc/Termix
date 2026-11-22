@@ -512,6 +512,90 @@
       "when": 1791935282340,
       "tag": "0072_unique_username",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1792357128746,
+      "tag": "0073_user_look_preferences",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1792374488837,
+      "tag": "0074_bouncy_sersi",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1792430770990,
+      "tag": "0075_session_policy",
+      "breakpoints": true
+    },
+    {
+      "idx": 76,
+      "version": "7",
+      "when": 1792945360507,
+      "tag": "0076_host_color_icon",
+      "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1793304928399,
+      "tag": "0077_shared_folder_auth_overrides",
+      "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "7",
+      "when": 1793765382955,
+      "tag": "0078_clean_living_mummy",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "7",
+      "when": 1794025748495,
+      "tag": "0079_glamorous_salo",
+      "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1794526286265,
+      "tag": "0080_strong_blockbuster",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1794585754186,
+      "tag": "0081_powerful_black_knight",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1794847880032,
+      "tag": "0082_shocking_mattie_franklin",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1794850609004,
+      "tag": "0083_closed_amphibian",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1794963337241,
+      "tag": "0084_fast_domino",
+      "breakpoints": true
     }
   ]
 }

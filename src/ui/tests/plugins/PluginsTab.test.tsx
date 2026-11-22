@@ -24,12 +24,40 @@ const plugin = {
   versions: [],
   downloads: null,
   managedByServer: false,
+  kinds: [] as string[],
+  category: "",
+  unsupported: false,
+  needsTermix: null as string | null,
 };
 let linked = false;
+let extra: Array<typeof plugin> = [];
+
+function listed(
+  id: string,
+  overrides: Partial<typeof plugin> = {},
+): typeof plugin {
+  return {
+    ...plugin,
+    id,
+    name: `Listed ${id}`,
+    installed: false,
+    status: null as never,
+    ...overrides,
+  };
+}
+
+const updateCheck = vi.hoisted(() => ({
+  current: { version: null as string | null, blocked: [] as unknown[] },
+}));
+vi.mock("@/api/plugins-api", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getPluginProcesses: () => Promise.reject(new Error("no access")),
+  getPluginUpdateCheck: () => Promise.resolve(updateCheck.current),
+}));
 
 vi.mock("@/plugins/use-plugins-manager", () => ({
   usePluginsManager: () => ({
-    plugins: [plugin],
+    plugins: [plugin, ...extra],
     loading: false,
     refreshing: false,
     refresh: vi.fn(),
@@ -50,6 +78,7 @@ async function renderTab() {
   await i18n.use(initReactI18next).init({
     lng: "en",
     resources: { en: { translation: en } },
+    interpolation: { escapeValue: false },
   });
   return render(
     <I18nextProvider i18n={i18n}>
@@ -59,13 +88,76 @@ async function renderTab() {
 }
 
 beforeEach(() => {
+  updateCheck.current = { version: null, blocked: [] };
   localStorage.clear();
   linked = false;
+  extra = [];
   plugin.managedByServer = false;
 });
 afterEach(cleanup);
 
 describe("PluginsTab", () => {
+  it("offers the update on a blocked plugin", async () => {
+    extra = [
+      {
+        ...plugin,
+        id: "old",
+        name: "Old Plugin",
+        enabled: false,
+        status: "blocked",
+        updateAvailable: true,
+        latestVersion: "2.0.0",
+        addedCapabilities: ["operations:provide"] as never[],
+      },
+    ];
+    await renderTab();
+    expect(
+      screen.getAllByRole("button", { name: /Review update/ }).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("names API 1 plugins, says why and links the guide", async () => {
+    extra = [
+      {
+        ...plugin,
+        id: "old",
+        name: "Old Plugin",
+        enabled: false,
+        isolation: "legacy",
+      } as typeof plugin,
+    ];
+    await renderTab();
+    expect(
+      screen.getByText(/stays off until it is updated: Old Plugin/),
+    ).toBeTruthy();
+    expect(screen.getByText(/made for plugin API 1/)).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "How plugins move to API 2" }),
+    ).toHaveProperty("href", docsUrl("pluginApi2"));
+  });
+
+  it("lists plugins the next Termix release would turn off", async () => {
+    updateCheck.current = {
+      version: "26.12.0",
+      blocked: [
+        {
+          id: "demo",
+          name: "Demo Plugin",
+          version: "1.0.0",
+          enabled: true,
+          reason: "termix",
+          needs: "<26.12.0",
+        },
+      ],
+    };
+    await renderTab();
+    expect(
+      await screen.findByText(
+        "Termix 26.12.0 is out. 1 plugin will stay off on it until you update it: Demo Plugin (needs Termix <26.12.0).",
+      ),
+    ).toBeTruthy();
+  });
+
   it("points to the Registries tab and links the submit guide", async () => {
     await renderTab();
     fireEvent.click(screen.getByText(en.plugins.manager.tabs.browse));
@@ -92,20 +184,83 @@ describe("PluginsTab", () => {
     expect(localStorage.getItem("pluginsTab.browseInstalled")).toBe("show");
   });
 
+  it("filters Browse by what a plugin adds", async () => {
+    extra = [
+      listed("layout", { kinds: ["layouts", "tabs"] }),
+      listed("tabs", { kinds: ["tabs"] }),
+    ];
+    await renderTab();
+    fireEvent.click(screen.getByText(en.plugins.manager.tabs.browse));
+    expect(screen.getByText("Listed layout")).toBeTruthy();
+    expect(screen.getByText("Listed tabs")).toBeTruthy();
+
+    const [layoutsFilter] = screen.getAllByRole("button", {
+      name: new RegExp(`^${en.plugins.manager.kinds.layouts}`),
+    });
+    fireEvent.click(layoutsFilter);
+
+    expect(screen.getByText("Listed layout")).toBeTruthy();
+    expect(screen.queryByText("Listed tabs")).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Remove filter ${en.plugins.manager.kinds.layouts}`,
+      }),
+    );
+    expect(screen.getByText("Listed tabs")).toBeTruthy();
+  });
+
+  it("hides plugins this build can't run until shown", async () => {
+    extra = [
+      listed("later", {
+        unsupported: true,
+        needsTermix: ">=26.11.0",
+        latestVersion: null as never,
+      }),
+    ];
+    await renderTab();
+    fireEvent.click(screen.getByText(en.plugins.manager.tabs.browse));
+    expect(screen.queryByText("Listed later")).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: /Show unsupported \(1\)/ }),
+    );
+
+    expect(screen.getByText("Listed later")).toBeTruthy();
+    expect(screen.getByText("Needs Termix >=26.11.0")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: en.plugins.manager.install }),
+    ).toBeNull();
+  });
+
+  it("pages a long Browse list", async () => {
+    extra = Array.from({ length: 30 }, (_, i) =>
+      listed(`p${String(i).padStart(2, "0")}`),
+    );
+    localStorage.setItem("pluginsTab.view", "list");
+    await renderTab();
+    fireEvent.click(screen.getByText(en.plugins.manager.tabs.browse));
+
+    expect(screen.getAllByText(/^Listed p/)).toHaveLength(24);
+    expect(screen.getByText("1-24 of 30")).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: en.plugins.manager.pager.next }),
+    );
+    expect(screen.getAllByText(/^Listed p/)).toHaveLength(6);
+    expect(screen.getByText("Page 2 of 2")).toBeTruthy();
+  });
+
   it("switches to a table and remembers it", async () => {
     await renderTab();
     expect(screen.queryByRole("table")).toBeNull();
-    expect(
-      screen.getByLabelText(en.plugins.manager.columns.title),
-    ).toBeTruthy();
+    expect(screen.getByLabelText(en.panel.columns.title)).toBeTruthy();
 
     fireEvent.click(screen.getByLabelText(en.panel.listView));
 
     expect(screen.getByRole("table")).toBeTruthy();
     expect(screen.getByText(en.plugins.manager.table.version)).toBeTruthy();
-    expect(
-      screen.queryByLabelText(en.plugins.manager.columns.title),
-    ).toBeNull();
+    expect(screen.queryByLabelText(en.panel.columns.title)).toBeNull();
     expect(localStorage.getItem("pluginsTab.view")).toBe("list");
 
     cleanup();
@@ -119,7 +274,8 @@ describe("PluginsTab", () => {
     const grid = container.querySelector<HTMLElement>(
       "[style*='grid-template-columns']",
     );
-    expect(grid?.style.gridTemplateColumns).toContain("/ 5");
+    // jsdom 31 folds the calc, so "/ 5" reads as "20%"
+    expect(grid?.style.gridTemplateColumns).toMatch(/\/ 5|20%/);
   });
 
   it("fits auto columns to the tab width, not the window", async () => {

@@ -26,6 +26,7 @@ import {
 import { getPluginRuntime } from "../../plugins/index.js";
 import { consume } from "../../plugins/registry.js";
 import { sshLogger } from "../../utils/logger.js";
+import { canWriteSettingField } from "../../plugins/settings-access.js";
 
 export type HostPluginSettings = Record<string, Record<string, unknown>>;
 
@@ -175,16 +176,17 @@ function visibleHostPluginSettings(
 export type PluginHostPayloadLegacy = (
   values: Record<string, unknown>,
   host: Record<string, unknown>,
-) => Record<string, unknown> | null;
+) => Record<string, unknown> | null | Promise<Record<string, unknown> | null>;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function applyLegacyFields(
+// A plugin in its own process answers asynchronously, so this awaits.
+async function applyLegacyFields(
   host: Record<string, unknown>,
   values: HostPluginSettings,
-): void {
+): Promise<void> {
   for (const manifest of hostSettingsPlugins()) {
     const own = values[manifest.id];
     if (!own) continue;
@@ -193,7 +195,9 @@ function applyLegacyFields(
     );
     if (!legacy) continue;
     try {
-      for (const [key, value] of Object.entries(legacy(own, host) ?? {})) {
+      for (const [key, value] of Object.entries(
+        (await legacy(own, host)) ?? {},
+      )) {
         const current = host[key];
         if (current === undefined || current === null) {
           host[key] = value;
@@ -209,18 +213,24 @@ function applyLegacyFields(
   }
 }
 
+const LEGACY_BATCH = 500;
+
 /** Attaches the map to already-transformed host objects, in place. */
-export function attachHostPluginSettings(
+export async function attachHostPluginSettings(
   hosts: Record<string, unknown>[],
   settings: Map<number, HostPluginSettings>,
-): void {
+): Promise<void> {
   if (settings.size === 0) return;
-  for (const host of hosts) {
-    const hostId = Number(host.id);
-    const values = settings.get(hostId);
-    if (!values) continue;
+  const attach = async (host: Record<string, unknown>) => {
+    const values = settings.get(Number(host.id));
+    if (!values) return;
     host.pluginSettings = visibleHostPluginSettings(values, host);
-    applyLegacyFields(host, host.pluginSettings as HostPluginSettings);
+    await applyLegacyFields(host, host.pluginSettings as HostPluginSettings);
+  };
+  // Each legacy field is a call into a plugin process. One host at a time
+  // made a 20,000 host list take 25 s, so hosts go in parallel batches.
+  for (let i = 0; i < hosts.length; i += LEGACY_BATCH) {
+    await Promise.all(hosts.slice(i, i + LEGACY_BATCH).map(attach));
   }
 }
 
@@ -247,8 +257,25 @@ export async function withHostPluginSettings(
     ...host,
     pluginSettings: visibleHostPluginSettings(values, host),
   };
-  applyLegacyFields(result, result.pluginSettings as HostPluginSettings);
+  await applyLegacyFields(result, result.pluginSettings as HostPluginSettings);
   return result;
+}
+
+/** Whether a user may write a host field, logging when they may not. */
+async function mayWrite(
+  actorId: string,
+  manifest: PluginManifest,
+  key: string,
+): Promise<boolean> {
+  const field = findField(manifest, "host", key);
+  if (!field) return true;
+  if (await canWriteSettingField(actorId, manifest, "host", field)) return true;
+  sshLogger.warn("Skipped a plugin host setting the user may not change", {
+    operation: "host_plugin_settings_permission",
+    pluginId: manifest.id,
+    key,
+  });
+  return false;
 }
 
 /**
@@ -260,9 +287,11 @@ export async function writeHostPluginSettings(
   manifest: PluginManifest,
   hostId: number,
   values: Record<string, unknown>,
+  actorId?: string,
 ): Promise<void> {
   for (const [key, value] of Object.entries(values)) {
     if (value === undefined) continue;
+    if (actorId && !(await mayWrite(actorId, manifest, key))) continue;
     const error = await setSetting(manifest, "host", hostId, key, value);
     if (error) {
       sshLogger.warn("Refused a plugin host setting on import", {
@@ -330,7 +359,7 @@ export function checkHostPluginSettingsInput(
  */
 export type PluginHostImportNormalizer = (
   raw: Record<string, unknown>,
-) => Record<string, unknown> | null;
+) => Record<string, unknown> | null | Promise<Record<string, unknown> | null>;
 
 /**
  * Runs every enabled plugin's registered import normalizer over one imported
@@ -344,6 +373,7 @@ export type PluginHostImportNormalizer = (
 export async function applyPluginHostImportSettings(
   hostId: number,
   raw: Record<string, unknown>,
+  actorId?: string,
 ): Promise<void> {
   const exported =
     raw.pluginSettings && typeof raw.pluginSettings === "object"
@@ -358,6 +388,8 @@ export async function applyPluginHostImportSettings(
       if (carried && typeof carried === "object") {
         for (const field of declaredFields(manifest, "host")) {
           if (field.type === "secret" || !(field.key in carried)) continue;
+          if (actorId && !(await mayWrite(actorId, manifest, field.key)))
+            continue;
           await setSetting(
             manifest,
             "host",
@@ -371,8 +403,9 @@ export async function applyPluginHostImportSettings(
       const normalizer = consume<PluginHostImportNormalizer>(
         `${manifest.id}.hostImportNormalizer`,
       );
-      const values = normalizer?.(raw);
-      if (values) await writeHostPluginSettings(manifest, hostId, values);
+      const values = await normalizer?.(raw);
+      if (values)
+        await writeHostPluginSettings(manifest, hostId, values, actorId);
     } catch (error) {
       sshLogger.warn("Plugin host import normalizer failed", {
         operation: "host_import_plugin_settings",
@@ -385,17 +418,21 @@ export async function applyPluginHostImportSettings(
 }
 
 /**
- * Turns one plugin's host switch on or off for a set of hosts. Returns false
- * when the plugin is not running or declares no enableKey.
+ * Turns one plugin's host switch on or off for a set of hosts. "missing" when
+ * the plugin is not running or declares no enableKey, "forbidden" when the
+ * switch has a permission the user lacks.
  */
 export async function setHostPluginEnabled(
   pluginId: string,
   hostIds: number[],
   enabled: boolean,
-): Promise<boolean> {
+  actorId?: string,
+): Promise<"ok" | "missing" | "forbidden"> {
   const manifest = hostSettingsPlugins().find((m) => m.id === pluginId);
   const enableKey = manifest?.contributes?.settings?.host?.enableKey;
-  if (!manifest || !enableKey) return false;
+  if (!manifest || !enableKey) return "missing";
+  if (actorId && !(await mayWrite(actorId, manifest, enableKey)))
+    return "forbidden";
   for (const hostId of hostIds) {
     await setSetting(manifest, "host", hostId, enableKey, enabled);
     await touchHost(hostId);
@@ -403,5 +440,5 @@ export async function setHostPluginEnabled(
   const { changeHostOverrides } =
     await import("../../hosts/defaults/overrides.js");
   await changeHostOverrides(hostIds, { own: [[pluginId, enableKey]] });
-  return true;
+  return "ok";
 }

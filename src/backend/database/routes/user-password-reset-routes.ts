@@ -2,13 +2,13 @@ import type { Router } from "express";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
+import { recentActivity } from "../../plugins/activity-provider.js";
 import { AuthManager } from "../../utils/auth-manager.js";
 import { authLogger } from "../../utils/logger.js";
 import { loginRateLimiter } from "../../utils/login-rate-limiter.js";
 import {
   createCurrentCredentialRepository,
   createCurrentHostRepository,
-  createCurrentRecentActivityRepository,
   createCurrentSettingsRepository,
   createCurrentSshCredentialUsageRepository,
   createCurrentUserRepository,
@@ -18,6 +18,10 @@ import { pluginEvents, TOPICS } from "../../plugins/events.js";
 interface UserPasswordResetRoutesDeps {
   authManager: AuthManager;
 }
+
+// The same answer whether or not the user exists, so it can't be used to find usernames.
+const RESET_STARTED =
+  "If the user exists, a password reset code has been generated. Check docker logs for the code.";
 
 function isNonEmptyString(val: unknown): val is string {
   return typeof val === "string" && val.trim().length > 0;
@@ -68,7 +72,7 @@ export async function resetUserPassword(
   await userRepository.update(userId, { passwordHash });
 
   await createCurrentSshCredentialUsageRepository().deleteByUserId(userId);
-  await createCurrentRecentActivityRepository().deleteByUserId(userId);
+  await recentActivity.deleteByUserId(userId);
   await createCurrentHostRepository().deleteByUserId(userId);
   await createCurrentCredentialRepository().deleteByUserId(userId);
   // A plugin holding this user's data (anything keyed by
@@ -167,17 +171,11 @@ export function registerUserPasswordResetRoutes(
         authLogger.warn(
           `Password reset attempted for non-existent user: ${username}`,
         );
-        return res.json({
-          message:
-            "If the user exists, a password reset code has been generated. Check docker logs for the code.",
-        });
+        return res.json({ message: RESET_STARTED });
       }
 
       if (user.isExternal) {
-        return res.json({
-          message:
-            "If the user exists, a password reset code has been generated. Check docker logs for the code.",
-        });
+        return res.json({ message: RESET_STARTED });
       }
 
       const resetCode = crypto.randomInt(100000, 1000000).toString();
@@ -193,12 +191,10 @@ export function registerUserPasswordResetRoutes(
 
       authLogger.info(
         `Password reset code generated for user ${username}: ${resetCode} (expires at ${expiresAt.toLocaleString()})`,
+        { private: true },
       );
 
-      res.json({
-        message:
-          "Password reset code has been generated and logged. Check docker logs for the code.",
-      });
+      res.json({ message: RESET_STARTED });
     } catch (err) {
       authLogger.error("Failed to initiate password reset", err);
       res.status(500).json({ error: "Failed to initiate password reset" });

@@ -9,7 +9,7 @@
  * so /^\/plugin-api\/docker/ counts the same as "/plugin-api/docker".
  *
  * Plugins live in their own repos, so the ids are the official ones below
- * plus anything in docker/bundled-plugins.json. electron/ and vite.config.ts
+ * plus anything in docker/bundled-plugins.json and docker/plugin-tiers.json. electron/ and vite.config.ts
  * are read as well.
  *
  * src/backend/tests, src/ui/tests and src/ui/locales are exempt, and so is
@@ -21,23 +21,35 @@
  * One plugin id is also an SSH term: "totp" is the one-time-code prompt kind
  * in keyboard-interactive auth, which the connect pipeline in
  * src/backend/hosts/connect/ classifies. It is not the login plugin.
+ *
+ * A few ids are also plain core words: the host "notes" column, the data
+ * "backups" folder, the node "dns" module and "webauthn", the web standard
+ * a passkey login method's kind is named after. On their own they are not
+ * counted, but their routes and dotted ids ("notes.list") still are.
  */
 
 const fs = require("node:fs");
 const path = require("node:path");
 
 const SSH_TERMS = new Set(["totp"]);
+const CORE_WORDS = new Set(["notes", "backups", "dns", "webauthn"]);
 
 const OFFICIAL_IDS = [
   "acme-ssl",
   "ai",
   "alerts",
+  "audit-tools",
   "automations",
+  "classic-layout",
+  "classic-themes",
+  "credential-tools",
   "docker",
   "file-manager",
   "fleets",
   "homepage",
   "host-metrics",
+  "host-status",
+  "import-export",
   "ldap",
   "network-topology",
   "opkssh",
@@ -71,6 +83,7 @@ function paths(root) {
     root,
     src,
     bundled: path.join(root, "docker", "bundled-plugins.json"),
+    tiers: path.join(root, "docker", "plugin-tiers.json"),
     extra: [path.join(root, "electron"), path.join(root, "vite.config.ts")],
     exempt: [
       path.join(src, "backend", "upgrade"),
@@ -82,8 +95,15 @@ function paths(root) {
   };
 }
 
-function pluginIds(bundledFile) {
+function pluginIds(bundledFile, tiersFile) {
   const ids = new Set(OFFICIAL_IDS);
+  if (tiersFile && fs.existsSync(tiersFile)) {
+    for (const id of Object.keys(
+      JSON.parse(fs.readFileSync(tiersFile, "utf8")).plugins ?? {},
+    )) {
+      ids.add(id);
+    }
+  }
   if (bundledFile && fs.existsSync(bundledFile)) {
     for (const entry of JSON.parse(fs.readFileSync(bundledFile, "utf8"))
       .plugins ?? []) {
@@ -140,8 +160,8 @@ function regexLiterals(source) {
 }
 
 function scan(root = path.resolve(__dirname, "..")) {
-  const { src, bundled, extra, exempt, sshConnect } = paths(root);
-  const ids = pluginIds(bundled);
+  const { src, bundled, tiers, extra, exempt, sshConnect } = paths(root);
+  const ids = pluginIds(bundled, tiers);
   const found = {};
   const add = (file, what) => {
     const key = path.relative(root, file).replaceAll("\\", "/");
@@ -161,7 +181,7 @@ function scan(root = path.resolve(__dirname, "..")) {
     const inConnect = file.startsWith(sshConnect + path.sep);
     for (const text of literals(source)) {
       const sshTerm = inConnect && SSH_TERMS.has(text);
-      if (ids.has(text) && !sshTerm) add(file, text);
+      if (ids.has(text) && !sshTerm && !CORE_WORDS.has(text)) add(file, text);
       for (const route of text.matchAll(
         /\/plugin-(?:api|ws|assets)\/([a-z0-9-]+)/g,
       )) {

@@ -3,7 +3,10 @@ import { getDb, getSqlite } from "../db/index.js";
 import { needsExplicitPersist, resolveDatabaseDialect } from "../db/dialect.js";
 import { primeSettingsCache, readCachedSetting } from "./settings-cache.js";
 import type { DatabaseContext } from "./database-context.js";
+import { AdminHoldRepository } from "./admin-hold-repository.js";
 import { ApiKeyRepository } from "./api-key-repository.js";
+import { UserInviteRepository } from "./user-invite-repository.js";
+import { AccessReviewRepository } from "./access-review-repository.js";
 import { AuditLogRepository } from "./audit-log-repository.js";
 import { CredentialRepository } from "./credential-repository.js";
 import { HostFolderRepository } from "./host-folder-repository.js";
@@ -12,7 +15,9 @@ import { HostResolutionRepository } from "./host-resolution-repository.js";
 import { HostSidebarPreferenceRepository } from "./host-sidebar-preference-repository.js";
 import { CredentialSidebarPreferenceRepository } from "./credential-sidebar-preference-repository.js";
 import { UiPreferenceRepository } from "./ui-preference-repository.js";
+import { FrameRegistrationRepository } from "./frame-registration-repository.js";
 import { OpenTabRepository } from "./open-tab-repository.js";
+import { OperationRepository } from "./operation-repository.js";
 import { PluginRepository } from "./plugin-repository.js";
 import { PluginStorageRepository } from "./plugin-storage-repository.js";
 import { PluginSettingsRepository } from "./plugin-settings-repository.js";
@@ -23,15 +28,16 @@ import { PluginPermissionGrantRepository } from "./plugin-permission-grant-repos
 import { UserAuthRepository } from "./user-auth-repository.js";
 import { RbacAccessRepository } from "./rbac-access-repository.js";
 import { RbacPermissionRepository } from "./rbac-permission-repository.js";
-import { RecentActivityRepository } from "./recent-activity-repository.js";
 import { RoleRepository } from "./role-repository.js";
 import { SessionRepository } from "./session-repository.js";
 import { CredentialAccessRepository } from "./credential-access-repository.js";
 import { SharedCredentialSecretsRepository } from "./shared-credential-secrets-repository.js";
+import { FieldResealRepository } from "./field-reseal-repository.js";
 import { FolderAccessRepository } from "./folder-access-repository.js";
 import { SettingsRepository } from "./settings-repository.js";
 import { HostProtocolAuthRepository } from "./host-protocol-auth-repository.js";
 import { SharedHostAuthOverrideRepository } from "./shared-host-auth-override-repository.js";
+import { SharedFolderAuthOverrideRepository } from "./shared-folder-auth-override-repository.js";
 import { SharedHostSecretsRepository } from "./shared-host-secrets-repository.js";
 import { SshCredentialUsageRepository } from "./ssh-credential-usage-repository.js";
 import { TrustedDeviceRepository } from "./trusted-device-repository.js";
@@ -119,6 +125,27 @@ export function getCurrentSettingValue(key: string): string | null {
   return row?.value ?? null;
 }
 
+export function createCurrentAdminHoldRepository(): AdminHoldRepository {
+  return new AdminHoldRepository(
+    createCurrentRepositoryContext(),
+    createCurrentRepositoryWriteHook("admin_hold_repository_write"),
+  );
+}
+
+export function createCurrentAccessReviewRepository(): AccessReviewRepository {
+  return new AccessReviewRepository(
+    createCurrentRepositoryContext(),
+    createCurrentRepositoryWriteHook("access_review_repository_write"),
+  );
+}
+
+export function createCurrentUserInviteRepository(): UserInviteRepository {
+  return new UserInviteRepository(
+    createCurrentRepositoryContext(),
+    createCurrentRepositoryWriteHook("user_invite_repository_write"),
+  );
+}
+
 export function createCurrentApiKeyRepository(): ApiKeyRepository {
   return new ApiKeyRepository(
     createCurrentRepositoryContext(),
@@ -131,6 +158,14 @@ export function createCurrentAuditLogRepository(): AuditLogRepository {
     createCurrentRepositoryContext(),
     // Rows land on every audited call; the audited action saves on its own.
     createCurrentRepositoryLazyWriteHook("audit_log_repository_write"),
+  );
+}
+
+export function createCurrentOperationRepository(): OperationRepository {
+  return new OperationRepository(
+    createCurrentRepositoryContext(),
+    // Rows land on every run. A rollout saves once on its own when it starts.
+    createCurrentRepositoryLazyWriteHook("operation_repository_write"),
   );
 }
 
@@ -187,6 +222,13 @@ export function createCurrentUiPreferenceRepository(): UiPreferenceRepository {
   return new UiPreferenceRepository(
     createCurrentRepositoryContext(),
     createCurrentRepositoryWriteHook("ui_preference_repository_write"),
+  );
+}
+
+export function createCurrentFrameRegistrationRepository(): FrameRegistrationRepository {
+  return new FrameRegistrationRepository(
+    createCurrentRepositoryContext(),
+    createCurrentRepositoryLazyWriteHook("frame_registration_repository_write"),
   );
 }
 
@@ -269,13 +311,6 @@ export function createCurrentRbacAccessRepository(): RbacAccessRepository {
   );
 }
 
-export function createCurrentRecentActivityRepository(): RecentActivityRepository {
-  return new RecentActivityRepository(
-    createCurrentRepositoryContext(),
-    createCurrentRepositoryWriteHook("recent_activity_repository_write"),
-  );
-}
-
 export function createCurrentRoleRepository(): RoleRepository {
   return new RoleRepository(
     createCurrentRepositoryContext(),
@@ -288,6 +323,16 @@ export function createCurrentSessionRepository(): SessionRepository {
     createCurrentRepositoryContext(),
     createCurrentRepositoryWriteHook("session_repository_write"),
     // Activity timestamps are informational; the periodic flush persists them.
+    needsExplicitPersist(resolveDatabaseDialect())
+      ? () => DatabaseSaveTrigger.markDirty()
+      : undefined,
+  );
+}
+
+/** Writes are many and small, so they only mark the database dirty. */
+export function createCurrentFieldResealRepository(): FieldResealRepository {
+  return new FieldResealRepository(
+    createCurrentRepositoryContext(),
     needsExplicitPersist(resolveDatabaseDialect())
       ? () => DatabaseSaveTrigger.markDirty()
       : undefined,
@@ -320,6 +365,15 @@ export function createCurrentSharedHostAuthOverrideRepository(): SharedHostAuthO
     createCurrentRepositoryContext(),
     createCurrentRepositoryWriteHook(
       "shared_host_auth_override_repository_write",
+    ),
+  );
+}
+
+export function createCurrentSharedFolderAuthOverrideRepository(): SharedFolderAuthOverrideRepository {
+  return new SharedFolderAuthOverrideRepository(
+    createCurrentRepositoryContext(),
+    createCurrentRepositoryWriteHook(
+      "shared_folder_auth_override_repository_write",
     ),
   );
 }

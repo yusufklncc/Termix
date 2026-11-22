@@ -13,6 +13,8 @@ import {
 } from "@termix-ssh/plugin-sdk/changelog";
 import type {
   PluginChannel,
+  PluginIsolation,
+  PluginProvenance,
   PluginSummary,
   PluginUploadPreview,
   RegistryPluginEntry,
@@ -25,7 +27,7 @@ import {
 } from "@/lib/issue-url";
 
 export type PluginStatus =
-  "running" | "disabled" | "failed" | "blocked" | "server";
+  "running" | "disabled" | "failed" | "blocked" | "server" | "safeMode";
 
 /** One row of the Plugins tab: what is installed merged with the registry. */
 export interface PluginEntry {
@@ -71,6 +73,18 @@ export interface PluginEntry {
   registryName: string | null;
   /** A linked server decides whether it runs here. */
   managedByServer: boolean;
+  /** The app is drawn with it by default, so it can be swapped but not uninstalled. */
+  defaultLook: boolean;
+  /** Contribution keys from the manifest or the registry, like layouts. */
+  kinds: string[];
+  /** Listed, but no release runs on this build. */
+  unsupported: boolean;
+  /** The Termix range the newest release needs, when this build is too old. */
+  needsTermix: string | null;
+  /** How it runs, when installed. See PluginSummary.isolation. */
+  isolation: PluginIsolation | null;
+  /** Build provenance checked when it was downloaded. */
+  provenance: PluginProvenance | null;
 }
 
 export type PluginSource =
@@ -113,7 +127,12 @@ export function pluginStatus(summary: PluginSummary): PluginStatus {
   if (summary.state === "failed") return "failed";
   if (summary.state === "blocked") return "blocked";
   if (!summary.enabled) return "disabled";
+  if (summary.state === "safe-mode") return "safeMode";
   return "running";
+}
+
+function wantsUpdate(summary: PluginSummary): boolean {
+  return summary.state === "blocked" || summary.state === "failed";
 }
 
 export function mergePlugins(
@@ -146,10 +165,13 @@ export function mergePlugins(
       latestBeta: entry?.latestBeta ?? null,
       channel: summary.channel ?? entry?.channel ?? "stable",
       isBeta: isPrerelease(summary.version),
-      // The server keeps its own copy up to date.
-      updateAvailable: summary.runsOnServer
-        ? false
-        : (entry?.updateAvailable ?? false),
+      // The server keeps its own copy up to date, and a plugin that is off
+      // should not ask for attention. Blocked and failed ones are not off:
+      // an update is often the way to get them running again.
+      updateAvailable:
+        summary.runsOnServer || (!summary.enabled && !wantsUpdate(summary))
+          ? false
+          : (entry?.updateAvailable ?? false),
       addedCapabilities: entry?.addedCapabilities ?? [],
       versions: entry?.versions ?? [],
       capabilities: summary.capabilities ?? [],
@@ -168,6 +190,17 @@ export function mergePlugins(
       registryId: entry?.registryId ?? summary.registryId ?? null,
       registryName: entry?.registryName ?? null,
       managedByServer: summary.managedByServer ?? false,
+      defaultLook: summary.defaultLook ?? false,
+      kinds: [
+        ...new Set([
+          ...Object.keys(summary.contributes ?? {}),
+          ...(entry?.contributes ?? []),
+        ]),
+      ],
+      unsupported: false,
+      needsTermix: null,
+      isolation: summary.isolation ?? null,
+      provenance: summary.provenance ?? null,
     });
   }
 
@@ -212,6 +245,15 @@ export function mergePlugins(
       registryId: entry.registryId ?? "official",
       registryName: entry.registryName ?? null,
       managedByServer: false,
+      defaultLook: false,
+      kinds: entry.contributes ?? [],
+      unsupported: entry.latestVersion === null,
+      needsTermix:
+        entry.latestVersion === null
+          ? (entry.versions.find((v) => v.needsTermix)?.needsTermix ?? null)
+          : null,
+      isolation: null,
+      provenance: null,
     });
   }
 
@@ -253,6 +295,12 @@ export function uploadEntry(preview: PluginUploadPreview): PluginEntry {
     registryId: null,
     registryName: null,
     managedByServer: false,
+    defaultLook: false,
+    kinds: [],
+    unsupported: false,
+    needsTermix: null,
+    isolation: null,
+    provenance: null,
   };
 }
 
@@ -302,6 +350,46 @@ export function matchesQuery(row: PluginEntry, query: string): boolean {
 
 export function categoriesOf(rows: PluginEntry[]): string[] {
   return [...new Set(rows.map((row) => row.category).filter(Boolean))].sort();
+}
+
+/** Contribution keys worth filtering by, in the order the filter lists them. */
+export const PLUGIN_KINDS = [
+  "layouts",
+  "themes",
+  "tabs",
+  "panels",
+  "dashboardCards",
+  "protocols",
+  "auth",
+  "actions",
+  "hostCapability",
+] as const;
+
+export type PluginKind = (typeof PLUGIN_KINDS)[number];
+
+/** The filterable kinds present in a set of rows, with how many have each. */
+export function kindsOf(
+  rows: PluginEntry[],
+): Array<{ kind: PluginKind; count: number }> {
+  return PLUGIN_KINDS.map((kind) => ({
+    kind,
+    count: rows.filter((row) => row.kinds.includes(kind)).length,
+  })).filter((entry) => entry.count > 0);
+}
+
+/** One page of rows, with the page clamped to what exists. */
+export function pageOf<T>(
+  rows: T[],
+  page: number,
+  size: number,
+): { items: T[]; page: number; pages: number } {
+  const pages = Math.max(1, Math.ceil(rows.length / size));
+  const current = Math.min(Math.max(1, page), pages);
+  return {
+    items: rows.slice((current - 1) * size, current * size),
+    page: current,
+    pages,
+  };
 }
 
 export function capabilityRisk(capability: string): CapabilityRisk {
@@ -519,4 +607,36 @@ export function youtubeEmbedUrl(videoId: string | undefined): string | null {
   return videoId && YOUTUBE_ID.test(videoId)
     ? `https://www.youtube-nocookie.com/embed/${videoId}?rel=0`
     : null;
+}
+
+/** The video's page on YouTube, or null for anything that is not a video id. */
+export function youtubeWatchUrl(videoId: string | undefined): string | null {
+  return videoId && YOUTUBE_ID.test(videoId)
+    ? `https://www.youtube.com/watch?v=${videoId}`
+    : null;
+}
+
+/**
+ * A layout plugin's screenshot: docs/layout-preview.png on its GitHub repo's
+ * default branch. Null when the repo is not on GitHub.
+ */
+export function layoutPreviewUrl(repository?: string | null): string | null {
+  const repo = normalizeGitHubRepo(repository);
+  if (!repo) return null;
+  const path = repo.replace("https://github.com/", "");
+  return `https://raw.githubusercontent.com/${path}/HEAD/docs/layout-preview.png`;
+}
+
+/** A plugin that brings a layout and is not running here yet. */
+export function isLayoutOffer(plugin: PluginEntry): boolean {
+  return (
+    plugin.kinds.includes("layouts") &&
+    !plugin.managedByServer &&
+    (plugin.installed ? !plugin.enabled : !plugin.unsupported)
+  );
+}
+
+/** True when SourceBadge draws something, so lists can skip the empty slot. */
+export function hasSourceBadge(source: string): boolean {
+  return source === "community" || source === "custom";
 }

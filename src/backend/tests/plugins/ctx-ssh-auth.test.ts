@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   sessionId: undefined as string | undefined,
   revoked: [] as Array<{ userId: string; except?: string }>,
   trustedCleared: [] as string[],
+  unrestricted: [] as string[],
   policyError: null as Error | null,
   logins: [] as Array<{ hostId: number; outcome: unknown }>,
   connectError: null as Error | null,
@@ -75,6 +76,13 @@ vi.mock("../../hosts/ssh-connection-pool.js", () => ({
   },
 }));
 vi.mock("../../hosts/connect/connect-host.js", () => ({
+  SshConnectError: class extends Error {
+    code: string;
+    constructor(outcome: { code: string; message: string }) {
+      super(outcome.message);
+      this.code = outcome.code;
+    }
+  },
   resolveConnectHost: async (target: unknown) =>
     typeof target === "number"
       ? {
@@ -104,8 +112,8 @@ vi.mock("../../hosts/host-resolver.js", () => ({
   }),
   resolveHostBySyncId: async () => null,
 }));
-vi.mock("../../hosts/status/host-status-service.js", () => ({
-  hostStatusService: {
+vi.mock("../../plugins/host-status-provider.js", () => ({
+  hostStatus: {
     reportLogin: (hostId: number, outcome: unknown) =>
       h.logins.push({ hostId, outcome }),
   },
@@ -126,6 +134,9 @@ vi.mock("../../database/repositories/factory.js", () => ({
       h.revoked.push({ userId, except });
       return 0;
     },
+    clearRestrictionForUser: async (userId: string) => {
+      h.unrestricted.push(userId);
+    },
   }),
   createCurrentTrustedDeviceRepository: () => ({
     deleteByUserId: async (userId: string) => {
@@ -145,6 +156,8 @@ const { getLoginMethod, getSecondFactor } =
   await import("../../auth/registry.js");
 const { PluginCapabilityError } =
   await import("@termix-ssh/plugin-sdk/backend");
+const { hasAuthPolicies, clearAuthPolicies } =
+  await import("../../auth/policy.js");
 
 function manifest(capabilities: string[], auth: Record<string, string[]> = {}) {
   return {
@@ -287,6 +300,38 @@ describe("ctx.ssh", () => {
     expect(h.logins.map((login) => login.hostId)).toEqual([5, 5]);
   });
 
+  it("connects a host that came back from a plugin process as plain data", async () => {
+    h.granted = new Set(["ssh:connect", "credentials:use"]);
+    const ssh = createPluginSsh({
+      manifest: manifest(["ssh:connect", "credentials:use"]),
+      bag: new DisposableBag("fixture"),
+      audit: vi.fn(async () => {}),
+    });
+    const host = (await ssh.resolveHost(5))!;
+    // What a sandboxed plugin sends back: a structured clone, no symbols.
+    const copy = structuredClone(host) as typeof host;
+    expect(Object.getOwnPropertySymbols(copy)).toEqual([]);
+    expect(JSON.stringify(copy)).not.toContain("stored-secret");
+
+    await ssh.connect(copy);
+    expect(h.connects[0].target).toMatchObject({ password: "stored-secret" });
+  });
+
+  it("refuses a copied host ref for another acting user", async () => {
+    h.granted = new Set(["ssh:connect", "credentials:use"]);
+    const ssh = createPluginSsh({
+      manifest: manifest(["ssh:connect", "credentials:use"]),
+      bag: new DisposableBag("fixture"),
+      audit: vi.fn(async () => {}),
+    });
+    const host = (await ssh.resolveHost(5))!;
+    const copy = structuredClone(host) as typeof host;
+    h.actor = "someone-else";
+    await ssh.connect(copy);
+    expect(h.connects[0].target).not.toHaveProperty("password");
+    expect(h.connects[0].target).toMatchObject({ userId: "someone-else" });
+  });
+
   it("does not honor another plugin's resolved host", async () => {
     h.granted = new Set(["ssh:connect", "credentials:use"]);
     const deps = {
@@ -366,7 +411,9 @@ describe("ctx.ssh pooled connections", () => {
     await metrics.bag.disposeAll();
 
     expect(h.clearedAll).toBe(0);
-    expect(h.cleared).toEqual(["stats:user-1:10.0.0.7:22:root"]);
+    expect(h.cleared).toEqual([
+      "stats:host-metrics:user-1:user-1:10.0.0.7:22:root",
+    ]);
     await expect(
       other.ssh.withConnection(8, { pool: "fleet" }, async () => "still"),
     ).resolves.toBe("still");
@@ -380,12 +427,44 @@ describe("ctx.ssh pooled connections", () => {
 
     metrics.ssh.dropPooled("stats", 7);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(h.cleared).toEqual(["stats:user-1:10.0.0.7:22:root"]);
+    expect(h.cleared).toEqual([
+      "stats:host-metrics:user-1:user-1:10.0.0.7:22:root",
+    ]);
 
     // Dropped keys are forgotten, so deactivate only clears what is left.
     h.cleared = [];
     await metrics.bag.disposeAll();
-    expect(h.cleared).toEqual(["stats:user-1:10.0.0.8:22:root"]);
+    expect(h.cleared).toEqual([
+      "stats:host-metrics:user-1:user-1:10.0.0.8:22:root",
+    ]);
+  });
+
+  it("keeps pooled connections apart per acting user", async () => {
+    h.granted = new Set(both);
+    const metrics = plugin("host-metrics");
+    await metrics.ssh.withConnection(7, { pool: "stats" }, async () => 1);
+    h.actor = "user-2";
+    await metrics.ssh.withConnection(7, { pool: "stats" }, async () => 1);
+    expect(new Set(h.pooled).size).toBe(2);
+    expect(h.pooled[1]).toContain(":user-2:");
+  });
+
+  it("asks the connect policy before reusing a pooled connection", async () => {
+    h.granted = new Set(both);
+    const { provideConnectPolicy } =
+      await import("../../hosts/connect-policy.js");
+    const remove = provideConnectPolicy("privileged-access", {
+      check: async () => ({ decision: "deny", reason: "Grant expired" }),
+    });
+    try {
+      const metrics = plugin("host-metrics");
+      await expect(
+        metrics.ssh.withConnection(7, { pool: "stats" }, async () => 1),
+      ).rejects.toMatchObject({ code: "access-denied" });
+      expect(h.pooled).toEqual([]);
+    } finally {
+      remove();
+    }
   });
 
   it("dropPooled ignores another pool and an unknown host", async () => {
@@ -655,6 +734,7 @@ describe("ctx.auth", () => {
     h.factors = [];
     h.revoked = [];
     h.trustedCleared = [];
+    h.unrestricted = [];
     h.policyError = null;
     h.actor = "user-1";
     h.sessionId = "session-a";
@@ -666,8 +746,63 @@ describe("ctx.auth", () => {
     await auth.recordEnrollment("user-1", "pin");
     expect(h.revoked).toEqual([{ userId: "user-1", except: "session-a" }]);
     expect(h.trustedCleared).toEqual(["user-1"]);
+    expect(h.unrestricted).toEqual(["user-1"]);
     h.actor = undefined;
     h.sessionId = undefined;
+  });
+
+  it("needs auth:policy for a login policy and drops it on deactivate", async () => {
+    clearAuthPolicies();
+    const plain = createPluginAuth({
+      manifest: manifest(["auth:provide"]),
+      bag: new DisposableBag("fixture"),
+      audit: vi.fn(async () => {}),
+    });
+    expect(() => plain.policy.provide({ evaluate: () => ({}) })).toThrow(
+      PluginCapabilityError,
+    );
+
+    const bag = new DisposableBag("fixture");
+    const audit = vi.fn(async () => {});
+    const auth = createPluginAuth({
+      manifest: manifest(["auth:policy"]),
+      bag,
+      audit,
+    });
+    const remove = auth.policy.provide({ evaluate: () => ({}) });
+    expect(hasAuthPolicies()).toBe(true);
+    expect(audit).toHaveBeenCalledWith(
+      "auth_policy_provide",
+      "fixture sets login rules",
+      { success: true },
+    );
+    remove();
+    expect(hasAuthPolicies()).toBe(false);
+
+    auth.policy.provide({ evaluate: () => ({}) });
+    await bag.disposeAll();
+    expect(hasAuthPolicies()).toBe(false);
+  });
+
+  it("lists second factors from every plugin", async () => {
+    h.granted = new Set(["auth:provide"]);
+    const bag = new DisposableBag("fixture");
+    const auth = createPluginAuth({
+      manifest: manifest(["auth:provide"], { secondFactors: ["pin"] }),
+      bag,
+      audit: vi.fn(async () => {}),
+    });
+    auth.registerSecondFactor({
+      id: "pin",
+      labelKey: "pin",
+      isEnrolled: async () => false,
+      verify: async () => true,
+    });
+    expect(auth.listSecondFactors()).toContainEqual({
+      id: "pin",
+      pluginId: "fixture",
+    });
+    await bag.disposeAll();
   });
 
   it("refuses enrolment when core policy forbids second factors", async () => {

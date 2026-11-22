@@ -5,7 +5,12 @@ import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
 import { BACKEND_EXTERNALS, FRONTEND_EXTERNALS } from "../lib/externals.mjs";
 import { staticUrlImports } from "../lib/static-url-imports.mjs";
-import { readManifest, resolveEntry, copyDir } from "../lib/plugin-dir.mjs";
+import {
+  readManifest,
+  resolveEntry,
+  copyDir,
+  isThemeOnly,
+} from "../lib/plugin-dir.mjs";
 import { openapi } from "./openapi.mjs";
 import { splitByCoreClasses } from "../lib/css-classes.mjs";
 
@@ -20,6 +25,43 @@ const FRONTEND_ENTRIES = [
   "src/frontend/index.mjs",
   "src/frontend/index.js",
 ];
+const MOBILE_ENTRIES = [
+  "src/mobile/index.tsx",
+  "src/mobile/index.ts",
+  "src/mobile/index.mjs",
+  "src/mobile/index.js",
+];
+
+/** Builds a bundle that runs in a browser against core's shared modules. */
+async function buildBrowserBundle(entry, outfile, outDir) {
+  await esbuild.build({
+    entryPoints: [entry],
+    outfile,
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    target: "es2022",
+    jsx: "automatic",
+    sourcemap: true,
+    logLevel: "warning",
+    external: FRONTEND_EXTERNALS,
+    // Vite replaces these in the dev server; a plugin bundle has to have
+    // them too, or code that reads them throws when the plugin loads.
+    define: {
+      "process.env.NODE_ENV": '"production"',
+      "import.meta.env.DEV": "false",
+      "import.meta.env.PROD": "true",
+      "import.meta.env.MODE": '"production"',
+      "import.meta.env.SSR": "false",
+      "import.meta.env":
+        '{"DEV":false,"PROD":true,"MODE":"production","SSR":false,"BASE_URL":"/"}',
+    },
+    plugins: [
+      externalRequireInterop(FRONTEND_EXTERNALS),
+      staticUrlImports({ outDir }),
+    ],
+  });
+}
 
 /**
  * A bundled CommonJS package that calls require("react/jsx-runtime") (or any
@@ -187,15 +229,12 @@ export async function buildTailwind(cwd, outDir) {
   // build() adds to what a compiler already emitted, so each half gets its own.
   const compiler = () =>
     compile(input, { base: path.dirname(THEME_CSS), onDependency: () => {} });
-  const scanner = new Scanner({
-    sources: [
-      {
-        base: path.join(cwd, "src", "frontend"),
-        pattern: "**/*",
-        negated: false,
-      },
-    ],
-  });
+  // The mobile bundle uses the same stylesheet.
+  const sources = ["frontend", "mobile"]
+    .map((dir) => path.join(cwd, "src", dir))
+    .filter((dir, index) => index === 0 || fs.existsSync(dir))
+    .map((base) => ({ base, pattern: "**/*", negated: false }));
+  const scanner = new Scanner({ sources });
   // Flattened and minified the way core's own CSS is, so it does not rely
   // on native CSS nesting.
   const emit = async (candidates, options) =>
@@ -231,33 +270,53 @@ export async function build({ cwd }) {
   fs.rmSync(outDir, { recursive: true, force: true });
   fs.mkdirSync(outDir, { recursive: true });
 
+  try {
+    await buildInto(cwd, manifest, pluginId, outDir);
+  } catch (error) {
+    // A half build looks newer than the sources, so dev would keep staging it.
+    fs.rmSync(outDir, { recursive: true, force: true });
+    throw error;
+  }
+  console.log(`built ${pluginId}`);
+}
+
+async function buildInto(cwd, manifest, pluginId, outDir) {
   const backendEntry = resolveEntry(cwd, BACKEND_ENTRIES);
-  if (!backendEntry) {
+  if (!backendEntry && !isThemeOnly(manifest)) {
     throw new Error(
       `${pluginId}: no backend entry (looked for ${BACKEND_ENTRIES.join(", ")})`,
     );
   }
 
-  await esbuild.build({
-    entryPoints: [backendEntry],
-    outfile: path.join(outDir, "backend.js"),
-    bundle: true,
-    format: "esm",
-    platform: "node",
-    target: "node22",
-    sourcemap: true,
-    logLevel: "warning",
-    // A native dependency's compiled .node binary is resolved by the
-    // package's own relative paths, which break once esbuild inlines its JS
-    // elsewhere. Declaring it in nativeDependencies keeps it a real
-    // node_modules import instead, resolved at runtime like a host-provided
-    // package.
-    external: [...BACKEND_EXTERNALS, ...(manifest.nativeDependencies ?? [])],
-    loader: BINARY_LOADERS,
-    // Bundled CJS deps still call require() for Node builtins at runtime.
-    // ESM has no ambient require, so give esbuild's require shim a real one.
-    banner: { js: REQUIRE_BANNER },
-  });
+  if (backendEntry) {
+    await esbuild.build({
+      entryPoints: [backendEntry],
+      outfile: path.join(outDir, "backend.js"),
+      bundle: true,
+      format: "esm",
+      platform: "node",
+      target: "node22",
+      sourcemap: true,
+      logLevel: "warning",
+      // A native dependency's compiled .node binary is resolved by the
+      // package's own relative paths, which break once esbuild inlines its JS
+      // elsewhere. Declaring it in nativeDependencies keeps it a real
+      // node_modules import instead, resolved at runtime like a host-provided
+      // package.
+      external: [...BACKEND_EXTERNALS, ...(manifest.nativeDependencies ?? [])],
+      loader: BINARY_LOADERS,
+      // Bundled CJS deps still call require() for Node builtins at runtime.
+      // ESM has no ambient require, so give esbuild's require shim a real one.
+      banner: { js: REQUIRE_BANNER },
+    });
+  } else {
+    // Core loads every plugin through a backend entry, so a theme only
+    // plugin gets an empty one.
+    fs.writeFileSync(
+      path.join(outDir, "backend.js"),
+      "export function activate() {}\n",
+    );
+  }
 
   for (const worker of readWorkerEntries(cwd, pluginId)) {
     await esbuild.build({
@@ -283,33 +342,18 @@ export async function build({ cwd }) {
 
   const frontendEntry = resolveEntry(cwd, FRONTEND_ENTRIES);
   if (frontendEntry) {
-    await esbuild.build({
-      entryPoints: [frontendEntry],
-      outfile: path.join(outDir, "frontend.js"),
-      bundle: true,
-      format: "esm",
-      platform: "browser",
-      target: "es2022",
-      jsx: "automatic",
-      sourcemap: true,
-      logLevel: "warning",
-      external: FRONTEND_EXTERNALS,
-      // Vite replaces these in the dev server; a plugin bundle has to have
-      // them too, or code that reads them throws when the plugin loads.
-      define: {
-        "process.env.NODE_ENV": '"production"',
-        "import.meta.env.DEV": "false",
-        "import.meta.env.PROD": "true",
-        "import.meta.env.MODE": '"production"',
-        "import.meta.env.SSR": "false",
-        "import.meta.env":
-          '{"DEV":false,"PROD":true,"MODE":"production","SSR":false,"BASE_URL":"/"}',
-      },
-      plugins: [
-        externalRequireInterop(FRONTEND_EXTERNALS),
-        staticUrlImports({ outDir }),
-      ],
-    });
+    await buildBrowserBundle(
+      frontendEntry,
+      path.join(outDir, "frontend.js"),
+      outDir,
+    );
+  }
+
+  // A bundle the mobile app loads in its WebView, next to the frontend one.
+  const mobileEntry = resolveEntry(cwd, MOBILE_ENTRIES);
+  const mobileOut = manifest.contributes?.mobile?.entry;
+  if (mobileEntry && typeof mobileOut === "string") {
+    await buildBrowserBundle(mobileEntry, path.join(cwd, mobileOut), outDir);
   }
 
   if (frontendEntry) await buildTailwind(cwd, outDir);
@@ -317,6 +361,4 @@ export async function build({ cwd }) {
   copyDir(path.join(cwd, "locales"), path.join(outDir, "locales"));
   copyDir(path.join(cwd, "migrations"), path.join(outDir, "migrations"));
   await openapi({ cwd, quiet: true });
-
-  console.log(`built ${pluginId}`);
 }

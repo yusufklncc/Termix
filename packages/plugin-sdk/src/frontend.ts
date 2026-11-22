@@ -51,6 +51,10 @@ export interface PluginHostRecord {
   authType?: string;
   credentialId?: string | number | null;
   overrideCredentialUsername?: boolean;
+  /** Whether the host has a saved SSH password. The value never reaches plugins. */
+  hasPassword?: boolean;
+  /** Whether the host has a saved sudo password. The value never reaches plugins. */
+  hasSudoPassword?: boolean;
   /** "ssh", or the id of the plugin protocol a host without SSH uses. */
   connectionType?: string;
   /** Desktop app: where connections to this host start from. */
@@ -109,6 +113,17 @@ export interface QuickConnectLogin {
   password?: string;
   /** "domain" when the protocol's Quick Connect entry shows that field. */
   fields?: Record<string, string>;
+  /**
+   * A saved credential the protocol plugin resolves on the server with
+   * ctx.credentials.resolveLogin, instead of username and password. Its
+   * secret never reaches the browser. Termix 26.11.3.
+   */
+  credentialId?: number;
+  /**
+   * Start the session without the user's input, for a protocol plugin that
+   * supports it (Remote Desktop 1.4.3). Only ever turns input off.
+   */
+  viewOnly?: boolean;
 }
 
 /** "direct" (a username and password), "credential" (a saved one) or "none". */
@@ -206,6 +221,8 @@ export interface ShellApi {
    * user reviews and saves it. Absent in some shells.
    */
   openHostEditor?: (draft?: HostDraft) => void;
+  /** Opens the editor of a saved host. Termix 26.10.6+, absent in some shells. */
+  editHost?: (hostId: number) => void;
   /** Opens a rail view in the left sidebar. */
   openRailView: (id: string) => void;
   /** Closes a rail view wherever it is shown. */
@@ -216,6 +233,11 @@ export interface ShellApi {
    * useConfirm from @termix-ssh/plugin-sdk/ui, which asks over that surface.
    */
   confirm?: (options: ConfirmRequest) => Promise<boolean>;
+}
+
+export interface DeepLinkEvent {
+  url: string;
+  source: "os-scheme" | "command-line";
 }
 
 export interface ConfirmRequest {
@@ -246,6 +268,129 @@ export interface TabsApi extends Pick<
   onChange: (listener: () => void) => Disposer;
   /** Called once the shell has restored its tabs after login. */
   onReady: (listener: () => void) => Disposer;
+}
+
+// ---------------------------------------------------------------------------
+// Layouts (plugin API 1.4)
+// ---------------------------------------------------------------------------
+
+/**
+ * A whole-app layout. Core renders the chosen one inside its providers and an
+ * error boundary; everything it shows comes from useShell(). Declare it in
+ * manifest contributes.layouts and add the ui:layout capability.
+ */
+export interface LayoutContribution {
+  id: string;
+  /** Your own i18n key or plain text, the same as the manifest's label. */
+  label: string;
+  component: ComponentType;
+  /** Shown on phones and narrow windows. The desktop app never uses it. */
+  mobileComponent?: ComponentType;
+  /** Theme to start with when nobody chose one. */
+  defaultTheme?: string;
+}
+
+/** A tab as a layout sees it. Splits are tabs too, with a `split` field. */
+export interface ShellTabState extends PluginTabRecord {
+  instanceId: string;
+  customLabel?: string;
+  /** Set while the tab sits in a split pane. */
+  parentSplitTabId?: string;
+  openedAt?: number;
+}
+
+/** What a dock region shows and how it is sized, in Normal-size pixels. */
+export interface ShellDockState {
+  view: string | null;
+  open: boolean;
+  width: number;
+  dragging: boolean;
+  setView: (view: string | null) => void;
+  setWidth: (width: number) => void;
+  /** Starts a drag from the dock's edge, from a mousedown. */
+  startResize: (event: { clientX: number; preventDefault: () => void }) => void;
+  resetWidth: () => void;
+}
+
+/** The live shell: state and actions, nothing drawn. Read with useShell(). */
+export interface ShellController {
+  tabs: {
+    list: ShellTabState[];
+    /** What a tab bar shows: tabs not sitting in a split. */
+    topLevel: ShellTabState[];
+    activeId: string;
+    /** True once saved tabs were restored after login. */
+    ready: boolean;
+    /** The user turned on tab numbers. */
+    showNumbers: boolean;
+    setActive: (id: string) => void;
+    reorder: (topLevel: ShellTabState[]) => void;
+    close: (id: string) => Promise<void>;
+    rename: (id: string, label: string) => void;
+    /** Reconnects or reloads a session tab. */
+    refresh: (id: string) => void;
+    reconnectAll: () => void;
+    openSingleton: (type: string) => string | undefined;
+  };
+  split: {
+    /** The split shown now, or null. */
+    activeId: string | null;
+    focusedPaneId: string | null;
+    /** Every split with its panes, for a split menu. */
+    summaries: Array<{
+      id: string;
+      label: string;
+      full: boolean;
+      panes: Array<{
+        id: string;
+        index: number;
+        tabId: string | null;
+        label: string | null;
+      }>;
+    }>;
+    activeFull: boolean;
+    /** Split a tab, apply a preset, unsplit, add to a pane. */
+    handleAction: (action: Record<string, unknown> & { kind: string }) => void;
+  };
+  hosts: {
+    list: PluginHostRecord[];
+    loading: boolean;
+    loaded: boolean;
+    reload: () => Promise<void>;
+  };
+  regions: {
+    left: ShellDockState & { view: string };
+    right: ShellDockState;
+    /** What a rail click does: toggles or switches the left dock. */
+    railClick: (view: string) => void;
+    openInRightDock: (view: string) => void;
+    toggleRightDock: () => void;
+  };
+  palette: { isOpen: boolean; open: () => void; close: () => void };
+  fullscreen: { active: boolean; toggle: () => void };
+  /** The same callbacks tabs and panels get. */
+  actions: ShellApi;
+  env: {
+    isMobile: boolean;
+    isElectron: boolean;
+    user: { username: string; isAdmin: boolean };
+    permissions: string[];
+    branding: {
+      appName: string | null;
+      tagline: string | null;
+      logo: string | null;
+    };
+  };
+  /** Core registries, as hooks a layout calls while rendering. */
+  registries: {
+    useRailItems: () => ReadonlyArray<{ id: string } & Record<string, unknown>>;
+    usePanels: () => ReadonlyArray<{ id: string } & Record<string, unknown>>;
+    useTabTypes: () => ReadonlyArray<{ id: string } & Record<string, unknown>>;
+    useDashboardCards: () => ReadonlyArray<
+      { id: string } & Record<string, unknown>
+    >;
+  };
+  logout: (options?: { manual?: boolean }) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -302,6 +447,11 @@ export interface RailItemContribution {
    * Zero or nothing shows no badge.
    */
   useBadge?: () => number | null | undefined;
+  /**
+   * A hook for a small status dot on the icon: "ok" (green), "warning" or
+   * "error". Nothing shows no dot. Layouts from Termix 26.10.6 draw it.
+   */
+  useStatus?: () => "ok" | "warning" | "error" | null | undefined;
 }
 
 export interface PanelProps {
@@ -438,6 +588,12 @@ export interface HostEditorSectionProps {
    * shown in that mode.
    */
   mode?: "host" | "defaults";
+  /**
+   * False in the simple host editor. Show only the settings most hosts
+   * change then, and the rest once it is true. Undefined on cores before
+   * 26.11.2, which have no simple editor: treat that as true.
+   */
+  advanced?: boolean;
 }
 
 export interface HostEditorSectionContribution {
@@ -460,6 +616,12 @@ export interface HostEditorSectionContribution {
    * defaults editor and never for a host.
    */
   defaults?: boolean | "only";
+  /**
+   * Also shown in the simple host editor, for settings most hosts change.
+   * Off by default, so the section waits for Advanced. The component gets
+   * `advanced: false` there and can hold back its rarer fields.
+   */
+  simple?: boolean;
   component: ComponentType<HostEditorSectionProps>;
 }
 
@@ -532,10 +694,182 @@ export interface HostProtocolContribution {
   loginFrom?: string;
 }
 
-export interface HostBadgeContribution {
+export interface HostRowContribution {
   id: string;
   when: (host: PluginHostRecord) => boolean;
   component: ComponentType<{ host: PluginHostRecord }>;
+  /** Lower comes first. Ties sort by id. */
+  order?: number;
+}
+
+/** A problem shown as the host row's status dot. */
+export interface HostDot {
+  tone: "bad" | "warn";
+  label: string;
+}
+
+/** How a data value is colored. "default" uses the accent. */
+export type DataTone = "default" | "good" | "warn" | "bad" | "muted";
+
+/** The kinds of data value the shell can draw. */
+export type DataShape = "bars" | "stat" | "badge" | "dot" | "text";
+
+/**
+ * How a badge is drawn: "outline" (the default), "filled" in its color, or
+ * "icon" with only the icon and the label as its tooltip. Termix 26.11.3.
+ */
+export type DataBadgeVariant = "outline" | "filled" | "icon";
+
+export interface DataBar {
+  label: string;
+  /** 0 to 1, or null when not known. Bars warn from 0.7 and turn bad from 0.9 unless a tone is given. */
+  value: number | null;
+  tone?: DataTone;
+  /** Short text after the percent, like "2/8 GiB". */
+  detail?: string;
+}
+
+export interface DataStat {
+  label: string;
+  value: string | number | null;
+  unit?: string;
+  tone?: DataTone;
+  tooltip?: string;
+}
+
+/**
+ * A small value the shell draws for a plugin: usage bars, numbers, a badge,
+ * a dot or a line of text. Plain JSON only. `actionId` must be one of the
+ * plugin's own actions; it runs with the row's context on click. Plugin API
+ * 2.6.
+ */
+export type DataValue =
+  | { shape: "bars"; items: DataBar[] }
+  | { shape: "stat"; items: DataStat[] }
+  | {
+      shape: "badge";
+      label: string;
+      tone?: DataTone;
+      tooltip?: string;
+      actionId?: string;
+      /** A Lucide icon name, like "KeyRound". Termix 26.11.3. */
+      icon?: string;
+      /**
+       * A color as #rgb or #rrggbb, used instead of the tone. The shell mixes
+       * it with the theme so it stays readable. Termix 26.11.3.
+       */
+      color?: string;
+      variant?: DataBadgeVariant;
+    }
+  | { shape: "dot"; tone: DataTone; label: string }
+  | {
+      shape: "text";
+      text: string;
+      tone?: DataTone;
+      tooltip?: string;
+      actionId?: string;
+      /** A Lucide icon name before the text. Termix 26.11.3. */
+      icon?: string;
+      /** A color as #rgb or #rrggbb, used instead of the tone. Termix 26.11.3. */
+      color?: string;
+    };
+
+/** What a data hook returns: one value, several drawn in order, or null for nothing. */
+export type DataResult = DataValue | DataValue[] | null | undefined;
+
+export interface HostBadgeContribution {
+  id: string;
+  when: (host: PluginHostRecord) => boolean;
+  /**
+   * Drawn as is on the row. In-page plugins only; prefer `useValue`, which
+   * also works from a frame.
+   */
+  component?: ComponentType<{ host: PluginHostRecord }>;
+  /**
+   * A hook returning a badge, dot or text value for the host, or null. The
+   * shell draws it, so it costs no frame. Plugin API 2.6.
+   */
+  useValue?: (host: PluginHostRecord) => DataResult;
+  /**
+   * A hook that returns a problem or null. Every plugin's dots merge into one
+   * dot on the row, with the worst tone and each label in its tooltip, so two
+   * plugins reporting the same host never draw two dots. Core 26.11.1+.
+   */
+  useDot?: (host: PluginHostRecord) => HostDot | null;
+  /** Lower comes first. Ties sort by id. */
+  order?: number;
+}
+
+/**
+ * Something drawn for one host from plain values. `useValue` returns the
+ * value (Plugin API 2.6); `component` is for in-page plugins only and is
+ * refused in a frame.
+ */
+export interface HostDataContribution {
+  id: string;
+  when: (host: PluginHostRecord) => boolean;
+  useValue?: (host: PluginHostRecord) => DataResult;
+  component?: ComponentType<{ host: PluginHostRecord }>;
+  /** Lower comes first. Ties sort by id. */
+  order?: number;
+}
+
+/** The dot that shows a host's status on its row: a dot, badge or text value. */
+export type HostStatusIndicatorContribution = HostDataContribution;
+
+/** A control in the host editor's toolbar: a badge or text value, clickable with `actionId`. */
+export type HostEditorToolbarItemContribution = HostDataContribution;
+
+/** Something inside a host, like a container or a guest, listed under it in a host tree. */
+export interface HostTreeChild {
+  /** Unique within this plugin's list for the host. */
+  id: string;
+  label: string;
+  /** A short second line, like an image or an IP. */
+  detail?: string;
+  kind?: "container" | "vm" | "lxc" | "pod" | "other";
+  state?: "running" | "stopped" | "paused" | "unknown";
+  /** The tab a click opens on the parent host. */
+  tabType: string;
+  /** Passed as the tab's data, so the tab can show this item. Plain JSON only. */
+  data?: Record<string, unknown>;
+}
+
+export interface HostTreeChildrenResult {
+  items: HostTreeChild[];
+  loading?: boolean;
+  error?: string;
+}
+
+/**
+ * Lists what lives inside a host for layouts that draw a host tree. The hook
+ * only runs while a layout shows the host expanded, so it may load data.
+ * Works from a frame. Plugin API 2.9, core 26.11.3.
+ */
+export interface HostTreeChildrenContribution {
+  id: string;
+  /** A heading for the group when the tree shows one. */
+  titleKey?: string;
+  when: (host: PluginHostRecord) => boolean;
+  useChildren: (host: PluginHostRecord) => HostTreeChildrenResult | null;
+  /** Lower comes first. Ties sort by id. */
+  order?: number;
+}
+
+export interface HostSectionProps {
+  host: PluginHostRecord;
+  isVisible: boolean;
+  shell: ShellApi;
+}
+
+export interface HostSectionContribution {
+  /** Declare it in manifest contributes.hostSections too. */
+  id: string;
+  titleKey: string;
+  /** Lower sorts first. */
+  order?: number;
+  when?: (host: PluginHostRecord) => boolean;
+  component: ComponentType<HostSectionProps>;
 }
 
 export interface HostContextMenuItemContribution {
@@ -651,6 +985,26 @@ export interface KeybindingDefaultContribution {
 export interface DashboardCardProps {
   isVisible: boolean;
   shell: ShellApi;
+  /** This tile's settings, for cards with `entries`. Empty otherwise. Core 26.11.1+. */
+  config?: Record<string, unknown>;
+  /** Saves this tile's settings. Keep it small, it is stored in one line. */
+  setConfig?: (config: Record<string, unknown>) => void;
+  /** True while the user is arranging the dashboard. */
+  editMode?: boolean;
+}
+
+/** One tile a card with `entries` offers in the dashboard's add list. */
+export interface DashboardCardEntry {
+  /** Stable within the card, used to mark entries already placed. */
+  key: string;
+  title: string;
+  description?: string;
+  /** Group heading in the add list. Defaults to the card title. */
+  group?: string;
+  kind?: "card" | "chart" | "signal" | "action" | "resource" | "session";
+  /** Passed back as `config`. */
+  config: Record<string, unknown>;
+  defaultSize?: { w: number; h?: number | null };
 }
 
 export interface DashboardCardContribution {
@@ -665,6 +1019,13 @@ export interface DashboardCardContribution {
    * edge, for a strip of numbers. Defaults to "framed".
    */
   frame?: "framed" | "bare";
+  /** Size on the 12 column dashboard grid when added. Core 26.11.1+. */
+  defaultSize?: { w: number; h?: number | null };
+  /**
+   * Lets the card be placed many times, once per entry, each with its own
+   * `config`. Titles come back already translated. Core 26.11.1+.
+   */
+  entries?: (language: string) => Promise<DashboardCardEntry[]>;
   component: ComponentType<DashboardCardProps>;
 }
 
@@ -689,12 +1050,88 @@ export interface SettingsComponentProps {
   running: boolean;
 }
 
+/** What a companion starts with. Read from the plugin's own settings. */
+export interface CompanionDefaults {
+  /** Open by itself the first time a matching tab shows. */
+  open?: boolean;
+  side?: "left" | "right" | "bottom";
+  /** Pixels of width, or height at the bottom. */
+  size?: number;
+  /** Show the edge button that opens and closes it. Default true. */
+  edgeButton?: boolean;
+}
+
+/** A panel a tab type can show beside it, for a picker. */
+export interface CompanionInfo {
+  /** The id registerCompanionLayout's hidden and order lists use. */
+  id: string;
+  titleKey: string;
+  icon?: IconComponent;
+}
+
+/** How a host wants the panel bar beside a tab. */
+export interface CompanionLayout {
+  /** False removes the bar and its panels. */
+  enabled?: boolean;
+  /** Where a panel opens until the user moves it. */
+  side?: "left" | "right" | "bottom";
+  /** Companion ids in bar order. */
+  order?: string[];
+  /** Companion ids left out. */
+  hidden?: string[];
+}
+
+export interface CompanionProps {
+  /** The tab it sits beside. */
+  tab: PluginTabRecord;
+  host?: PluginHostRecord;
+  /** The host in the shape the connection APIs take. */
+  sshHost?: Record<string, unknown>;
+  /** The tab's surface handle (see TabHandle), read at call time. */
+  getHandle: () => TabHandle | null;
+  side: "left" | "right" | "bottom";
+  /** False while the tab is in the background or the panel is closed. */
+  isVisible: boolean;
+  close: () => void;
+  setSide: (side: "left" | "right" | "bottom") => void;
+}
+
+export interface CompanionOptions {
+  icon?: IconComponent;
+  titleKey?: string;
+  order?: number;
+  /** Tab types it applies to. Any tab with a host when empty. */
+  tabTypes?: string[];
+  when?: (tab: PluginTabRecord, host?: PluginHostRecord) => boolean;
+  /**
+   * A hook returning the starting state. It runs in the plugin's scope, so it
+   * can read the plugin's settings.
+   */
+  useDefaults?: () => CompanionDefaults;
+}
+
 export type ActionHandler = (...args: never[]) => unknown;
 
 export interface ActionSlotDefinition {
   id: string;
-  /** Contribution kinds the slot renders: "button", "component". */
+  /** Contribution kinds the slot renders: "button", "component", "data". */
   accepts: string[];
+  /** For "data": the shapes the owner draws. Others are dropped. */
+  shapes?: DataShape[];
+  /**
+   * For "data": what a row stands for, so contributors know their row key.
+   * Draw the slot with DataSlot from @termix-ssh/plugin-sdk/ui.
+   */
+  rows?: "host" | "tab" | "credential";
+  /**
+   * How a component from a framed plugin sizes itself in this slot: "inline"
+   * as wide and tall as its content (row items, badges), "bar" as wide as its content and as
+   * tall as the bar it sits in (tab bar buttons), "content" full
+   * width, "fill" the whole box, "overlay" the whole box, see-through and
+   * only clickable while the part draws something (prompts over a terminal).
+   * Left out, the shell guesses from the id.
+   */
+  fit?: "inline" | "bar" | "content" | "fill" | "overlay";
 }
 
 export interface SlotContribution {
@@ -707,9 +1144,17 @@ export interface SlotContribution {
    */
   descriptionKey?: string;
   icon?: IconComponent;
-  kind?: "button" | "component" | string;
+  kind?: "button" | "component" | "data" | string;
   /** For kind "component". Receives the slot owner's props. */
   component?: ComponentType<Record<string, unknown>>;
+  /**
+   * For kind "data": a hook run once per row on screen with the owner's
+   * context and the row key (host id or tab id). Return plain values and the
+   * shell draws them; in a framed plugin it runs in the background frame, so
+   * a row costs no iframe. Context values are plain JSON; a `host` in it is
+   * the plugin's own host record, looked up by id. Plugin API 2.6.
+   */
+  useValue?: (context: Record<string, unknown>, rowKey: string) => DataResult;
   /** Extra condition on top of the action's permission. */
   when?: (context: Record<string, unknown>) => boolean;
   order?: number;
@@ -721,10 +1166,11 @@ export type OnboardingMode = "full" | "partial" | "rerun";
  * Where a plugin step sits in onboarding. "setup" comes right after the
  * appearance steps, for things that need doing before the feature works
  * (like pointing at a guacd server). "explore" (the default) comes after
- * that, "security" after the account security step. Onboarding is for
+ * that, "security" after the account security step. "start" comes before
+ * the appearance steps, for choices that shape how the rest looks. Onboarding is for
  * choices, not for explaining features.
  */
-export type OnboardingSection = "setup" | "explore" | "security";
+export type OnboardingSection = "start" | "setup" | "explore" | "security";
 
 export interface OnboardingStepProps {
   /**
@@ -767,6 +1213,16 @@ export interface OnboardingStepContribution {
   permission?: string;
   section?: OnboardingSection;
   order?: number;
+  /**
+   * Exact place in the flow, 1 to 99, instead of a section. Core steps sit at
+   * 10 (plugins), 20, 25, 30 (preset), 40 (appearance) and 90 (security).
+   */
+  position?: number;
+  /**
+   * Older step keys this step took over, like "preset". People who already
+   * saw one of them are not shown this step again.
+   */
+  replaces?: string[];
   when?: (context: {
     isAdmin: boolean;
     isDesktop: boolean;
@@ -797,6 +1253,11 @@ export interface LoginMethodUIProps {
   /** What the user typed in the username field, when there is one. */
   username?: string;
   /**
+   * Which page of the login screen this is drawn on, for a button that only
+   * belongs on one. Termix 26.11.1+.
+   */
+  view?: "password" | "external";
+  /**
    * Form methods: posts the body to the method's verify endpoint, then the
    * login screen finishes the login or shows the second-factor step.
    */
@@ -816,7 +1277,12 @@ export interface LoginMethodContribution {
   id: string;
   titleKey: string;
   icon?: IconComponent;
-  component: ComponentType<LoginMethodUIProps>;
+  /**
+   * Only for a plugin whose UI runs in the page. Since Termix 26.11.2 the
+   * login screen draws a method from what its backend describes (fields,
+   * kind "webauthn"), so a plugin in a frame passes only `enrollment`.
+   */
+  component?: ComponentType<LoginMethodUIProps>;
   /**
    * "inline" also draws the method under the password form, for a local
    * method people use instead of a password (a passkey). Otherwise it only
@@ -849,10 +1315,40 @@ export interface SecondFactorContribution {
   /** Matches the id the backend registered with ctx.auth.registerSecondFactor. */
   id: string;
   titleKey: string;
-  /** The challenge shown after the first login step. */
-  component: ComponentType<SecondFactorUIProps>;
+  /**
+   * The challenge shown after the first login step, only for a plugin whose
+   * UI runs in the page. Otherwise the backend factor's `prompt` says what
+   * the shell draws, and a plugin in a frame passes only `enrollment`.
+   */
+  component?: ComponentType<SecondFactorUIProps>;
   /** Enrolment, shown in Settings > Security. */
   enrollment?: ComponentType<Record<string, unknown>>;
+}
+
+/** How to open the serial port the person picks. */
+export interface SerialRequestOptions {
+  baudRate: number;
+  dataBits?: 7 | 8;
+  stopBits?: 1 | 2;
+  parity?: "none" | "even" | "odd";
+  /** Limits the picker to these USB devices. */
+  filters?: Array<{ usbVendorId?: number; usbProductId?: number }>;
+}
+
+/** An open serial port. Bytes only; nothing else about the port is shared. */
+export interface SerialPortHandle {
+  write: (data: Uint8Array) => Promise<void>;
+  close: () => Promise<void>;
+}
+
+export interface SerialApi {
+  /** False when the browser has no Web Serial (Firefox, Safari, mobile). */
+  readonly available: boolean;
+  /** Null when the person closed the picker without picking a port. */
+  request: (
+    options: SerialRequestOptions,
+    events: { onData: (chunk: Uint8Array) => void; onClose: () => void },
+  ) => Promise<SerialPortHandle | null>;
 }
 
 /** The subset of axios a plugin uses, rooted at /plugin-api/<id>/. */
@@ -914,7 +1410,23 @@ export interface TermixAppInfo {
  * disposer, and anything not disposed by hand is disposed when the plugin is
  * disabled.
  */
+/**
+ * Where this copy of a plugin API 2 frontend runs. Every frame of the plugin
+ * runs activate: one hidden background frame that keeps actions, palette
+ * groups, keybindings, badges and overlays, and one frame per view shown.
+ * Skip background work (polling, timers) when role is "view".
+ */
+export interface FrameInfo {
+  role: "background" | "view";
+  available: true;
+}
+
 export interface TermixApp extends TermixAppInfo {
+  /**
+   * Set when the frontend runs in a sandboxed frame (plugin API 2, Termix
+   * 26.11.2 and newer). Undefined when it runs in the page.
+   */
+  readonly frame?: FrameInfo;
   /**
    * True on anonymous guest pages (a shared-session link). Only plugins with
    * contributes.guest run there, and they should register just what a guest
@@ -932,14 +1444,55 @@ export interface TermixApp extends TermixAppInfo {
     component: ComponentType<TabProps>,
     options?: TabOptions,
   ) => Disposer;
+  /**
+   * A panel that sits beside any host tab the options match (a terminal, a
+   * desktop, ...), bound to that tab's host. The user opens, resizes and moves
+   * it; the tab keeps running underneath.
+   */
+  registerCompanion: (
+    id: string,
+    component: ComponentType<CompanionProps>,
+    options?: CompanionOptions,
+  ) => Disposer;
+  /**
+   * Lets a plugin decide, per host, how the panel bar looks on one tab type.
+   * Read from the host payload, so it must not call hooks.
+   */
+  registerCompanionLayout: (
+    tabType: string,
+    resolve: (host: PluginHostRecord | undefined) => CompanionLayout,
+  ) => Disposer;
+  /** Opens a companion on a tab, or closes it when it is showing. */
+  toggleCompanion: (tab: PluginTabRecord, id?: string) => void;
   registerHostEditorSection: (
     section: HostEditorSectionContribution,
   ) => Disposer;
   registerHostAction: (action: HostActionContribution) => Disposer;
   registerHostProtocol: (protocol: HostProtocolContribution) => Disposer;
   registerHostBadge: (badge: HostBadgeContribution) => Disposer;
+  /** Draws a host row's status. A layout renders every registered one. */
+  registerHostStatusIndicator: (
+    indicator: HostStatusIndicatorContribution,
+  ) => Disposer;
+  /** Adds a control to the host editor's toolbar. */
+  registerHostEditorToolbarItem: (
+    item: HostEditorToolbarItemContribution,
+  ) => Disposer;
   registerHostContextMenuItem: (
     item: HostContextMenuItemContribution,
+  ) => Disposer;
+  /**
+   * A card on the host page. Core 26.11.1 and newer; call it as
+   * app.registerHostSection?.(...) if your plugin allows older cores.
+   */
+  registerHostSection: (section: HostSectionContribution) => Disposer;
+  /**
+   * Lists containers, guests and the like under a host in host tree layouts.
+   * Core 26.11.3 and newer; call it as app.registerHostTreeChildren?.(...) if
+   * your plugin allows older cores.
+   */
+  registerHostTreeChildren: (
+    provider: HostTreeChildrenContribution,
   ) => Disposer;
   registerPaletteEntry: (entry: PaletteEntryContribution) => Disposer;
   registerPaletteGroup: (group: PaletteGroupContribution) => Disposer;
@@ -966,7 +1519,15 @@ export interface TermixApp extends TermixAppInfo {
   registerAction: (
     id: string,
     handler: ActionHandler,
-    options?: { permission?: string },
+    options?: {
+      permission?: string;
+      /**
+       * Only this plugin's own frames may run it, even when another plugin
+       * lists it in manifest uses. For actions the plugin's frames use to
+       * reach each other.
+       */
+      private?: boolean;
+    },
   ) => Disposer;
   declareActionSlot: (slot: ActionSlotDefinition) => Disposer;
   registerSlotContribution: (
@@ -994,6 +1555,12 @@ export interface TermixApp extends TermixAppInfo {
   registerSshAuthEditor: (editor: SshAuthEditorContribution) => Disposer;
   registerLoginMethod: (method: LoginMethodContribution) => Disposer;
   registerSecondFactorUI: (factor: SecondFactorContribution) => Disposer;
+  /**
+   * A whole-app layout. Declared in manifest contributes.layouts with the
+   * ui:layout capability. Only the chosen layout's plugin is loaded, so
+   * register it in activate. Needs plugin API 1.4.
+   */
+  registerLayout: (layout: LayoutContribution) => Disposer;
 
   /**
    * Translates a key from the plugin's own locales, for code outside a
@@ -1031,6 +1598,64 @@ export interface TermixApp extends TermixAppInfo {
    * over that surface instead.
    */
   confirm: (options: ConfirmRequest) => Promise<boolean>;
+  /**
+   * Asks the person to prove a second factor in a prompt the shell owns, so
+   * the plugin never sees the code. True once proved, false when they cancel.
+   * In a frame it only works right after the person did something in it.
+   * Termix 26.11.2 and plugin API 2.6; check it exists on older cores.
+   */
+  stepUp?: () => Promise<boolean>;
+  /**
+   * termix:// links the desktop app was opened with, like
+   * termix://connect?host=web-1 from an asset manager. The listener first
+   * gets the links that came before it listened. Termix never acts on a link
+   * for you except termix://host/<id>, so ask before doing anything a web
+   * page could have sent. "command-line" means a --host shortcut on this
+   * computer. Desktop app only; Termix 26.11.3.
+   */
+  deepLinks?: {
+    onOpen: (listener: (link: DeepLinkEvent) => void) => () => void;
+  };
+  /**
+   * Opens the diagnostics report page, where the person can download a
+   * report to attach to a bug report. Defaults to this plugin, so its log
+   * lines and report section come first and the issue goes to its repo;
+   * `pluginId: null` makes a report about Termix as a whole. In a frame it
+   * only works right after the person clicked. Termix 26.11.3; check it
+   * exists on older cores.
+   */
+  openDiagnostics?: (options?: { pluginId?: string | null }) => void;
+  /**
+   * Web Serial through the shell, for a plugin with device:serial. The
+   * browser shows its own port picker and the plugin gets only the port the
+   * person picked. Call `request` from a click. Termix 26.11.2 and plugin
+   * API 2.8; check it exists on older cores.
+   */
+  serial?: SerialApi;
+  /**
+   * WebAuthn steps for a plugin with auth:provide, such as adding a passkey.
+   * The shell runs the browser prompt with options from the step this
+   * plugin's backend registered (ctx.auth.registerWebAuthnCeremony) and
+   * resolves what that step's `finish` returned. Call it from a click.
+   * Termix 26.11.2 and plugin API 2.8.
+   */
+  auth?: {
+    webauthn: (
+      ceremonyId: string,
+      extra?: Record<string, string | number | boolean>,
+    ) => Promise<Record<string, unknown>>;
+  };
+  /**
+   * For a login policy plugin (auth:policy): sign the person out, or start
+   * the app again once their session changed (a required second factor was
+   * set up). A frame can't do either to the window itself. reload answers
+   * false when it ran less than ten seconds ago. Termix 26.11.2 and plugin
+   * API 2.8.
+   */
+  session?: {
+    signOut: () => Promise<void>;
+    reload: () => Promise<boolean>;
+  };
   /** The desktop app, when the frontend runs in it. */
   desktop: DesktopApi;
   /** This plugin's docs. Needs plugin API 1.2. */
@@ -1128,6 +1753,9 @@ export interface PluginHostBridge {
   useHosts: () => { hosts: PluginHostRecord[]; loaded: boolean };
   useCurrentUser: () => CurrentUser | null;
   useTheme: () => { theme: "light" | "dark" };
+  useShell: () => ShellController | null;
+  /** Hosts without it leave scrolling to the view. */
+  useShellScroll?: (on: boolean) => void;
   toast: ToastApi;
   getApi: (pluginId: string) => PluginApiClient;
   getApiFor: (pluginId: string, origin: unknown) => PluginApiClient;
@@ -1144,6 +1772,7 @@ export interface PluginHostBridge {
   hostProtocols: (host: PluginHostRecord) => string[];
   useHostStatus: (hostId: number | undefined) => HostStatusInfo | null;
   useHostActions: () => HostActionContribution[];
+  useCompanions: (tabType: string) => CompanionInfo[];
   useActivityTypes: () => string[];
   activityTarget: (type: string) => ActivityTargetInfo | undefined;
   useExtensions: (pointId: string) => ExtensionContribution[];
@@ -1384,6 +2013,28 @@ export function useTheme(): { theme: "light" | "dark" } {
   return requireHost().useTheme();
 }
 
+/**
+ * The live shell, for a layout. Null outside the signed-in app. Needs plugin
+ * API 1.4. In a plugin frame (API 2.7) it is read only: tabs, splits, the
+ * user and mobile or not; tabs.setActive works right after the person used
+ * the frame.
+ */
+export function useShell(): ShellController | null {
+  return requireHost().useShell();
+}
+
+/**
+ * Lets Termix scroll this tab instead of the view's own scroll box, while
+ * `on` is true. The view then lays out at its full height, and parts from
+ * other plugins on it move with the page instead of trailing behind it.
+ * Turn it off while something needs a fixed height (a full size session, a
+ * drag). Only tab views in a frame use it; elsewhere it does nothing. Needs
+ * plugin API 2.9.
+ */
+export function useShellScroll(on: boolean): void {
+  requireHost().useShellScroll?.(on);
+}
+
 export function useToast(): ToastApi {
   return requireHost().toast;
 }
@@ -1477,28 +2128,49 @@ export function usePluginUiPreferences<
   return bridge.usePluginUiPreferences(bridge.usePluginId()) as never;
 }
 
+type PanelGridSize = "auto" | "1" | "2" | "3" | "4" | "5" | "6";
+const PANEL_GRID_SIZES: readonly string[] = [
+  "auto",
+  "1",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+];
+
 /**
- * Grid or list and row density for one of this plugin's views, kept in its
- * Appearance area as `<prefix>viewMode` and `<prefix>density`. Declare those
- * keys in contributes.uiPresets so each preset level can pick a default.
+ * Grid or list, row density and cards per row for one of this plugin's
+ * views, kept in its Appearance area as `<prefix>viewMode`, `<prefix>density`
+ * and `<prefix>columns`. Declare those keys in contributes.uiPresets so each
+ * preset level can pick a default. Hand columns to ViewToggle and DataView.
  */
 export function usePluginPanelView(prefix = ""): {
   view: "grid" | "list";
   density: "comfortable" | "compact";
   compact: boolean;
+  columns: PanelGridSize;
   setView: (view: "grid" | "list") => void;
   setDensity: (density: "comfortable" | "compact") => void;
+  setColumns: (columns: PanelGridSize) => void;
 } {
   const { values, set } = usePluginUiPreferences();
   const view = values[`${prefix}viewMode`] === "list" ? "list" : "grid";
   const density =
     values[`${prefix}density`] === "compact" ? "compact" : "comfortable";
+  const saved = values[`${prefix}columns`];
+  const columns =
+    typeof saved === "string" && PANEL_GRID_SIZES.includes(saved)
+      ? (saved as PanelGridSize)
+      : "auto";
   return {
     view,
     density,
     compact: density === "compact",
+    columns,
     setView: (next) => set(`${prefix}viewMode`, next),
     setDensity: (next) => set(`${prefix}density`, next),
+    setColumns: (next) => set(`${prefix}columns`, next),
   };
 }
 
@@ -1552,6 +2224,14 @@ export function useHostActions(): HostActionContribution[] {
 }
 
 /**
+ * Every panel that can open beside a tab of this type, for a settings screen
+ * that lets the user hide or reorder them. Reactive.
+ */
+export function useCompanions(tabType: string): CompanionInfo[] {
+  return requireHost().useCompanions(tabType);
+}
+
+/**
  * Recent-activity types every registered tab claims (registerTab's
  * activityTypes), core's and plugins'. For a filter that lists what a user
  * can pick, without knowing which plugin owns each activity type.
@@ -1571,7 +2251,9 @@ export function activityTarget(type: string): ActivityTargetInfo | undefined {
 
 /**
  * Every item any running plugin added to `pointId` with registerExtension.
- * Reactive: it re-renders as plugins enable and disable.
+ * Reactive: it re-renders as plugins enable and disable. In a frame (API
+ * 2.7), other plugins' components are placeholders Termix draws over, for a
+ * point under your plugin id or listed in manifest `uses`.
  */
 export function useExtensions<T extends ExtensionContribution>(
   pointId: string,
@@ -1589,7 +2271,9 @@ export function getExtension<T extends ExtensionContribution>(
 
 /**
  * The component another plugin registered under `id` with
- * app.registerComponent, or undefined while that plugin is off.
+ * app.registerComponent, or undefined while that plugin is off. In a frame
+ * (API 2.7) it is a placeholder Termix draws over; list the id in manifest
+ * `uses`.
  */
 export function usePluginComponent(
   id: string,

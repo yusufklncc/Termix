@@ -3,16 +3,14 @@ import type { Request, RequestHandler, Response, Router } from "express";
 import { PermissionManager } from "../../utils/permission-manager.js";
 import { DataCrypto } from "../../utils/data-crypto.js";
 import { sshLogger } from "../../utils/logger.js";
-import { createCurrentSettingsRepository } from "../repositories/factory.js";
 import {
-  DEFAULT_STATUS_INTERVAL,
-  GLOBAL_STATUS_INTERVAL_KEY,
-  hostStatusService,
+  hostStatus,
   type HostStatusEntry,
-} from "../../hosts/status/host-status-service.js";
+} from "../../plugins/host-status-provider.js";
 
 interface HostStatusRoutesDeps {
   authenticateJWT: RequestHandler;
+  requireViewPermission: RequestHandler;
   requireAdmin: RequestHandler;
 }
 
@@ -37,7 +35,11 @@ function sessionExpired(res: Response): Response {
 
 export function registerHostStatusRoutes(
   router: Router,
-  { authenticateJWT, requireAdmin }: HostStatusRoutesDeps,
+  {
+    authenticateJWT,
+    requireViewPermission,
+    requireAdmin,
+  }: HostStatusRoutesDeps,
 ): void {
   const permissionManager = PermissionManager.getInstance();
 
@@ -65,13 +67,14 @@ export function registerHostStatusRoutes(
   router.get(
     "/status",
     authenticateJWT,
+    requireViewPermission,
     async (req: Request, res: Response) => {
       const userId = (req as AuthenticatedRequest).userId;
       if (DataCrypto.getUserDataKey(userId) === null)
         return sessionExpired(res);
 
       const requested = parseStatusHostIds(req.query.hostIds);
-      const statuses = await hostStatusService.statusesFor(userId, requested);
+      const statuses = await hostStatus.statusesFor(userId, requested);
 
       // One batched permission check: this is polled every few seconds, and a
       // per-host check made it linear in host count against the database.
@@ -110,15 +113,7 @@ export function registerHostStatusRoutes(
     authenticateJWT,
     requireAdmin,
     async (_req: Request, res: Response) => {
-      const value = Number(
-        await createCurrentSettingsRepository().get(GLOBAL_STATUS_INTERVAL_KEY),
-      );
-      res.json({
-        statusCheckInterval:
-          Number.isInteger(value) && value >= 5
-            ? value
-            : DEFAULT_STATUS_INTERVAL,
-      });
+      res.json({ statusCheckInterval: await hostStatus.getIntervalSeconds() });
     },
   );
 
@@ -161,11 +156,7 @@ export function registerHostStatusRoutes(
           .json({ error: "Status check interval must be 5 to 3600 seconds" });
       }
       try {
-        await createCurrentSettingsRepository().set(
-          GLOBAL_STATUS_INTERVAL_KEY,
-          String(seconds),
-        );
-        hostStatusService.retimeAll();
+        await hostStatus.setIntervalSeconds(seconds);
         res.json({ statusCheckInterval: seconds });
       } catch (error) {
         sshLogger.error("Failed to save status check settings", error, {
@@ -198,7 +189,7 @@ export function registerHostStatusRoutes(
       if (DataCrypto.getUserDataKey(userId) === null) {
         return sessionExpired(res);
       }
-      await hostStatusService.refresh(userId);
+      await hostStatus.refresh(userId);
       res.json({ message: "Status checks restarted" });
     },
   );
@@ -228,6 +219,7 @@ export function registerHostStatusRoutes(
   router.get(
     "/status/:id",
     authenticateJWT,
+    requireViewPermission,
     async (req: Request, res: Response) => {
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) {
@@ -247,9 +239,8 @@ export function registerHostStatusRoutes(
         return res.status(404).json({ error: "Status not available" });
       }
 
-      await hostStatusService.statusesFor(userId, null);
-      const entry =
-        hostStatusService.get(id) ?? (await hostStatusService.check(id));
+      await hostStatus.statusesFor(userId, null);
+      const entry = hostStatus.get(id) ?? (await hostStatus.check(id));
       if (!entry) {
         return res.status(404).json({ error: "Status not available" });
       }

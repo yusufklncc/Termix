@@ -70,6 +70,25 @@ describe("ActionSlot", () => {
     resetActionRegistry();
   });
 
+  it("logs a handler that throws instead of leaving a rejected promise", async () => {
+    perms.permissions = ["ai.services.use"];
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    contributeAi(
+      vi.fn(() => {
+        throw new Error("boom");
+      }),
+    );
+    render(<ActionSlot slotId={SLOT} />);
+    await act(async () => {
+      screen.getByRole("button").click();
+    });
+    expect(error).toHaveBeenCalledWith(
+      `[actions] ${ACTION} failed`,
+      expect.any(Error),
+    );
+    error.mockRestore();
+  });
+
   it("renders nothing when no plugin has contributed", () => {
     const { container } = render(<ActionSlot slotId={SLOT} />);
 
@@ -294,5 +313,30 @@ describe("action registry", () => {
     await expect(invokeAction("nobody.home")).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+});
+
+describe("ActionSlot and other kinds", () => {
+  afterEach(() => resetActionRegistry());
+
+  it("draws no button for a data or component contribution", () => {
+    registerSlotContribution("x.row", {
+      actionId: "p.value",
+      titleKey: "value.label",
+      kind: "data",
+    });
+    registerSlotContribution("x.row", {
+      actionId: "p.view",
+      titleKey: "view.label",
+      kind: "component",
+      component: () => null,
+    });
+    registerSlotContribution("x.row", {
+      actionId: "p.button",
+      titleKey: "button.label",
+    });
+    render(<ActionSlot slotId="x.row" />);
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    expect(screen.getByRole("button")).toHaveAttribute("title", "button.label");
   });
 });

@@ -12,6 +12,8 @@ import { scopeHostFields } from "./host-scope";
 import { useTranslation } from "react-i18next";
 import { pluginName } from "@/lib/plugin-i18n";
 import { getPluginRecord } from "./plugin-store";
+import { WRAPPED_ICON } from "@/plugin-frame/wire";
+import { frameMetaOf, setFrameMeta } from "./frames/frame-meta";
 
 const PluginScopeContext = createContext<string | null>(null);
 
@@ -111,6 +113,32 @@ export function withPluginScope<P extends object>(
     );
   }
   Scoped.displayName = `Plugin(${pluginId}:${Inner.displayName ?? Inner.name ?? "Component"})`;
+  // A framed component keeps what says which frame it is, so a view placed
+  // over another frame still opens that frame at the placeholder's size.
+  const meta = frameMetaOf(Inner);
+  if (meta) setFrameMeta(Scoped as never, meta);
+  return Scoped;
+}
+
+/**
+ * The plugin id for the hooks without the error boundary, for a component
+ * whose caller handles a crash itself (a layout, which the repair view takes
+ * over from).
+ */
+export function withPluginContext<P extends object>(
+  pluginId: string,
+  Inner: ComponentType<P>,
+): ComponentType<P> {
+  function Scoped(props: P) {
+    return (
+      <PluginScopeContext.Provider value={pluginId}>
+        <Suspense fallback={null}>
+          <Inner {...props} />
+        </Suspense>
+      </PluginScopeContext.Provider>
+    );
+  }
+  Scoped.displayName = `Plugin(${pluginId}:${Inner.displayName ?? Inner.name ?? "Component"})`;
   return Scoped;
 }
 
@@ -148,6 +176,8 @@ export function withIconBoundary<P extends object>(
     );
   }
   SafeIcon.displayName = `PluginIcon(${pluginId})`;
+  // Frames get icons by name, so keep the real one reachable.
+  (SafeIcon as unknown as Record<string, unknown>)[WRAPPED_ICON] = Icon;
   return SafeIcon;
 }
 

@@ -16,7 +16,7 @@ import type {
   SyncRow,
 } from "@termix-ssh/plugin-sdk/backend";
 
-/** Core-only extras a plugin registration cannot set. */
+/** Extras core sets for its own entities. A plugin may set the first four. */
 export interface CoreSyncEntityOptions {
   /** Server-to-desktop only. A desktop never pushes it. */
   readOnly?: boolean;
@@ -38,6 +38,18 @@ export interface CoreSyncEntityOptions {
   /** Keys kept off the content hash and out of writes. */
   hashIgnore?: readonly string[];
   /**
+   * Fields a server checks it stored as pushed. One it stored differently
+   * makes the push a conflict carrying the server's row, so the desktop does
+   * not keep a value the server refused while both sides read as in sync.
+   */
+  verifyFields?: readonly string[];
+  /**
+   * Fields that make an inbound row the same as a local one that never
+   * synced. Linking a device that already has data then takes the server's
+   * copy over the local one instead of keeping both.
+   */
+  matchUnsynced?: readonly string[];
+  /**
    * Widens reference lookups past rows the user owns, e.g. a credential
    * shared with them is a valid target for their host's credentialId.
    */
@@ -56,6 +68,55 @@ export interface RegisteredSyncEntity
   userColumn: string;
   readOnlyFields: readonly string[];
   encryptedFields: readonly string[];
+}
+
+/** What a plugin registration may carry. Anything else is dropped. */
+const PLUGIN_KEYS = [
+  "type",
+  "table",
+  "userColumn",
+  "encryptedFields",
+  "references",
+  "order",
+  "readOnlyFields",
+  "singleton",
+  "matchOn",
+  "answersTo",
+  "shouldSync",
+  "permissions",
+  "serialize",
+  "deserialize",
+  "afterWrite",
+  "remove",
+  "readOnly",
+  "load",
+  "write",
+  "erase",
+] as const;
+
+function pluginEntity(entity: SyncEntityRegistration): SyncEntityRegistration {
+  const picked: Record<string, unknown> = {};
+  for (const key of PLUGIN_KEYS) {
+    if (entity[key] !== undefined) picked[key] = entity[key];
+  }
+  const out = picked as unknown as SyncEntityRegistration;
+  if (out.load || out.write || out.erase) {
+    if (!out.load || !out.write || !out.erase) {
+      throw new Error(
+        `Sync entity "${entity.type}" needs load, write and erase together`,
+      );
+    }
+    // A plugin only ever syncs its own rows both ways; rows it builds for
+    // a user come down as read only copies.
+    if (out.readOnly !== true) {
+      throw new Error(
+        `Sync entity "${entity.type}" with load must be readOnly`,
+      );
+    }
+  } else if (!out.table) {
+    throw new Error(`Sync entity "${entity.type}" needs a table or load`);
+  }
+  return out;
 }
 
 const entities = new Map<string, RegisteredSyncEntity>();
@@ -81,7 +142,7 @@ export function registerEntity(
   }
 
   const registered: RegisteredSyncEntity = {
-    ...entity,
+    ...(owner === CORE_OWNER ? entity : pluginEntity(entity)),
     ...(owner === CORE_OWNER ? core : {}),
     owner,
     order: entity.order ?? 100,
@@ -100,6 +161,18 @@ export function registerEntity(
       notify();
     }
   };
+}
+
+/**
+ * Whether a stored row syncs. A plugin process answers shouldSync with a
+ * Promise, so always await this.
+ */
+export async function rowSyncs(
+  entity: Pick<SyncEntityRegistration, "shouldSync">,
+  row: Record<string, unknown>,
+): Promise<boolean> {
+  if (!entity.shouldSync) return true;
+  return (await entity.shouldSync(row as never)) !== false;
 }
 
 export function getEntity(type: string): RegisteredSyncEntity | undefined {

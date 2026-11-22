@@ -70,54 +70,6 @@ export async function updateSSHHost(
   }
 }
 
-export async function bulkImportSSHHosts(
-  hosts: SSHHostData[],
-  overwrite = false,
-  credentials?: Record<string, unknown>[],
-): Promise<{
-  message: string;
-  success: number;
-  updated: number;
-  skipped: number;
-  failed: number;
-  errors: string[];
-}> {
-  try {
-    const response = await sshHostApi.post("/bulk-import", {
-      hosts,
-      overwrite,
-      ...(credentials ? { credentials } : {}),
-    });
-    invalidateHostsAndStatusCaches();
-    return response.data;
-  } catch (error) {
-    handleApiError(error, "bulk import SSH hosts");
-  }
-}
-
-export async function importSSHConfigHosts(
-  content: string,
-  overwrite = false,
-): Promise<{
-  message: string;
-  success: number;
-  updated: number;
-  skipped: number;
-  failed: number;
-  errors: string[];
-}> {
-  try {
-    const response = await sshHostApi.post("/ssh-config-import", {
-      content,
-      overwrite,
-    });
-    invalidateHostsAndStatusCaches();
-    return response.data;
-  } catch (error) {
-    handleApiError(error, "import SSH config hosts");
-  }
-}
-
 export async function bulkUpdateSSHHosts(
   hostIds: number[],
   updates: Record<string, unknown>,
@@ -131,6 +83,89 @@ export async function bulkUpdateSSHHosts(
     return response.data;
   } catch (error) {
     handleApiError(error, "bulk update SSH hosts");
+  }
+}
+
+export interface DeviceLogin {
+  credentialId: number | null;
+  credentials: { id: number; name: string; username: string | null }[];
+}
+
+/** Desktop: a shared host's login kept on this device. */
+export async function getHostDeviceAuth(
+  hostId: number,
+  protocol: string,
+): Promise<DeviceLogin> {
+  try {
+    const response = await sshHostApi.get(
+      `/db/host/${hostId}/device-auth/${encodeURIComponent(protocol)}`,
+    );
+    return response.data;
+  } catch (error) {
+    handleApiError(error, "load device login");
+  }
+}
+
+export async function setHostDeviceAuth(
+  hostId: number,
+  protocol: string,
+  credentialId: number | null,
+): Promise<void> {
+  try {
+    await sshHostApi.put(
+      `/db/host/${hostId}/device-auth/${encodeURIComponent(protocol)}`,
+      { credentialId },
+    );
+  } catch (error) {
+    handleApiError(error, "save device login");
+  }
+}
+
+/** Desktop: a shared folder's login kept on this device. */
+export async function getFolderDeviceAuth(
+  folder: string,
+  protocol: string,
+): Promise<DeviceLogin> {
+  try {
+    const response = await sshHostApi.get(
+      `/device-auth/folder/${encodeURIComponent(protocol)}`,
+      { params: { folder } },
+    );
+    return response.data;
+  } catch (error) {
+    handleApiError(error, "load device login");
+  }
+}
+
+export async function setFolderDeviceAuth(
+  folder: string,
+  protocol: string,
+  credentialId: number | null,
+): Promise<void> {
+  try {
+    await sshHostApi.put(
+      `/device-auth/folder/${encodeURIComponent(protocol)}`,
+      { folder, credentialId },
+    );
+  } catch (error) {
+    handleApiError(error, "save device login");
+  }
+}
+
+export interface HostPolicy {
+  manualCreate: boolean;
+  /** The plugin that manages hosts, when hosts can't be added by hand. */
+  blockedBy?: string;
+  /** False when an admin turned off saving passwords and keys. */
+  credentialStorage?: boolean;
+}
+
+export async function getHostPolicy(): Promise<HostPolicy> {
+  try {
+    const response = await sshHostApi.get("/policy");
+    return response.data;
+  } catch (error) {
+    handleApiError(error, "load host policy");
   }
 }
 
@@ -164,44 +199,6 @@ export async function getSSHHostById(hostId: number): Promise<SSHHost> {
     return response.data;
   } catch (error) {
     handleApiError(error, "fetch SSH host");
-  }
-}
-
-export async function exportSSHHostWithCredentials(
-  hostId: number,
-): Promise<SSHHost> {
-  try {
-    const response = await sshHostApi.get(`/db/host/${hostId}/export`);
-    return response.data;
-  } catch (error) {
-    handleApiError(error, "export SSH host with credentials");
-  }
-}
-
-export function exportAllSSHHosts(): Promise<{
-  hosts: SSHHost[];
-}>;
-export function exportAllSSHHosts(options: { share: true }): Promise<{
-  version: string;
-  exportedAt: string;
-  credentials: Record<string, unknown>[];
-  hosts: SSHHost[];
-}>;
-export async function exportAllSSHHosts(options?: {
-  share?: boolean;
-}): Promise<{
-  version?: string;
-  exportedAt?: string;
-  credentials?: Record<string, unknown>[];
-  hosts: SSHHost[];
-}> {
-  try {
-    const response = await sshHostApi.get(
-      options?.share ? "/db/hosts/export?share=1" : "/db/hosts/export",
-    );
-    return response.data;
-  } catch (error) {
-    handleApiError(error, "export all SSH hosts");
   }
 }
 

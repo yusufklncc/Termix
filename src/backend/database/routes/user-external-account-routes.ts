@@ -1,4 +1,3 @@
-import { getErrorMessage } from "../../utils/error-message.js";
 import type { AuthenticatedRequest } from "../../../types/index.js";
 import type { Request, RequestHandler, Response, Router } from "express";
 import { AuthManager } from "../../utils/auth-manager.js";
@@ -146,7 +145,7 @@ export function registerUserExternalAccountRoutes(
       await identities.moveIdentities(externalUserId, targetUser.id);
 
       await authManager.revokeAllUserSessions(externalUserId);
-      authManager.logoutUser(externalUserId);
+      await authManager.logoutUser(externalUserId);
       await deleteUserAndRelatedData(externalUserId);
 
       try {
@@ -186,7 +185,6 @@ export function registerUserExternalAccountRoutes(
       });
       res.status(500).json({
         error: "Failed to link accounts",
-        details: getErrorMessage(err),
       });
     }
   };
@@ -291,7 +289,6 @@ export function registerUserExternalAccountRoutes(
       });
       res.status(500).json({
         error: "Failed to unlink",
-        details: getErrorMessage(err),
       });
     }
   };

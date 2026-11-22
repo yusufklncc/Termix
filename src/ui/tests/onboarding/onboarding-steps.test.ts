@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { CORE_STEPS } from "@/onboarding/onboarding-steps";
 import { computeFlow } from "@/onboarding/onboarding-flow";
 import type { OnboardingCtx } from "@/onboarding/onboarding-registry";
 import { CORE_ONBOARDING_STEPS } from "@/types/onboarding";
 import { UI_AREA_KEYS, PRESETS } from "@/types/ui-preferences";
 import en from "@/locales/en.json";
+import { resetPluginLayouts, setPluginLayouts } from "@/look/layout-registry";
 
 function lookup(key: string): unknown {
   return key
@@ -47,15 +48,14 @@ describe("CORE_STEPS", () => {
     }
   });
 
-  it("is only choices: preset and appearance for everyone", () => {
-    expect(ids(ctx())).toEqual(["preset", "appearance"]);
+  it("has no core step for everyone: look choices come from the layout", () => {
+    expect(ids(ctx())).toEqual([]);
   });
 
   it("opens on the plugin picker for an admin on a fresh install", () => {
     expect(ids(ctx({ isAdmin: true, pluginSetupPending: true }))).toEqual([
       "plugins",
-      "preset",
-      "appearance",
+      "layout",
     ]);
   });
 
@@ -81,28 +81,52 @@ describe("CORE_STEPS", () => {
     ).not.toContain("plugins");
   });
 
-  it("makes the plugin picker required", () => {
-    expect(CORE_STEPS.find((s) => s.id === "plugins")?.required).toBe(true);
+  describe("layout step", () => {
+    afterEach(() => resetPluginLayouts());
+
+    const two = () =>
+      setPluginLayouts([
+        { id: "classic", label: "Classic", pluginId: "a" },
+        { id: "simple", label: "Simple", pluginId: "b" },
+      ]);
+
+    it("shows to everyone when there is more than one layout", () => {
+      two();
+      expect(ids(ctx())).toEqual(["layout"]);
+    });
+
+    it("skips a non-admin with only one layout", () => {
+      setPluginLayouts([{ id: "classic", label: "Classic", pluginId: "a" }]);
+      expect(ids(ctx())).not.toContain("layout");
+    });
+
+    it("shows to an admin with one layout, who can install more", () => {
+      expect(ids(ctx({ isAdmin: true }))).toContain("layout");
+    });
+
+    it("skips an admin on a linked desktop with one layout", () => {
+      expect(
+        ids(ctx({ isAdmin: true, pluginsManagedElsewhere: true })),
+      ).not.toContain("layout");
+    });
+
+    it("comes right after the plugin picker", () => {
+      two();
+      expect(
+        ids(ctx({ isAdmin: true, pluginSetupPending: true })).slice(0, 2),
+      ).toEqual(["plugins", "layout"]);
+    });
   });
 
-  it("asks how the desktop app is used only on the desktop", () => {
-    expect(ids(ctx({ isDesktop: true }))).toEqual([
-      "desktop-sync",
-      "preset",
-      "appearance",
-    ]);
+  it("makes the plugin picker required", () => {
+    expect(CORE_STEPS.find((s) => s.id === "plugins")?.required).toBe(true);
   });
 
   it("asks how the desktop app updates when it has an updater", () => {
     const win = window as unknown as { electronAPI?: unknown };
     win.electronAPI = { isElectron: true, updates: {} };
     try {
-      expect(ids(ctx({ isDesktop: true }))).toEqual([
-        "desktop-sync",
-        "desktop-updates",
-        "preset",
-        "appearance",
-      ]);
+      expect(ids(ctx({ isDesktop: true }))).toEqual(["desktop-updates"]);
       expect(ids(ctx())).not.toContain("desktop-updates");
     } finally {
       delete win.electronAPI;
@@ -110,11 +134,7 @@ describe("CORE_STEPS", () => {
   });
 
   it("offers account security only when there is something to set up", () => {
-    expect(ids(ctx({ canEnrollSecondFactor: true }))).toEqual([
-      "preset",
-      "appearance",
-      "security",
-    ]);
+    expect(ids(ctx({ canEnrollSecondFactor: true }))).toEqual(["security"]);
   });
 
   it("skips account security on the desktop, which signs in by itself", () => {
@@ -127,9 +147,11 @@ describe("CORE_STEPS", () => {
 describe("onboarding translations", () => {
   it("has the copy the stage and the steps show", () => {
     for (const key of [
-      "presetIntro",
-      "appearanceIntro",
       "securityIntro",
+      "layoutTitle",
+      "layoutIntro",
+      "layoutChangeLater",
+      "layoutChangeLaterAdmin",
       "pluginsIntro",
       "pluginsRemoveNote",
       "pluginsChoice_enabled",

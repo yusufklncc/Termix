@@ -1,4 +1,10 @@
-import { getErrorMessage } from "../../utils/error-message.js";
+import { deviceLoginsAvailable } from "../../hosts/device-auth.js";
+import {
+  CredentialStorageError,
+  credentialStorageAllowed,
+  sendCredentialStorageOff,
+  storedSecretFields,
+} from "../../hosts/credential-storage.js";
 import type { AuthenticatedRequest } from "../../../types/index.js";
 import { listCredentialTypes } from "../../hosts/connect/auth-provider-registry.js";
 import { ensureCoreSshAuthProviders } from "../../hosts/connect/core-providers.js";
@@ -8,8 +14,6 @@ import { authLogger } from "../../utils/logger.js";
 import { PermissionManager } from "../../utils/permission-manager.js";
 import { AuthManager } from "../../utils/auth-manager.js";
 import { parseKeyForStorage } from "../../hosts/stored-ssh-key.js";
-import { registerCredentialKeyRoutes } from "./credential-key-routes.js";
-import { registerCredentialDeployRoutes } from "./credential-deploy-routes.js";
 import { registerCredentialBulkRoutes } from "./credential-bulk-routes.js";
 import {
   logAudit,
@@ -112,6 +116,13 @@ router.post(
       certPublicKey,
     } = req.body;
 
+    if (
+      !credentialStorageAllowed() &&
+      storedSecretFields("ssh_credentials", req.body ?? {}).length > 0
+    ) {
+      return sendCredentialStorageOff(res);
+    }
+
     if (!isNonEmptyString(userId) || !isNonEmptyString(name)) {
       authLogger.warn("Invalid credential creation data validation failed", {
         operation: "credential_create",
@@ -204,6 +215,7 @@ router.post(
           authType === "key" && certPublicKey ? certPublicKey.trim() : null,
         usageCount: 0,
         lastUsed: null,
+        localOnly: deviceLoginsAvailable() && req.body?.localOnly === true,
       };
 
       const created =
@@ -239,6 +251,9 @@ router.post(
 
       res.status(201).json(formatCredentialOutput(created));
     } catch (err) {
+      if (err instanceof CredentialStorageError) {
+        return sendCredentialStorageOff(res);
+      }
       authLogger.error("Failed to create credential in database", err, {
         operation: "credential_create",
         userId,
@@ -247,7 +262,7 @@ router.post(
         username,
       });
       res.status(500).json({
-        error: getErrorMessage(err, "Failed to create credential"),
+        error: "Failed to create credential",
       });
     }
   },
@@ -418,7 +433,7 @@ router.get(
     } catch (err) {
       authLogger.error("Failed to fetch credential", err);
       res.status(500).json({
-        error: getErrorMessage(err, "Failed to fetch credential"),
+        error: "Failed to fetch credential",
       });
     }
   },
@@ -576,13 +591,16 @@ router.post(
 
       res.status(201).json(formatCredentialOutput(created));
     } catch (err) {
+      if (err instanceof CredentialStorageError) {
+        return sendCredentialStorageOff(res);
+      }
       authLogger.error("Failed to duplicate credential", err, {
         operation: "credential_duplicate",
         userId,
         credentialId,
       });
       res.status(500).json({
-        error: getErrorMessage(err, "Failed to duplicate credential"),
+        error: "Failed to duplicate credential",
       });
     }
   },
@@ -782,9 +800,12 @@ router.put(
 
       res.json(formatCredentialOutput(updatedCredential ?? existingCredential));
     } catch (err) {
+      if (err instanceof CredentialStorageError) {
+        return sendCredentialStorageOff(res);
+      }
       authLogger.error("Failed to update credential", err);
       res.status(500).json({
-        error: getErrorMessage(err, "Failed to update credential"),
+        error: "Failed to update credential",
       });
     }
   },
@@ -863,7 +884,7 @@ router.delete(
     } catch (err) {
       authLogger.error("Failed to delete credential", err);
       res.status(500).json({
-        error: getErrorMessage(err, "Failed to delete credential"),
+        error: "Failed to delete credential",
       });
     }
   },
@@ -951,7 +972,7 @@ router.post(
     } catch (err) {
       authLogger.error("Failed to apply credential to host", err);
       res.status(500).json({
-        error: getErrorMessage(err, "Failed to apply credential to host"),
+        error: "Failed to apply credential to host",
       });
     }
   },
@@ -1005,7 +1026,7 @@ router.get(
     } catch (err) {
       authLogger.error("Failed to fetch hosts using credential", err);
       res.status(500).json({
-        error: getErrorMessage(err, "Failed to fetch hosts using credential"),
+        error: "Failed to fetch hosts using credential",
       });
     }
   },
@@ -1109,6 +1130,7 @@ function formatCredentialOutput(
     lastUsed: credential.lastUsed,
     createdAt: credential.createdAt,
     updatedAt: credential.updatedAt,
+    localOnly: !!credential.localOnly,
     ...sharedCopyFields(credential.sharedSource),
   };
 }
@@ -1209,21 +1231,6 @@ router.put(
       res.status(500).json({ error: "Failed to rename folder" });
     }
   },
-);
-
-registerCredentialKeyRoutes(
-  router,
-  authenticateJWT,
-  permissionManager.requirePermission("credentials.view"),
-  requireDataAccess,
-);
-
-registerCredentialDeployRoutes(
-  router,
-  authenticateJWT,
-  permissionManager.requirePermission("credentials.view"),
-  permissionManager.requirePermission("hosts.edit"),
-  requireDataAccess,
 );
 
 export default router;

@@ -39,9 +39,19 @@ function buildTable(version, mobileVersion, mobileTag) {
     `|------------------|------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------|---------------------------------------------|-----------------------------------|`,
     `| **x86-64 (64-bit)** | [EXE](${win("termix_windows_x64_nsis.exe")}) · [MSI](${win("termix_windows_x64_msi.msi")}) · [Portable](${win("termix_windows_x64_portable.zip")}) | [AppImage](${linux("termix_linux_x64_appimage.AppImage")}) · [DEB](${linux("termix_linux_x64_deb.deb")}) · [Portable](${linux("termix_linux_x64_portable.tar.gz")}) | [DMG](${mac("termix_macos_x64_dmg.dmg")}) | - | - |`,
     `| **AArch64 (ARM64)** | [EXE](${win("termix_windows_arm64_nsis.exe")}) · [MSI](${win("termix_windows_arm64_msi.msi")}) · [Portable](${win("termix_windows_arm64_portable.zip")}) | [AppImage](${linux("termix_linux_arm64_appimage.AppImage")}) · [DEB](${linux("termix_linux_arm64_deb.deb")}) · [Portable](${linux("termix_linux_arm64_portable.tar.gz")}) | [DMG](${mac("termix_macos_arm64_dmg.dmg")}) | [APK (${mobileVersion})](${mobileBase}/termix_android.apk) | [IPA (${mobileVersion})](${mobileBase}/termix_ios.ipa) |`,
-    `| **ARMv7 (32-bit)**  | - | [AppImage](${linux("termix_linux_armv7l_appimage.AppImage")}) · [DEB](${linux("termix_linux_armv7l_deb.deb")}) · [Portable](${linux("termix_linux_armv7l_portable.tar.gz")}) | - | - | - |`,
-    `| **x86-32 (32-bit)** | [EXE](${win("termix_windows_ia32_nsis.exe")}) · [MSI](${win("termix_windows_ia32_msi.msi")}) · [Portable](${win("termix_windows_ia32_portable.zip")}) | - | - | - | - |`,
     `| **Universal**      | [Chocolatey](https://docs.termix.site/install/apps/windows) | [Flatpak](https://docs.termix.site/install/apps/linux) | [DMG](${mac("termix_macos_universal_dmg.dmg")}) · [App Store](https://apps.apple.com/us/app/termix-ssh-companion/id6752672071) · [Homebrew](https://docs.termix.site/install/apps/macos) | - | - |`,
+  ].join("\n");
+}
+
+function buildFullBuilds(version) {
+  const base = `https://github.com/Termix-SSH/Termix/releases/download/v${version}`;
+  const link = (label, file) => `[${label}](${base}/${file})`;
+  return [
+    "The builds above include the standard plugins. The full builds include every official plugin, which helps on a network with no internet. You can still turn plugins on or off in the Plugins tab. Full builds are x64 only (universal on Mac):",
+    "",
+    `- Windows: ${link("EXE", "termix_windows_x64_full_nsis.exe")}`,
+    `- Linux: ${link("AppImage", "termix_linux_x64_full_appimage.AppImage")} · ${link("DEB", "termix_linux_x64_full_deb.deb")}`,
+    `- Mac: ${link("DMG", "termix_macos_universal_full_dmg.dmg")}`,
   ].join("\n");
 }
 
@@ -62,6 +72,8 @@ function buildBody({ version, mobileVersion, mobileTag, changelog }) {
     "### Downloads",
     "",
     buildTable(version, mobileVersion, mobileTag),
+    "",
+    buildFullBuilds(version),
   ].join("\n");
 }
 

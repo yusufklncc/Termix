@@ -1,0 +1,270 @@
+name: Publish Flatpak
+
+# Builds the Flatpak from the portable tarballs. From the Release workflow it
+# takes them from the same run, adds the bundles to the draft release and
+# leaves the live repo at flatpak.termix.site to Release, which deploys it
+# after publishing. Run by hand it takes the tarballs from a published release
+# and can replace the live repo, which is what `flatpak update` reads.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Published release to package, like v26.11.1"
+        required: true
+        type: string
+      publish:
+        description: "Replace the live Flatpak repo"
+        required: true
+        default: true
+        type: boolean
+  workflow_call:
+    inputs:
+      release_tag:
+        description: "Release tag to package"
+        required: true
+        type: string
+      release_id:
+        description: "Id of the draft to upload to"
+        required: false
+        type: string
+        default: ""
+      source_ref:
+        description: "Commit to build the packaging from (the draft has no tag yet)"
+        required: false
+        type: string
+        default: ""
+      from_run:
+        description: "Take the tarballs from this run's artifacts"
+        required: false
+        type: boolean
+        default: false
+      upload:
+        description: "Add the bundles to the draft release"
+        required: false
+        type: boolean
+        default: false
+      pages:
+        description: "Keep the repo as a Pages artifact for a later deploy"
+        required: false
+        type: boolean
+        default: false
+      publish:
+        description: "Replace the live Flatpak repo"
+        required: true
+        type: boolean
+    # The value comes from the build environment.
+    secrets:
+      FLATPAK_GPG_KEY:
+        required: false
+
+permissions: {}
+
+env:
+  FLATPAK_REPO_URL: https://flatpak.termix.site
+
+jobs:
+  # aarch64 builds on an ARM runner, since qemu could not run the SDK under bwrap here
+  build-arm:
+    runs-on: blacksmith-8vcpu-ubuntu-2404-arm
+    environment: build
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref || inputs.release_tag }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      # A tag from before this workflow has no build script.
+      - name: Use the newest packaging files
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          git fetch --depth 1 origin "$WORKFLOW_SHA"
+          git checkout "$WORKFLOW_SHA" -- packaging/flatpak
+
+      - name: Install tools
+        run: |
+          # The PPA key is kept in the repo: add-apt-repository needs the Launchpad
+          # API, which is often down. Launchpad also answers 503 for a while, so
+          # retry each download.
+          sudo install -D -m 644 packaging/flatpak/flatpak-ppa.asc /etc/apt/keyrings/flatpak-ppa.asc
+          echo "deb [signed-by=/etc/apt/keyrings/flatpak-ppa.asc] https://ppa.launchpadcontent.net/flatpak/stable/ubuntu $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/flatpak-stable.list
+          sudo apt-get -o Acquire::Retries=10 update
+          sudo apt-get -o Acquire::Retries=10 install -y flatpak flatpak-builder imagemagick
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: Download tarball from this run
+        if: inputs.from_run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: termix_linux_arm64_portable
+          path: tarballs
+
+      - name: Download release tarball
+        if: ${{ !inputs.from_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir tarballs \
+            --pattern termix_linux_arm64_portable.tar.gz
+
+      - name: Import signing key
+        env:
+          FLATPAK_GPG_KEY: ${{ secrets.FLATPAK_GPG_KEY }}
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          printf '%s' "$FLATPAK_GPG_KEY" | gpg --batch --import
+          {
+            echo "FLATPAK_GPG_HOME=$GNUPGHOME"
+            echo "FLATPAK_GPG_KEY_ID=$(gpg --list-keys --with-colons | awk -F: '/^fpr/ { print $10; exit }')"
+          } >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          TAG: ${{ inputs.release_tag }}
+          FLATPAK_ARCHES: aarch64
+        run: |
+          bash packaging/flatpak/build-repo.sh "${TAG#v}" tarballs out
+          mkdir bundle
+          mv out/termix_linux_aarch64_flatpak.flatpak bundle/aarch64.flatpak
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: flatpak-aarch64
+          path: bundle/aarch64.flatpak
+          retention-days: 1
+
+  build:
+    needs: build-arm
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    environment: build
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_ref || inputs.release_tag }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      # A tag from before this workflow has no build script.
+      - name: Use the newest packaging files
+        env:
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          git fetch --depth 1 origin "$WORKFLOW_SHA"
+          git checkout "$WORKFLOW_SHA" -- packaging/flatpak scripts/release-assets.cjs
+
+      - name: Install tools
+        run: |
+          # The PPA key is kept in the repo: add-apt-repository needs the Launchpad
+          # API, which is often down. Launchpad also answers 503 for a while, so
+          # retry each download.
+          sudo install -D -m 644 packaging/flatpak/flatpak-ppa.asc /etc/apt/keyrings/flatpak-ppa.asc
+          echo "deb [signed-by=/etc/apt/keyrings/flatpak-ppa.asc] https://ppa.launchpadcontent.net/flatpak/stable/ubuntu $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/flatpak-stable.list
+          sudo apt-get -o Acquire::Retries=10 update
+          sudo apt-get -o Acquire::Retries=10 install -y flatpak flatpak-builder imagemagick
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+
+      - name: Download tarball from this run
+        if: inputs.from_run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: termix_linux_x64_portable
+          path: tarballs
+
+      - name: Download release tarballs
+        if: ${{ !inputs.from_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir tarballs \
+            --pattern termix_linux_x64_portable.tar.gz
+
+      - name: Download aarch64 bundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: flatpak-aarch64
+          path: import
+
+      - name: Import signing key
+        env:
+          FLATPAK_GPG_KEY: ${{ secrets.FLATPAK_GPG_KEY }}
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          printf '%s' "$FLATPAK_GPG_KEY" | gpg --batch --import
+          {
+            echo "FLATPAK_GPG_HOME=$GNUPGHOME"
+            echo "FLATPAK_GPG_KEY_ID=$(gpg --list-keys --with-colons | awk -F: '/^fpr/ { print $10; exit }')"
+          } >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          TAG: ${{ inputs.release_tag }}
+          FLATPAK_ARCHES: x86_64
+        run: |
+          FLATPAK_IMPORT="$PWD/import" bash packaging/flatpak/build-repo.sh "${TAG#v}" tarballs out
+          chmod -R a+rX out/site
+          mkdir bundles
+          cp out/*.flatpak out/com.karmaa.termix.flatpakref bundles/
+
+      # The Release workflow checks these in a dry run.
+      - name: Keep the bundles
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: flatpak-bundles
+          path: bundles
+          retention-days: 7
+
+      - name: Setup Node.js
+        if: inputs.upload
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ".nvmrc"
+
+      - name: Attest build provenance
+        if: inputs.upload
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: bundles/*
+
+      # Only ever a draft, and never replaces a file already there.
+      - name: Add bundles to the draft release
+        if: inputs.upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: node scripts/release-assets.cjs upload --tag "$TAG" --dir bundles
+
+      - name: Upload repo for Pages
+        if: inputs.publish || inputs.pages
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: out/site
+
+  deploy:
+    needs: build
+    if: inputs.publish
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ env.FLATPAK_REPO_URL }}
+    steps:
+      - name: Deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

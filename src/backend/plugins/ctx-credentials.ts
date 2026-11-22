@@ -46,6 +46,14 @@ interface Deps {
 
 type HostRow = Record<string, unknown>;
 
+/** A plain tab id, or nothing. */
+function unlockTabOf(options: unknown): string | undefined {
+  const tab = (options as { unlockTab?: unknown } | undefined)?.unlockTab;
+  return typeof tab === "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(tab)
+    ? tab
+    : undefined;
+}
+
 function str(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -83,6 +91,33 @@ function derivePublicKey(
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * A certificate is read by sshd, not by a shell, so keep it to one line of a
+ * type sshd knows. A pasted private key, a PEM block or a second line would
+ * otherwise be stored happily and fail much later as an opaque authentication
+ * error on connect.
+ */
+function certificateValue(certificate: unknown): string | null {
+  if (certificate === null || certificate === undefined) return null;
+  if (typeof certificate !== "string") {
+    throw new Error("A certificate must be a string or null");
+  }
+  const value = certificate.trim();
+  if (!value) return null;
+  if (value.includes("\n")) {
+    throw new Error("A certificate must be a single line");
+  }
+  const type = value.split(/\s+/)[0];
+  if (
+    !/^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521))-cert-v01@openssh\.com$/.test(
+      type,
+    )
+  ) {
+    throw new Error("That is not an OpenSSH user certificate");
+  }
+  return value;
 }
 
 async function requireCorePermission(
@@ -150,6 +185,37 @@ export function createPluginCredentials({
       }
     },
 
+    list: async () => {
+      try {
+        await assertCapability(pluginId, "credentials:use", declared);
+        const userId = actingUser();
+        await requireCorePermission(userId, "credentials.view");
+        const { createCurrentCredentialRepository } =
+          await import("../database/repositories/factory.js");
+        const rows =
+          await createCurrentCredentialRepository().listDecryptedByUserId(
+            userId,
+          );
+        const list = rows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          username: row.username ?? null,
+          authType: String(row.authType ?? ""),
+          folder: row.folder ?? null,
+        }));
+        await audit("credentials_list", `${list.length} credentials`, {
+          success: true,
+        });
+        return list;
+      } catch (error) {
+        await audit("credentials_list", "saved credentials", {
+          success: false,
+          errorMessage: errorText(error),
+        });
+        throw error;
+      }
+    },
+
     createSshKey: async (input) => {
       const details = `SSH key "${input?.name ?? ""}"`;
       try {
@@ -194,7 +260,145 @@ export function createPluginCredentials({
       }
     },
 
-    registerSecretResolver: (scheme, resolve) => {
+    setSshKeyCertificate: async (credentialId, certificate) => {
+      const details = `certificate of credential ${credentialId}`;
+      try {
+        await assertCapability(pluginId, "credentials:write", declared);
+        const userId = actingUser();
+        await requireCorePermission(userId, "credentials.update");
+        if (!Number.isInteger(credentialId) || credentialId <= 0) {
+          throw new Error("A credential id is required");
+        }
+        const value = certificateValue(certificate);
+        const { createCurrentCredentialRepository } =
+          await import("../database/repositories/factory.js");
+        const repository = createCurrentCredentialRepository();
+        const credential = await repository.findByIdForUser(
+          userId,
+          credentialId,
+        );
+        if (!credential) {
+          throw new Error("Credential not found");
+        }
+        // Core only sends a certificate for key auth; storing one on a password
+        // or agent credential would look saved and never be used.
+        if (credential.authType !== "key") {
+          throw new Error("Only SSH key credentials can carry a certificate");
+        }
+        const updated = await repository.updateForUser(userId, credentialId, {
+          certPublicKey: value,
+        });
+        await audit("credentials_set_certificate", details, { success: true });
+        return { id: credentialId, changed: Boolean(updated) };
+      } catch (error) {
+        await audit("credentials_set_certificate", details, {
+          success: false,
+          errorMessage: errorText(error),
+        });
+        throw error;
+      }
+    },
+
+    publicKey: async (credentialId) => {
+      const details = `public key of credential ${credentialId}`;
+      try {
+        await assertCapability(pluginId, "credentials:use", declared);
+        const userId = actingUser();
+        await requireCorePermission(userId, "credentials.view");
+        if (!Number.isInteger(credentialId) || credentialId <= 0) {
+          throw new Error("A credential id is required");
+        }
+        const { createCurrentHostResolutionRepository } =
+          await import("../database/repositories/factory.js");
+        const credential =
+          await createCurrentHostResolutionRepository().findCredentialByIdForUser(
+            credentialId,
+            userId,
+          );
+        const row = credential as unknown as Record<string, unknown> | null;
+        if (!row || row.authType !== "key") {
+          await audit("credentials_public_key", details, { success: true });
+          return null;
+        }
+        let publicKey =
+          typeof row.publicKey === "string" && row.publicKey.trim()
+            ? row.publicKey.trim()
+            : null;
+        if (!publicKey) {
+          const stored = str(row.privateKey) || str(row.key);
+          if (stored) {
+            const { resolveKeyReferences } =
+              await import("../hosts/stored-ssh-key.js");
+            const resolved = await resolveKeyReferences(
+              userId,
+              stored,
+              typeof row.keyPassword === "string" ? row.keyPassword : null,
+            );
+            publicKey = derivePublicKey(resolved.key, resolved.passphrase);
+          }
+        }
+        await audit("credentials_public_key", details, { success: true });
+        return publicKey;
+      } catch (error) {
+        await audit("credentials_public_key", details, {
+          success: false,
+          errorMessage: errorText(error),
+        });
+        throw error;
+      }
+    },
+
+    resolveLogin: async (credentialId) => {
+      const details = `login of credential ${credentialId}`;
+      try {
+        await assertCapability(pluginId, "credentials:read", declared);
+        const userId = actingUser();
+        if (!Number.isInteger(credentialId) || credentialId <= 0) {
+          throw new Error("A credential id is required");
+        }
+        // Same rule as a saved host's login: the user's own credential, or
+        // one shared with them.
+        const { findUsableCredential } =
+          await import("../hosts/usable-credential.js");
+        const credential = (await findUsableCredential(
+          credentialId,
+          userId,
+        )) as unknown as Record<string, unknown> | null;
+        await audit("credentials_read", details, { success: !!credential });
+        if (!credential) return null;
+        return {
+          username: str(credential.username),
+          password: str(credential.password),
+        };
+      } catch (error) {
+        await audit("credentials_read", details, {
+          success: false,
+          errorMessage: errorText(error),
+        });
+        throw error;
+      }
+    },
+
+    resolveKeyRefs: async (key, passphrase) => {
+      const details = "resolved key references";
+      try {
+        await assertCapability(pluginId, "credentials:read", declared);
+        const userId = actingUser();
+        const { resolveKeyReferences } =
+          await import("../hosts/stored-ssh-key.js");
+        const resolved = await resolveKeyReferences(userId, key, passphrase);
+        await audit("credentials_resolve_key", details, { success: true });
+        return resolved;
+      } catch (error) {
+        await audit("credentials_resolve_key", details, {
+          success: false,
+          errorMessage: errorText(error),
+        });
+        throw error;
+      }
+    },
+
+    registerSecretResolver: (scheme, resolve, options) => {
       if (!declared.includes("auth:provide")) {
         throw capabilityRefused(pluginId, "auth:provide");
       }
@@ -222,6 +426,7 @@ export function createPluginCredentials({
             throw error;
           }
         },
+        { unlockTab: unlockTabOf(options) },
       );
       bag.add(dispose, `secret scheme "${scheme}"`);
     },
@@ -253,6 +458,27 @@ export function createPluginCredentials({
         throw new Error(
           "ctx.credentials needs an acting user: call it inside a request or ctx.asUser",
         );
+      }
+
+      // Same connect policy as SSH: a remote desktop login is a session.
+      const { assertConnectAllowed } =
+        await import("../hosts/connect-policy.js");
+      try {
+        await assertConnectAllowed({
+          userId,
+          hostId,
+          protocol: String(protocol),
+          purpose: "desktop-login",
+          profile: "desktop",
+          interactive: true,
+          origin: pluginId,
+        });
+      } catch (error) {
+        await audit("credentials_read", details, {
+          success: false,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
       }
 
       const { createCurrentHostResolutionRepository } =

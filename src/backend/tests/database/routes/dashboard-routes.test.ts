@@ -34,15 +34,12 @@ vi.mock("../../../utils/data-crypto.js", () => ({
   },
 }));
 
-vi.mock("../../../database/repositories/factory.js", () => ({
-  createCurrentRecentActivityRepository: () => ({
-    listByUserId: async () => state.activity,
+vi.mock("../../../plugins/activity-provider.js", () => ({
+  recentActivity: {
+    list: async () => state.activity,
     deleteByUserId: async () => {},
-  }),
-}));
-
-vi.mock("../../../services/recent-activity.js", () => ({
-  recordRecentActivity: async () => state.recordResult,
+    record: async () => state.recordResult,
+  },
 }));
 
 const { default: dashboardRoutes } =
@@ -115,6 +112,17 @@ describe("POST /dashboard/activity/log", () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ message: "Activity logged", id: 1 });
+  });
+
+  it("answers 200 without logging when no plugin keeps recent activity", async () => {
+    state.recordResult = { status: "unavailable" };
+    const res = await fetch(`${baseUrl}/dashboard/activity/log`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "terminal", hostId: 1, hostName: "prod" }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).id).toBeUndefined();
   });
 
   it("404s a host the user cannot access", async () => {

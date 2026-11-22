@@ -97,6 +97,8 @@ const { getPasswordLoginStatus } = await import("../../auth/core-auth.js");
 const { registerLoginMethod, registerSecondFactor } =
   await import("../../auth/registry.js");
 const { loginRateLimiter } = await import("../../utils/login-rate-limiter.js");
+const { provideAuthPolicy, clearAuthPolicies, SECOND_FACTOR_SETUP } =
+  await import("../../auth/policy.js");
 
 const PASSWORD = "correct-horse";
 // Stands in for the totp plugin's factor: core only sees the registration.
@@ -137,6 +139,7 @@ beforeEach(() => {
   delete process.env.ALLOW_PASSWORD_LOGIN;
   disposeTotp?.();
   registerTotpFixture();
+  clearAuthPolicies();
 });
 
 async function passwordLogin(body: Record<string, unknown>, headers = {}) {
@@ -191,6 +194,26 @@ describe("password login through the pipeline", () => {
         success: true,
       }),
     ]);
+  });
+
+  it("tells listeners which device and method signed in", async () => {
+    const { emitInternalEvent } =
+      await import("../../hosts/internal-events.js");
+    vi.mocked(emitInternalEvent).mockClear();
+    addUser();
+    await passwordLogin({ username: "alice", password: PASSWORD });
+    expect(emitInternalEvent).toHaveBeenCalledWith(
+      "user_login",
+      "u1",
+      undefined,
+      expect.objectContaining({
+        username: "alice",
+        ipAddress: "10.0.0.1",
+        methodId: "password",
+        deviceType: "web",
+        deviceInfo: expect.any(String),
+      }),
+    );
   });
 
   it("remembers the session for 30 days and follows session_timeout_hours otherwise", async () => {
@@ -696,6 +719,134 @@ describe("external identities", () => {
     expect(h.state.users.get("u9")!.isAdmin).toBe(false);
   });
 
+  it("follows a role map that names admin through the admin flag", async () => {
+    addUser({ id: "u9", username: "Alice", passwordHash: "", isAdmin: false });
+    h.state.identities.push({
+      id: 1,
+      userId: "u9",
+      providerId: "3",
+      subject: "sub-1",
+      email: null,
+    });
+    await runLogin(
+      fakeRequest() as never,
+      { ...external, roleSync: { desired: ["admin"], managed: ["admin"] } },
+      { methodId: "oidc", rememberMe: false },
+    );
+    expect(h.state.users.get("u9")!.isAdmin).toBe(true);
+  });
+
+  it("makes a new SSO account wait for approval when that is on", async () => {
+    addUser({ id: "first", username: "first", passwordHash: "hash" });
+    h.state.settings.set("external_auto_provision", "true");
+    h.state.settings.set("external_signup_approval", "true");
+    await expect(
+      runLogin(fakeRequest() as never, external, {
+        methodId: "oidc",
+        rememberMe: false,
+      }),
+    ).rejects.toMatchObject({ code: "account_pending" });
+    const created = [...h.state.users.values()].find((u) => u.id !== "first");
+    expect(created).toMatchObject({ disabledReason: "pending_approval" });
+  });
+
+  it("links a first sign in to an account a provisioning plugin made", async () => {
+    addUser({ id: "first", username: "first", passwordHash: "hash" });
+    addUser({
+      id: "m1",
+      username: "alice@example.com",
+      passwordHash: "",
+      email: "a@example.com",
+      managedBy: "scim",
+    });
+    const result = await runLogin(fakeRequest() as never, external, {
+      methodId: "oidc",
+      rememberMe: false,
+    });
+    expect(result.kind).toBe("session");
+    expect(h.state.users.size).toBe(2);
+    expect(h.state.identities).toEqual([
+      expect.objectContaining({
+        userId: "m1",
+        providerId: "3",
+        subject: "sub-1",
+      }),
+    ]);
+    // The plugin owns the username, so sign in does not rename it.
+    expect(h.state.users.get("m1")!.username).toBe("alice@example.com");
+    expect(h.state.audits).toContainEqual(
+      expect.objectContaining({
+        action: "link_external_identity",
+        resourceId: "m1",
+      }),
+    );
+  });
+
+  it("never claims an account with a password, a linked sign in or no manager", async () => {
+    addUser({ id: "first", username: "first", passwordHash: "hash" });
+    addUser({
+      id: "local",
+      username: "alice",
+      passwordHash: "hash",
+      email: "a@example.com",
+      managedBy: "scim",
+    });
+    await expect(
+      runLogin(fakeRequest() as never, external, {
+        methodId: "oidc",
+        rememberMe: false,
+      }),
+    ).rejects.toMatchObject({ code: "registration_disabled" });
+
+    Object.assign(h.state.users.get("local")!, {
+      passwordHash: "",
+      managedBy: null,
+    });
+    await expect(
+      runLogin(fakeRequest() as never, external, {
+        methodId: "oidc",
+        rememberMe: false,
+      }),
+    ).rejects.toMatchObject({ code: "registration_disabled" });
+
+    Object.assign(h.state.users.get("local")!, { managedBy: "scim" });
+    h.state.identities.push({
+      id: 1,
+      userId: "local",
+      providerId: "ldap:1",
+      subject: "alice",
+      email: null,
+    });
+    await expect(
+      runLogin(fakeRequest() as never, external, {
+        methodId: "oidc",
+        rememberMe: false,
+      }),
+    ).rejects.toMatchObject({ code: "registration_disabled" });
+    expect(h.state.identities).toHaveLength(1);
+  });
+
+  it("refuses a turned off account", async () => {
+    addUser({ id: "u9", username: "Alice", passwordHash: "" });
+    Object.assign(h.state.users.get("u9")!, {
+      disabledAt: "2026-11-16T00:00:00.000Z",
+      disabledReason: "admin",
+    });
+    h.state.identities.push({
+      id: 1,
+      userId: "u9",
+      providerId: "3",
+      subject: "sub-1",
+      email: null,
+    });
+    await expect(
+      runLogin(fakeRequest() as never, external, {
+        methodId: "oidc",
+        rememberMe: false,
+      }),
+    ).rejects.toMatchObject({ code: "account_disabled" });
+  });
+
   it("skips enrolled second factors for SSO users when the setting is off", async () => {
     addUser({
       id: "u9",
@@ -882,6 +1033,27 @@ describe("lockout guard", () => {
     }
   });
 
+  it("does not count a passkey method, which only helps people who registered one", async () => {
+    h.state.settings.set("allow_password_login", "false");
+    const dispose = registerLoginMethod({
+      id: "fixture-passkey",
+      pluginId: "fixture",
+      labelKey: "fixture",
+      kind: "webauthn",
+      describe: async () => [{ id: "passkey", label: "", enabled: true }],
+      options: async () => ({ publicKey: { challenge: "c" } }),
+      verify: async () => ({ kind: "user", userId: "u1" }),
+    });
+    try {
+      expect(await getPasswordLoginStatus()).toEqual({
+        allowed: true,
+        forced: true,
+      });
+    } finally {
+      dispose();
+    }
+  });
+
   it("counts trusted proxy login as another way in", async () => {
     h.state.settings.set("allow_password_login", "false");
     h.trustedProxy = true;
@@ -889,5 +1061,221 @@ describe("lockout guard", () => {
       allowed: false,
       forced: false,
     });
+  });
+});
+
+describe("login policy", () => {
+  function enrolTotp() {
+    h.state.factors.push({ userId: "u1", pluginId: "totp", factorId: "totp" });
+  }
+
+  function trustedLogin(token: string) {
+    const req = fakeRequest({
+      body: { username: "alice", password: PASSWORD },
+      cookies: { [TRUST_DEVICE_COOKIE]: token },
+    });
+    return runLogin(
+      req as never,
+      { kind: "user", userId: "u1" },
+      { methodId: "password", rememberMe: true },
+    );
+  }
+
+  it("hands the provider the user's factors and the device", async () => {
+    addUser();
+    enrolTotp();
+    const evaluate = vi.fn(() => ({}));
+    provideAuthPolicy("policy", { evaluate });
+    await passwordLogin({ username: "alice", password: PASSWORD });
+    expect(evaluate).toHaveBeenCalledWith({
+      userId: "u1",
+      methodId: "password",
+      external: false,
+      deviceType: "web",
+      trustedDevice: false,
+      mfaSatisfied: false,
+      secondFactors: [{ id: "totp", pluginId: "totp", enrolled: true }],
+    });
+  });
+
+  it("turns remember me off and caps the session", async () => {
+    addUser();
+    provideAuthPolicy("policy", {
+      evaluate: () => ({ allowRememberDevice: false, maxSessionSeconds: 600 }),
+    });
+    const res = await passwordLogin({
+      username: "alice",
+      password: PASSWORD,
+      rememberMe: true,
+    });
+    expect(h.manager.generateJWTToken).toHaveBeenCalledWith(
+      "u1",
+      expect.objectContaining({ rememberMe: false, maxAgeSeconds: 600 }),
+    );
+    expect((res.cookies[0].options as { maxAge: number }).maxAge).toBe(
+      600 * 1000,
+    );
+  });
+
+  it("stores the idle timeout on the session", async () => {
+    addUser();
+    provideAuthPolicy("policy", {
+      evaluate: () => ({ idleTimeoutSeconds: 900 }),
+    });
+    provideAuthPolicy("other", {
+      evaluate: () => ({ idleTimeoutSeconds: 300 }),
+    });
+    await passwordLogin({ username: "alice", password: PASSWORD });
+    expect(h.manager.generateJWTToken).toHaveBeenCalledWith(
+      "u1",
+      expect.objectContaining({ idleTimeoutSeconds: 300 }),
+    );
+  });
+
+  it("ignores a remembered device when remember me is off", async () => {
+    addUser();
+    enrolTotp();
+    const token = "c".repeat(64);
+    h.state.trusted.add(`u1:${hashTrustToken(token)}`);
+    provideAuthPolicy("policy", {
+      evaluate: () => ({ allowRememberDevice: false }),
+    });
+    const result = await trustedLogin(token);
+    expect(result.kind).toBe("second-factor");
+  });
+
+  it("asks for the factor on a remembered device with always, not with new-device", async () => {
+    addUser();
+    enrolTotp();
+    const token = "d".repeat(64);
+    h.state.trusted.add(`u1:${hashTrustToken(token)}`);
+
+    const remove = provideAuthPolicy("policy", {
+      evaluate: () => ({ secondFactor: "always" }),
+    });
+    expect((await trustedLogin(token)).kind).toBe("second-factor");
+    remove();
+
+    provideAuthPolicy("policy", {
+      evaluate: () => ({ secondFactor: "new-device" }),
+    });
+    expect((await trustedLogin(token)).kind).toBe("session");
+  });
+
+  it("gives a user without a factor a setup only session", async () => {
+    addUser();
+    provideAuthPolicy("policy", {
+      evaluate: () => ({ secondFactor: "always" }),
+    });
+    const res = await passwordLogin({ username: "alice", password: PASSWORD });
+    expect(h.manager.generateJWTToken).toHaveBeenCalledWith(
+      "u1",
+      expect.objectContaining({ restriction: SECOND_FACTOR_SETUP }),
+    );
+    expect(res.body).toMatchObject({ restriction: SECOND_FACTOR_SETUP });
+  });
+
+  it("lets a verified passkey satisfy a required factor", async () => {
+    addUser();
+    provideAuthPolicy("policy", {
+      evaluate: () => ({ secondFactor: "always" }),
+    });
+    const result = await runLogin(
+      fakeRequest() as never,
+      { kind: "user", userId: "u1", mfaSatisfied: true },
+      { methodId: "passkey", rememberMe: false },
+    );
+    expect(result.kind).toBe("session");
+    expect(h.manager.generateJWTToken).toHaveBeenCalledWith(
+      "u1",
+      expect.objectContaining({ restriction: null }),
+    );
+  });
+
+  it("runs factors for SSO logins when the policy requires one", async () => {
+    const dispose = registerLoginMethod({
+      id: "oidc",
+      pluginId: "sso",
+      labelKey: "loginWithSso",
+      kind: "redirect",
+      external: true,
+    });
+    try {
+      addUser({ passwordHash: "" });
+      enrolTotp();
+      h.state.identities.push({
+        id: 1,
+        userId: "u1",
+        providerId: "3",
+        subject: "sub-1",
+        email: null,
+      });
+      provideAuthPolicy("policy", {
+        evaluate: (input) => (input.external ? { secondFactor: "always" } : {}),
+      });
+      const result = await runLogin(
+        fakeRequest() as never,
+        {
+          kind: "external",
+          provider: "3",
+          subject: "sub-1",
+          email: null,
+          name: "Alice",
+        } as never,
+        { methodId: "oidc", rememberMe: false },
+      );
+      expect(result.kind).toBe("second-factor");
+    } finally {
+      dispose();
+    }
+  });
+
+  it("keeps the policy for the factor step: no trusted device, same cap", async () => {
+    addUser();
+    enrolTotp();
+    provideAuthPolicy("policy", {
+      evaluate: () => ({ allowRememberDevice: false, maxSessionSeconds: 1200 }),
+    });
+    const first = await passwordLogin({
+      username: "alice",
+      password: PASSWORD,
+      rememberMe: true,
+    });
+    const res = fakeResponse();
+    await verifySecondFactorAndRespond(
+      fakeRequest({
+        body: {
+          temp_token: (first.body as { temp_token: string }).temp_token,
+          totp_code: TOTP_CODE,
+          rememberMe: true,
+        },
+      }) as never,
+      res as never,
+      "totp",
+    );
+    expect(res.statusCode).toBe(200);
+    expect(res.cookies.map((c) => c.name)).toEqual(["jwt"]);
+    expect(h.state.trustedAdded).toEqual([]);
+    expect(h.manager.generateJWTToken).toHaveBeenLastCalledWith(
+      "u1",
+      expect.objectContaining({ rememberMe: false, maxAgeSeconds: 1200 }),
+    );
+  });
+
+  it("refuses the login when a provider throws", async () => {
+    addUser();
+    provideAuthPolicy("policy", {
+      evaluate: () => {
+        throw new Error("boom");
+      },
+    });
+    await expect(
+      runLogin(
+        fakeRequest() as never,
+        { kind: "user", userId: "u1" },
+        { methodId: "password", rememberMe: false },
+      ),
+    ).rejects.toMatchObject({ status: 503, code: "auth_policy_unavailable" });
+    expect(h.state.audits).toEqual([]);
   });
 });

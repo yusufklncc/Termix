@@ -21,19 +21,51 @@ function getOrigin(url) {
   }
 }
 
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/;
+
+// Only http(s) origins, written the way URL writes them.
+function cleanOrigin(value) {
+  try {
+    const url = new URL(String(value));
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function cleanHeaders(headers) {
+  if (!Array.isArray(headers)) return [];
+  return headers
+    .filter(
+      (h) =>
+        h &&
+        typeof h.name === "string" &&
+        typeof h.value === "string" &&
+        HEADER_NAME.test(h.name) &&
+        !/[\r\n\0]/.test(h.value) &&
+        h.value.length <= 8192,
+    )
+    .slice(0, 32)
+    .map((h) => ({ name: h.name, value: h.value }));
+}
+
 function setLinkedServer(config) {
-  if (!config || !config.origin) {
+  const origin = config && config.origin ? cleanOrigin(config.origin) : null;
+  if (!origin) {
     linked = null;
     return;
   }
   linked = {
-    origin: config.origin,
+    origin,
     serverUrl: config.serverUrl || config.origin,
     token: config.token || null,
-    headers: Array.isArray(config.headers) ? config.headers : [],
+    headers: cleanHeaders(config.headers),
     basicAuth:
       config.basicAuth && config.basicAuth.username ? config.basicAuth : null,
     allowInvalidCertificate: !!config.allowInvalidCertificate,
+    clientCert:
+      config.clientCert && config.clientCert.pfx ? config.clientCert : null,
   };
 }
 
@@ -43,6 +75,16 @@ function getLinkedServer() {
 
 function isLinkedOrigin(url) {
   return !!linked && getOrigin(url) === linked.origin;
+}
+
+// The PFX of the link's client certificate, for TLS this process makes itself
+// to the linked origin. Null for any other origin.
+function clientCertOptionsFor(url) {
+  if (!isLinkedOrigin(url) || !linked.clientCert) return {};
+  return {
+    pfx: Buffer.from(linked.clientCert.pfx, "base64"),
+    passphrase: linked.clientCert.passphrase || "",
+  };
 }
 
 function basicAuthValue(basicAuth) {
@@ -99,6 +141,7 @@ module.exports = {
   setLinkedServer,
   getLinkedServer,
   isLinkedOrigin,
+  clientCertOptionsFor,
   applyLinkHeaders,
   linkedRequestHeaders,
   answerLogin,

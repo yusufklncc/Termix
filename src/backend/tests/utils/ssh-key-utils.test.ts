@@ -10,6 +10,8 @@ import {
   isPrivateKeyPassphraseError,
   getFriendlyKeyTypeName,
   validateKeyPair,
+  isSecurityKeyFile,
+  clearUnlockedKeyCache,
 } from "../../utils/ssh-key-utils.js";
 
 const { parsePrivateKey } = sshpk;
@@ -222,5 +224,71 @@ describe("PKCS#8 runtime key normalization", () => {
         "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----",
       ),
     ).toThrow();
+  });
+});
+
+describe("encrypted OpenSSH keys", () => {
+  const key = sshpk.generatePrivateKey("ed25519");
+  const encrypted = key.toString("openssh", { passphrase: "pw" }).trim();
+
+  it("unlocks once and hands ssh2 a key that needs no passphrase", () => {
+    clearUnlockedKeyCache();
+    const first = preparePrivateKeyForSSH2(encrypted, "pw");
+    const parsed = ssh2.utils.parseKey(first);
+    expect(parsed).not.toBeInstanceOf(Error);
+    expect(parsePrivateKey(first.toString()).fingerprint().toString()).toBe(
+      key.fingerprint().toString(),
+    );
+    expect(preparePrivateKeyForSSH2(encrypted, "pw").toString()).toBe(
+      first.toString(),
+    );
+  });
+
+  it("leaves the key locked for a wrong or missing passphrase", () => {
+    clearUnlockedKeyCache();
+    expect(preparePrivateKeyForSSH2(encrypted, "wrong").toString()).toBe(
+      encrypted,
+    );
+    expect(preparePrivateKeyForSSH2(encrypted).toString()).toBe(encrypted);
+  });
+});
+
+describe("security key files", () => {
+  const str = (v: string | Buffer) => {
+    const b = Buffer.from(v);
+    const l = Buffer.alloc(4);
+    l.writeUInt32BE(b.length);
+    return Buffer.concat([l, b]);
+  };
+  const skFile = (type: string) => {
+    const body = Buffer.concat([
+      Buffer.from("openssh-key-v1\u0000"),
+      str("none"),
+      str("none"),
+      str(""),
+      Buffer.from([0, 0, 0, 1]),
+      str(Buffer.concat([str(type), str(Buffer.alloc(32, 1)), str("ssh:")])),
+      str(Buffer.alloc(16)),
+    ]).toString("base64");
+    return `-----BEGIN OPENSSH PRIVATE KEY-----
+${body}
+-----END OPENSSH PRIVATE KEY-----`;
+  };
+
+  it("detects sk key files", () => {
+    expect(isSecurityKeyFile(skFile("sk-ssh-ed25519@openssh.com"))).toBe(true);
+    expect(
+      isSecurityKeyFile(skFile("sk-ecdsa-sha2-nistp256@openssh.com")),
+    ).toBe(true);
+  });
+
+  it("ignores normal keys", () => {
+    expect(isSecurityKeyFile(ED25519_PRIVATE)).toBe(false);
+  });
+
+  it("explains how to use a security key instead of failing to decode", () => {
+    expect(() =>
+      preparePrivateKeyForSSH2(skFile("sk-ssh-ed25519@openssh.com")),
+    ).toThrow("ssh-add");
   });
 });

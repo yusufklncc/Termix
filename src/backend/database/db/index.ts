@@ -1,4 +1,6 @@
 import { repairSnippetsColumns } from "../../upgrade/snippets-schema-migration.js";
+import { repairSessionRecordingColumns } from "../../upgrade/session-recording-schema-migration.js";
+import { repairSyncIdColumns } from "../../upgrade/sync-id-schema-migration.js";
 import { getErrorMessage } from "../../utils/error-message.js";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
@@ -14,6 +16,7 @@ import {
   migrateLegacySharedHostAuthOverrides,
 } from "../../utils/shared-host-auth-override-migration.js";
 import { DatabaseSaveTrigger } from "../../utils/database-save-trigger.js";
+import { saveSnapshot, writeFileAtomic } from "./snapshot-save.js";
 import { migrateAuditRetention } from "../../utils/audit-retention-migration.js";
 import { createPerformanceIndexes } from "./performance-indexes.js";
 import {
@@ -25,6 +28,8 @@ import { SYSTEM_ROLE_DEFAULTS } from "../../utils/permission-catalog.js";
 import { connectRemoteDatabase } from "./connect.js";
 import { runRemoteMigrations } from "./migrate.js";
 import { assertNotPre29Database } from "./upgrade-guard.js";
+import { isEmbeddedBackend } from "../../utils/embedded-host.js";
+import { syncIdIndexStatements } from "./sync-id-index.js";
 import {
   LEGACY_USERNAME_PLACEHOLDER_UPDATES,
   legacySudoMoves,
@@ -236,13 +241,31 @@ async function initializeCompleteDatabase(): Promise<void> {
         .get(name),
   );
 
+  // A dev build of 26.11.2 made this cache table keyed by user alone. It
+  // only holds what the next page load sends again, so it is rebuilt.
+  const frameColumns = sqlite
+    .prepare("PRAGMA table_info(frame_registrations)")
+    .all() as Array<{ name: string }>;
+  if (
+    frameColumns.length > 0 &&
+    !frameColumns.some((column) => column.name === "plugin_id")
+  ) {
+    sqlite.exec("DROP TABLE frame_registrations");
+  }
+
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         username TEXT NOT NULL,
         password_hash TEXT NOT NULL,
         is_admin INTEGER NOT NULL DEFAULT 0,
-        registered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        registered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        display_name TEXT,
+        email TEXT,
+        disabled_at TEXT,
+        disabled_reason TEXT,
+        last_login_at TEXT,
+        managed_by TEXT
     );
 
     CREATE TABLE IF NOT EXISTS settings (
@@ -370,17 +393,6 @@ async function initializeCompleteDatabase(): Promise<void> {
         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
     );
 
-    CREATE TABLE IF NOT EXISTS recent_activity (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT NOT NULL,
-        type TEXT NOT NULL,
-        host_id INTEGER NOT NULL,
-        host_name TEXT,
-        timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
-        FOREIGN KEY (host_id) REFERENCES ssh_data (id) ON DELETE CASCADE
-    );
-
     CREATE TABLE IF NOT EXISTS host_access (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         host_id INTEGER NOT NULL,
@@ -435,8 +447,26 @@ async function initializeCompleteDatabase(): Promise<void> {
         success INTEGER NOT NULL,
         error_message TEXT,
         timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        prev_hash TEXT,
+        hash TEXT,
         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
     );
+
+    CREATE TABLE IF NOT EXISTS admin_holds (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        requested_by TEXT REFERENCES users (id) ON DELETE SET NULL,
+        requested_by_name TEXT NOT NULL,
+        requested_at TEXT NOT NULL,
+        runs_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        decided_by TEXT,
+        decided_at TEXT,
+        error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_admin_holds_status_runs ON admin_holds (status, runs_at);
 
     CREATE TABLE IF NOT EXISTS credential_access (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -495,6 +525,19 @@ async function initializeCompleteDatabase(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_folder_access_owner_folder ON folder_access (owner_user_id, folder);
 
+    CREATE TABLE IF NOT EXISTS shared_folder_auth_overrides (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        folder TEXT NOT NULL,
+        protocol TEXT NOT NULL DEFAULT 'ssh',
+        credential_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+        FOREIGN KEY (credential_id) REFERENCES ssh_credentials (id) ON DELETE CASCADE
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS shared_folder_auth_overrides_user_folder_protocol_unique ON shared_folder_auth_overrides (user_id, folder, protocol);
+
     CREATE TABLE IF NOT EXISTS plugins (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -509,6 +552,7 @@ async function initializeCompleteDatabase(): Promise<void> {
         auto_update INTEGER NOT NULL DEFAULT 0,
         pinned_version TEXT,
         channel TEXT NOT NULL DEFAULT 'stable',
+        run_unisolated INTEGER NOT NULL DEFAULT 0,
         manifest_json TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_plugins_registry_id ON plugins (registry_id);
@@ -597,6 +641,70 @@ async function initializeCompleteDatabase(): Promise<void> {
         UNIQUE (role_name, permission)
     );
 
+    CREATE TABLE IF NOT EXISTS operation_runs (
+      id TEXT PRIMARY KEY,
+      action_id TEXT NOT NULL,
+      action_version INTEGER NOT NULL DEFAULT 1,
+      plugin_id TEXT NOT NULL,
+      plugin_version TEXT NOT NULL,
+      user_id TEXT REFERENCES users (id) ON DELETE SET NULL,
+      username TEXT NOT NULL,
+      origin TEXT NOT NULL,
+      host_id INTEGER,
+      host_name TEXT,
+      batch_id TEXT,
+      dry_run INTEGER NOT NULL DEFAULT 0,
+      risk TEXT NOT NULL,
+      status TEXT NOT NULL,
+      summary TEXT,
+      changed INTEGER,
+      input TEXT,
+      sealed_input TEXT,
+      output TEXT,
+      undo_input TEXT,
+      error TEXT,
+      error_code TEXT,
+      undo_of TEXT,
+      idempotency_key TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_operation_runs_created ON operation_runs (created_at);
+    CREATE INDEX IF NOT EXISTS idx_operation_runs_user_created ON operation_runs (user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_operation_runs_host_created ON operation_runs (host_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_operation_runs_status ON operation_runs (status);
+    CREATE INDEX IF NOT EXISTS idx_operation_runs_batch ON operation_runs (batch_id);
+
+    CREATE TABLE IF NOT EXISTS operation_approvals (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES operation_runs (id) ON DELETE CASCADE,
+      requested_by TEXT,
+      reason TEXT,
+      allow_self INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL,
+      decided_by TEXT,
+      comment TEXT,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      decided_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_operation_approvals_status ON operation_approvals (status, expires_at);
+    CREATE INDEX IF NOT EXISTS idx_operation_approvals_run ON operation_approvals (run_id);
+
+    CREATE TABLE IF NOT EXISTS operation_events (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL,
+      plugin_id TEXT NOT NULL,
+      host_id INTEGER,
+      severity TEXT,
+      payload TEXT,
+      run_id TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_operation_events_created ON operation_events (created_at);
+    CREATE INDEX IF NOT EXISTS idx_operation_events_host_created ON operation_events (host_id, created_at);
+
     CREATE TABLE IF NOT EXISTS api_keys (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
@@ -609,6 +717,22 @@ async function initializeCompleteDatabase(): Promise<void> {
         is_active INTEGER NOT NULL DEFAULT 1,
         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS user_invites (
+        id TEXT PRIMARY KEY,
+        token_hash TEXT NOT NULL,
+        note TEXT,
+        role_ids TEXT,
+        make_admin INTEGER NOT NULL DEFAULT 0,
+        max_uses INTEGER NOT NULL DEFAULT 1,
+        uses INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        expires_at TEXT NOT NULL,
+        revoked_at TEXT,
+        FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE SET NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_user_invites_token_hash ON user_invites (token_hash);
 
     CREATE TABLE IF NOT EXISTS user_open_tabs (
         id TEXT PRIMARY KEY,
@@ -655,6 +779,19 @@ async function initializeCompleteDatabase(): Promise<void> {
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS frame_registrations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        client TEXT NOT NULL,
+        plugin_id TEXT NOT NULL,
+        data TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_frame_registrations_user_client_plugin
+        ON frame_registrations (user_id, client, plugin_id);
 
 `);
 
@@ -959,6 +1096,9 @@ const enforceUniqueUsernames = () => {
 
 const migrateSchema = () => {
   repairSnippetsColumns(sqlite);
+  repairSessionRecordingColumns(sqlite);
+  repairSyncIdColumns(sqlite);
+  addColumnIfNotExists("api_keys", "scopes", "TEXT");
   addColumnIfNotExists("user_preferences", "theme", "TEXT");
   addColumnIfNotExists("user_preferences", "font_size", "TEXT");
   addColumnIfNotExists("user_preferences", "accent_color", "TEXT");
@@ -985,6 +1125,8 @@ const migrateSchema = () => {
   addColumnIfNotExists("user_preferences", "compact_host_view", "INTEGER");
   addColumnIfNotExists("user_preferences", "status_color_scheme", "TEXT");
   addColumnIfNotExists("user_preferences", "custom_keybindings", "TEXT");
+  addColumnIfNotExists("user_preferences", "layout_id", "TEXT");
+  addColumnIfNotExists("user_preferences", "theme_id", "TEXT");
 
   addColumnIfNotExists("users", "is_admin", "INTEGER NOT NULL DEFAULT 0");
 
@@ -1029,7 +1171,25 @@ const migrateSchema = () => {
     }
   }
   enforceUniqueUsernames();
+  addColumnIfNotExists("users", "display_name", "TEXT");
+  addColumnIfNotExists("users", "email", "TEXT");
+  addColumnIfNotExists("users", "disabled_at", "TEXT");
+  addColumnIfNotExists("users", "disabled_reason", "TEXT");
+  addColumnIfNotExists("users", "last_login_at", "TEXT");
+  addColumnIfNotExists("users", "managed_by", "TEXT");
+  try {
+    sqlite.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (email)",
+    );
+  } catch (error) {
+    databaseLogger.warn("Failed to index users.email", {
+      operation: "schema_migration",
+      error: getErrorMessage(error),
+    });
+  }
   addColumnIfNotExists("sessions", "external_session_ref", "TEXT");
+  addColumnIfNotExists("sessions", "restriction", "TEXT");
+  addColumnIfNotExists("sessions", "idle_timeout", "INTEGER");
 
   addColumnIfNotExists("ssh_data", "name", "TEXT");
   addColumnIfNotExists("ssh_data", "folder", "TEXT");
@@ -1323,6 +1483,8 @@ const migrateSchema = () => {
     { column: "ssh_port", sql: "ALTER TABLE ssh_data ADD COLUMN ssh_port INTEGER DEFAULT 22" },
     { column: "connection_origin", sql: "ALTER TABLE ssh_data ADD COLUMN connection_origin TEXT" },
     { column: "parent_host_id", sql: "ALTER TABLE ssh_data ADD COLUMN parent_host_id INTEGER REFERENCES ssh_data(id) ON DELETE SET NULL" },
+    { column: "color", sql: "ALTER TABLE ssh_data ADD COLUMN color TEXT" },
+    { column: "icon", sql: "ALTER TABLE ssh_data ADD COLUMN icon TEXT" },
   ];
 
   for (const migration of sshDataMigrations) {
@@ -1634,6 +1796,13 @@ const migrateSchema = () => {
   addColumnIfNotExists("plugins", "pinned_version", "TEXT");
   addColumnIfNotExists("plugins", "channel", "TEXT NOT NULL DEFAULT 'stable'");
   addColumnIfNotExists(
+    "plugins",
+    "run_unisolated",
+    "INTEGER NOT NULL DEFAULT 0",
+  );
+  addColumnIfNotExists("audit_logs", "prev_hash", "TEXT");
+  addColumnIfNotExists("audit_logs", "hash", "TEXT");
+  addColumnIfNotExists(
     "plugin_permission_grants",
     "source",
     "TEXT NOT NULL DEFAULT 'admin'",
@@ -1655,9 +1824,12 @@ const migrateSchema = () => {
           { operation: "sync_id_backfill", table },
         );
       }
-      sqlite.exec(
-        `CREATE UNIQUE INDEX IF NOT EXISTS idx_${table}_sync_id ON ${table}(sync_id)`,
-      );
+      for (const statement of syncIdIndexStatements(
+        table,
+        isEmbeddedBackend(),
+      )) {
+        sqlite.exec(statement);
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       databaseLogger.warn(
@@ -1678,6 +1850,11 @@ const migrateSchema = () => {
   addColumnIfNotExists("ssh_data", "shared_source", "TEXT");
   addColumnIfNotExists("ssh_data", "ssh_options", "TEXT");
   addColumnIfNotExists("ssh_credentials", "shared_source", "TEXT");
+  addColumnIfNotExists(
+    "ssh_credentials",
+    "local_only",
+    "INTEGER NOT NULL DEFAULT 0",
+  );
   addColumnIfNotExists(
     "ssh_folders",
     "local_only",
@@ -1802,39 +1979,26 @@ function vacuumIfFreelistBloated(): void {
 }
 
 async function saveMemoryDatabaseToFile(): Promise<void> {
-  if (!memoryDatabase) return;
+  const database = memoryDatabase;
+  if (!database) return;
 
-  try {
-    const buffer = memoryDatabase.serialize();
-
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-
-    try {
-      memoryDatabase
-        .prepare("SELECT COUNT(*) as count FROM sessions")
-        .get() as { count: number };
-    } catch {
-      // expected - sessions table may not exist yet
-    }
-
-    if (enableFileEncryption) {
-      await DatabaseFileEncryption.encryptDatabaseFromBuffer(
-        buffer,
-        encryptedDbPath,
-      );
-    } else {
-      fs.writeFileSync(dbPath, buffer);
-    }
-
-    DatabaseSaveTrigger.markClean();
-  } catch (error) {
-    databaseLogger.error("Failed to save in-memory database", error, {
-      operation: "memory_db_save_failed",
-      enableFileEncryption,
-    });
-  }
+  await saveSnapshot({
+    serialize: () => database.serialize(),
+    encrypted: enableFileEncryption,
+    write: async (buffer) => {
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+      if (enableFileEncryption) {
+        await DatabaseFileEncryption.encryptDatabaseFromBuffer(
+          buffer,
+          encryptedDbPath,
+        );
+      } else {
+        await writeFileAtomic(dbPath, buffer);
+      }
+    },
+  });
 }
 
 async function handlePostInitFileEncryption() {
@@ -1843,12 +2007,15 @@ async function handlePostInitFileEncryption() {
       DatabaseSaveTrigger.initialize(saveMemoryDatabaseToFile);
 
       if (enableFileEncryption) {
-        await saveMemoryDatabaseToFile();
+        await saveMemoryDatabaseToFile().catch(() => {
+          // Logged by the save; the periodic save below tries again.
+        });
       }
 
       setInterval(() => {
         if (DatabaseSaveTrigger.isDirty) {
-          saveMemoryDatabaseToFile();
+          // Through the trigger so it waits for any save already running.
+          void DatabaseSaveTrigger.forceSave("periodic_save").catch(() => {});
         }
       }, 5 * 60 * 1000);
     }
@@ -2061,21 +2228,12 @@ async function initializeRemoteDatabase(
 
 export { initializeDatabase };
 
-async function cleanupDatabase() {
-  if (memoryDatabase) {
-    try {
-      await saveMemoryDatabaseToFile();
-    } catch (error) {
-      databaseLogger.error(
-        "Failed to save in-memory database before shutdown",
-        error,
-        {
-          operation: "shutdown_save_failed",
-        },
-      );
-    }
-  }
-
+/**
+ * Closes SQLite and clears temp files. Run by the backend's shutdown after its
+ * final save, never on a signal of its own: a second handler used to exit
+ * while plugins were still stopping.
+ */
+export function closeDatabase(): void {
   try {
     if (sqlite) {
       sqlite.close();
@@ -2118,22 +2276,6 @@ process.on("exit", () => {
       // expected - database may already be closed
     }
   }
-});
-
-process.on("SIGINT", async () => {
-  databaseLogger.info("Received SIGINT, cleaning up...", {
-    operation: "shutdown",
-  });
-  await cleanupDatabase();
-  process.exit(0);
-});
-
-process.on("SIGTERM", async () => {
-  databaseLogger.info("Received SIGTERM, cleaning up...", {
-    operation: "shutdown",
-  });
-  await cleanupDatabase();
-  process.exit(0);
 });
 
 let db: PortableDatabase;

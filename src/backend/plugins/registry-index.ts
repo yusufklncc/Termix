@@ -4,33 +4,53 @@
  * An index is a plain JSON file. Official and community live in
  * Termix-SSH/Termix-Registry, custom ones anywhere an admin points to.
  * Nothing in an index is trusted on its own: every download is checked
- * against the sha256 and Ed25519 signature listed for it, and the signature
- * must come from that registry's keys (built in for official and community,
- * pinned when an admin added a custom one). A tampered index can at most
- * point at a file that then fails the check.
+ * against the sha256 and Ed25519 signature listed for it. Official and
+ * community releases need a key the Termix root certified (trust-chain.ts);
+ * a custom registry's releases need the key pinned when an admin added it.
+ * A tampered index can at most point at a file that then fails the check.
  */
 
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { isIP } from "node:net";
 import path from "node:path";
 import semver from "semver";
 import {
+  isApiCompatible as satisfiesPluginApi,
+  isTermixCompatible,
   pluginDocsUrl,
   pluginFeatures,
   SUPPORTED_PLUGIN_API_VERSION,
+  LEGACY_PLUGIN_API_VERSION,
   youtubeVideoId,
 } from "@termix-ssh/plugin-sdk/manifest";
-import { safeOutboundFetch } from "../utils/safe-outbound-fetch.js";
+import { getLocalVersion } from "../utils/app-version.js";
+import {
+  isBlockedAddress,
+  safeOutboundFetch,
+} from "../utils/safe-outbound-fetch.js";
+import { fetchWithProxy, getProxyAgent } from "../utils/proxy-agent.js";
 import { pluginLogger } from "../utils/logger.js";
 import {
   COMMUNITY_PLUGIN_KEYS,
   TRUSTED_PLUGIN_KEYS,
   isPluginPublicKey,
+  legacyAllowed,
+  verifyChainSignature,
   verifyPluginArtifact,
   type TrustedPluginKey,
 } from "./trust.js";
+import type { KeyCertificate, SignatureEnvelope } from "./trust-chain.js";
 import { readArtifactManifest, sameCapabilities } from "./artifact-manifest.js";
 import { getPluginsDir } from "./paths.js";
+import {
+  checkProvenance,
+  MAX_BUNDLE_BYTES,
+  ProvenanceUnavailableError,
+  sigstoreSignatureCheck,
+  type BundleSignatureCheck,
+  type ProvenanceRecord,
+} from "./provenance.js";
 
 export const OFFICIAL_REGISTRY_ID = "official";
 export const OFFICIAL_REGISTRY_URL =
@@ -59,10 +79,16 @@ const ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 export interface RegistryVersion {
   version: string;
+  /** The API major, all that builds before engine ranges read. */
   api: string;
+  /** The manifest's engine ranges, when the index lists them. */
+  engine?: { api: string; termix: string };
   url: string;
   sha256: string;
+  /** Pre-chain signature, "" when the index has none. */
   signature: string;
+  /** Signatures by root certified keys, each with its certificate. */
+  chain: SignatureEnvelope[];
   size: number;
   capabilities: string[];
   releaseNotesUrl?: string;
@@ -71,6 +97,8 @@ export interface RegistryVersion {
   publishedAt?: string;
   /** Listed under the plugin's prereleases: a beta. */
   prerelease?: boolean;
+  /** The release's Sigstore build provenance bundle, when it has one. */
+  provenance?: { url: string };
 }
 
 export type PluginChannel = "stable" | "beta";
@@ -92,6 +120,8 @@ export interface RegistryPlugin {
   features: string[];
   /** https docs link from the index. */
   docs?: string;
+  /** The manifest's contributes keys, like layouts, themes or tabs. */
+  contributes: string[];
   /** Stable releases, newest first. */
   versions: RegistryVersion[];
   /**
@@ -138,28 +168,85 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function parseVersion(raw: unknown): RegistryVersion | null {
+const MAX_CHAIN_SIGNATURES = 4;
+
+/** Pairs each listed signature with the certificate for its key. */
+function parseChain(
+  raw: unknown,
+  certs: ReadonlyMap<string, KeyCertificate>,
+): SignatureEnvelope[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SignatureEnvelope[] = [];
+  for (const item of raw.slice(0, MAX_CHAIN_SIGNATURES)) {
+    const entry = item as Record<string, unknown> | null;
+    const keyId = asString(entry?.keyId);
+    const sig = asString(entry?.sig);
+    const cert = keyId ? certs.get(keyId) : undefined;
+    if (keyId && sig && cert) out.push({ v: 2, keyId, sig, cert });
+  }
+  return out;
+}
+
+function parseCerts(raw: unknown): Map<string, KeyCertificate> {
+  const certs = new Map<string, KeyCertificate>();
+  if (!Array.isArray(raw)) return certs;
+  for (const item of raw.slice(0, 20)) {
+    const keyId = (item as KeyCertificate | null)?.signed?.keyId;
+    if (typeof keyId === "string") certs.set(keyId, item as KeyCertificate);
+  }
+  return certs;
+}
+
+function parseVersion(
+  raw: unknown,
+  certs: ReadonlyMap<string, KeyCertificate> = new Map(),
+): RegistryVersion | null {
   if (!raw || typeof raw !== "object") return null;
   const entry = raw as Record<string, unknown>;
   const version = asString(entry.version);
   const url = asString(entry.url);
   const sha256 = asString(entry.sha256);
-  const signature = asString(entry.signature);
-  if (!version || !semver.valid(version) || !url || !sha256 || !signature) {
+  const signature = asString(entry.signature) ?? "";
+  const chain = parseChain(entry.signatures, certs);
+  if (
+    !version ||
+    !semver.valid(version) ||
+    !url ||
+    !sha256 ||
+    (!signature && chain.length === 0)
+  ) {
     return null;
   }
   if (!/^[a-f0-9]{64}$/i.test(sha256)) return null;
+  const engine = entry.engine as Record<string, unknown> | undefined;
+  const engineApi = asString(engine?.api);
+  const engineTermix = asString(engine?.termix);
   try {
     if (new URL(url).protocol !== "https:") return null;
   } catch {
     return null;
   }
+  const provenanceUrl = asString(
+    (entry.provenance as Record<string, unknown> | undefined)?.url,
+  );
+  let provenance: { url: string } | undefined;
+  try {
+    if (provenanceUrl && new URL(provenanceUrl).protocol === "https:") {
+      provenance = { url: provenanceUrl };
+    }
+  } catch {
+    // An unreadable link counts as none.
+  }
   return {
     version,
     api: asString(entry.api) ?? "",
+    ...(engineApi && engineTermix
+      ? { engine: { api: engineApi, termix: engineTermix } }
+      : {}),
     url,
     sha256: sha256.toLowerCase(),
     signature,
+    chain,
     size: typeof entry.size === "number" ? entry.size : 0,
     capabilities: Array.isArray(entry.capabilities)
       ? entry.capabilities.filter((c): c is string => typeof c === "string")
@@ -167,6 +254,7 @@ function parseVersion(raw: unknown): RegistryVersion | null {
     releaseNotesUrl: asString(entry.releaseNotesUrl),
     notes: asString(entry.notes)?.slice(0, MAX_NOTES_LENGTH),
     publishedAt: asString(entry.publishedAt),
+    ...(provenance ? { provenance } : {}),
   };
 }
 
@@ -180,6 +268,7 @@ export function parseRegistryIndex(raw: unknown): RegistryIndex {
     throw new Error("registry index has no plugins list");
   }
 
+  const certs = parseCerts(index.certs);
   const plugins: RegistryPlugin[] = [];
   for (const item of index.plugins) {
     if (!item || typeof item !== "object") continue;
@@ -188,14 +277,18 @@ export function parseRegistryIndex(raw: unknown): RegistryIndex {
     if (!id || !ID_PATTERN.test(id)) continue;
     const parseList = (list: unknown) =>
       (Array.isArray(list) ? list : [])
-        .map(parseVersion)
+        .map((raw) => parseVersion(raw, certs))
         .filter((v): v is RegistryVersion => v !== null)
         .sort((a, b) => semver.rcompare(a.version, b.version));
-    const versions = parseList(entry.versions).filter(
-      (v) => !semver.prerelease(v.version),
-    );
-    const prereleases = parseList(entry.prereleases)
+    // gated holds releases that need a newer Termix than builds which skip
+    // the engine.termix check, so only builds that check it read the list.
+    const gated = parseList(entry.gated);
+    const versions = [...parseList(entry.versions), ...gated]
+      .filter((v) => !semver.prerelease(v.version))
+      .sort((a, b) => semver.rcompare(a.version, b.version));
+    const prereleases = [...parseList(entry.prereleases), ...gated]
       .filter((v) => semver.prerelease(v.version))
+      .sort((a, b) => semver.rcompare(a.version, b.version))
       .map((v) => ({ ...v, prerelease: true }));
     if (versions.length === 0 && prereleases.length === 0) continue;
     plugins.push({
@@ -209,6 +302,14 @@ export function parseRegistryIndex(raw: unknown): RegistryIndex {
       videoId: youtubeVideoId(entry.video) ?? undefined,
       features: pluginFeatures(entry.features),
       docs: pluginDocsUrl(entry.docs) ?? undefined,
+      contributes: Array.isArray(entry.contributes)
+        ? entry.contributes
+            .filter(
+              (kind): kind is string =>
+                typeof kind === "string" && /^[A-Za-z]+$/.test(kind),
+            )
+            .slice(0, 50)
+        : [],
       versions,
       prereleases,
     });
@@ -223,21 +324,127 @@ export function parseRegistryIndex(raw: unknown): RegistryIndex {
   };
 }
 
-/** Whether this build can run a release built against `api`. */
+/**
+ * Whether this build can run a release built against `api`. API 1 releases
+ * still count: an official one runs with the admin's "Run without isolation"
+ * switch, and the loader blocks a community one with a reason.
+ */
 export function isApiCompatible(api: string): boolean {
   const major = semver.coerce(api)?.major;
-  return major !== undefined && String(major) === SUPPORTED_PLUGIN_API_VERSION;
+  return (
+    major !== undefined &&
+    (String(major) === SUPPORTED_PLUGIN_API_VERSION ||
+      String(major) === String(semver.major(LEGACY_PLUGIN_API_VERSION)))
+  );
+}
+
+/**
+ * The Termix range a release needs when this build is too old for it, or
+ * null when this build satisfies it.
+ */
+export function neededTermix(
+  release: Pick<RegistryVersion, "engine">,
+): string | null {
+  const range = release.engine?.termix;
+  if (!range) return null;
+  return isTermixCompatible(range, getLocalVersion()) ? null : range;
+}
+
+/** Whether this build can run a release: its API and its engine ranges. */
+export function canRunRelease(
+  release: Pick<RegistryVersion, "api" | "engine">,
+): boolean {
+  if (!isApiCompatible(release.api)) return false;
+  if (!release.engine) return true;
+  return (
+    satisfiesPluginApi(release.engine.api) && neededTermix(release) === null
+  );
+}
+
+/**
+ * Hosts the admin lets registry fetches reach on a private address, like a
+ * registry in the LAN. Matched by host name on any port, also when another
+ * index or a redirect points there; every other host stays blocked.
+ */
+export function getRegistryPrivateHosts(): string[] {
+  return (process.env.TERMIX_PLUGIN_REGISTRY_PRIVATE_HOSTS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map(normalizePrivateHost)
+    .filter((host): host is string => host !== undefined);
+}
+
+/**
+ * The host in the form safeOutboundFetch compares against, or undefined when
+ * the entry carries more than a host, like a scheme, port, path or user.
+ */
+function normalizePrivateHost(entry: string): string | undefined {
+  const candidate = isIP(entry) === 6 ? `[${entry}]` : entry;
+  if (/[/?#@\\]|:\d*$/.test(candidate)) return undefined;
+  try {
+    return new URL(`http://${candidate}`).hostname.replace(/^\[|\]$/g, "");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * With HTTP_PROXY or HTTPS_PROXY set, registry traffic goes through the proxy,
+ * which does its own name lookup. Only the URL itself is checked here: web
+ * pages only, no logins in it, and no private address typed in as a literal.
+ */
+function fetchThroughProxy(
+  url: string,
+  options: RequestInit,
+  privateHosts: readonly string[],
+): Promise<Response> {
+  const parsed = new URL(url);
+  const host = parsed.hostname.replace(/^\[|\]$/g, "");
+  if (
+    !["http:", "https:"].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password
+  ) {
+    throw new Error("Invalid outbound URL");
+  }
+  if (isIP(host) && isBlockedAddress(host) && !privateHosts.includes(host)) {
+    throw new Error("Private destinations are not allowed");
+  }
+  return fetchWithProxy(url, options);
+}
+
+/**
+ * Whole-request limits, body included. Boot fetches missing plugins before
+ * any plugin starts, so a registry that stalls must not hold the server.
+ */
+const fetchTimeouts = { index: 30_000, artifact: 120_000 };
+
+/** Test seam. */
+export function setRegistryFetchTimeouts(
+  next: Partial<typeof fetchTimeouts>,
+): void {
+  Object.assign(fetchTimeouts, next);
 }
 
 /** Follows redirects by hand so each hop still gets the outbound checks. */
-async function fetchFollowing(url: string): Promise<Response> {
+async function fetchFollowing(
+  url: string,
+  timeoutMs = fetchTimeouts.index,
+): Promise<Response> {
+  const privateHosts = getRegistryPrivateHosts();
+  const signal = AbortSignal.timeout(timeoutMs);
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const response = await safeOutboundFetch(current, {
+    const options: RequestInit = {
       method: "GET",
       redirect: "manual",
       headers: { "User-Agent": "Termix" },
-    });
+      signal,
+    };
+    const response = getProxyAgent(current)
+      ? await fetchThroughProxy(current, options, privateHosts)
+      : await safeOutboundFetch(current, options, privateHosts);
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
       if (!location) throw new Error(`redirect without a location: ${current}`);
@@ -427,9 +634,8 @@ export function latestOnChannel(
   channel: PluginChannel,
 ): RegistryVersion | null {
   return (
-    channelReleases(plugin, channel).find((entry) =>
-      isApiCompatible(entry.api),
-    ) ?? null
+    channelReleases(plugin, channel).find((entry) => canRunRelease(entry)) ??
+    null
   );
 }
 
@@ -478,34 +684,90 @@ export function assertArtifactMatches(
 }
 
 /**
+ * Checks a downloaded release and gives the .sig text to keep next to it:
+ * the chain envelope for official and community, the pinned key's plain
+ * signature for a custom registry.
+ */
+export function verifyRelease(
+  buffer: Buffer,
+  release: RegistryVersion,
+  source: Pick<RegistrySource, "tier" | "keys">,
+  now?: number,
+): { ok: true; sig: string } | { ok: false; reason: string } {
+  const legacy = () => {
+    const result = verifyPluginArtifact(
+      buffer,
+      release.sha256,
+      release.signature,
+      source.keys,
+    );
+    return result.ok === true
+      ? { ok: true as const, sig: release.signature.trim() }
+      : result;
+  };
+  if (source.tier === "custom") return legacy();
+
+  const digest = crypto.createHash("sha256").update(buffer).digest("hex");
+  if (digest !== release.sha256) {
+    return { ok: false, reason: "sha256 does not match the file" };
+  }
+  let reason = "not signed by a key the Termix root trusts";
+  for (const envelope of release.chain) {
+    const result = verifyChainSignature(
+      buffer,
+      release.sha256,
+      envelope,
+      source.tier,
+      { mode: "download", now },
+    );
+    if (result.ok === true) return { ok: true, sig: JSON.stringify(envelope) };
+    reason = result.reason;
+  }
+  if (
+    release.signature &&
+    legacyAllowed(source.tier, { mode: "download", now })
+  ) {
+    return legacy();
+  }
+  return { ok: false, reason };
+}
+
+/** Fetches a small JSON file through the same path as the index. */
+export async function fetchRegistryJson(
+  url: string,
+  maxBytes = 1024 * 1024,
+): Promise<unknown> {
+  const response = await fetchFollowing(url);
+  return JSON.parse((await readLimited(response, maxBytes)).toString("utf8"));
+}
+
+/**
  * Downloads a release, verifies it, and leaves it in a staging folder the
  * loader never scans. The caller moves it into place.
  */
 export async function downloadRelease(
   pluginId: string,
   release: RegistryVersion,
-  keys: readonly TrustedPluginKey[] = TRUSTED_PLUGIN_KEYS,
-): Promise<{ file: string; signatureFile: string }> {
-  if (!isApiCompatible(release.api)) {
+  source: Pick<RegistrySource, "tier" | "keys"> = officialSource(),
+): Promise<{ file: string; signatureFile: string; provenanceFile: string }> {
+  if (!canRunRelease(release)) {
+    const termix = neededTermix(release);
     throw new Error(
-      `${pluginId} ${release.version} needs plugin API ${release.api}, this build runs ${SUPPORTED_PLUGIN_API_VERSION}`,
+      termix
+        ? `${pluginId} ${release.version} needs Termix ${termix}, this is ${getLocalVersion()}`
+        : `${pluginId} ${release.version} needs plugin API ${release.engine?.api ?? release.api}, this build runs ${SUPPORTED_PLUGIN_API_VERSION}`,
     );
   }
 
   const limit =
     release.size > 0 ? release.size + 1024 * 1024 : MAX_ARTIFACT_BYTES;
-  const response = await fetchFollowing(release.url);
+  const response = await fetchFollowing(release.url, fetchTimeouts.artifact);
   const buffer = await readLimited(
     response,
     Math.min(limit, MAX_ARTIFACT_BYTES),
   );
 
-  const verified = verifyPluginArtifact(
-    buffer,
-    release.sha256,
-    release.signature,
-    keys,
-  );
+  const verified = verifyRelease(buffer, release, source);
   if (verified.ok === false) {
     throw new Error(`${pluginId} ${release.version}: ${verified.reason}`);
   }
@@ -517,9 +779,108 @@ export async function downloadRelease(
     staging,
     `${pluginId}-${release.version}-${crypto.randomBytes(4).toString("hex")}.tmxplug`,
   );
+  const provenance = await releaseProvenance(pluginId, release, source, buffer);
   await fs.promises.writeFile(base, buffer);
-  await fs.promises.writeFile(`${base}.sig`, release.signature.trim());
-  return { file: base, signatureFile: `${base}.sig` };
+  await fs.promises.writeFile(`${base}.sig`, verified.sig);
+  const provenanceFile = `${base}${PROVENANCE_SUFFIX}`;
+  if (provenance) {
+    await fs.promises.writeFile(provenanceFile, JSON.stringify(provenance));
+  }
+  return { file: base, signatureFile: `${base}.sig`, provenanceFile };
+}
+
+/** The file kept beside a plugin with its checked build provenance. */
+export const PROVENANCE_SUFFIX = ".provenance.json";
+
+let provenanceCheck: BundleSignatureCheck | null = null;
+
+/** Tests swap the Sigstore check. */
+export function setProvenanceCheckForTests(
+  check: BundleSignatureCheck | null,
+): void {
+  provenanceCheck = check;
+}
+
+/**
+ * Checks a release's build provenance when the index lists one. A bundle that
+ * doesn't match stops the install; Sigstore being out of reach doesn't, since
+ * the file already passed its signature check.
+ */
+async function releaseProvenance(
+  pluginId: string,
+  release: RegistryVersion,
+  source: Pick<RegistrySource, "tier" | "keys">,
+  buffer: Buffer,
+): Promise<ProvenanceRecord | null> {
+  if (!release.provenance || source.tier === "custom") return null;
+  const bundleUrl = release.provenance.url;
+  const where = `${pluginId} ${release.version}`;
+  let text: string;
+  try {
+    const response = await fetchFollowing(bundleUrl, fetchTimeouts.artifact);
+    text = (await readLimited(response, MAX_BUNDLE_BYTES)).toString("utf8");
+  } catch (error) {
+    pluginLogger.warn(`${where}: build provenance not fetched`, {
+      operation: "plugin_provenance",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return unchecked(bundleUrl);
+  }
+  const check =
+    provenanceCheck ??
+    sigstoreSignatureCheck(path.join(getPluginsDir(), ".sigstore"));
+  try {
+    return await checkProvenance(text, {
+      sha256: release.sha256,
+      fileName: path.basename(new URL(release.url).pathname),
+      tier: source.tier,
+      bundleUrl,
+      checkSignature: check,
+    });
+  } catch (error) {
+    if (error instanceof ProvenanceUnavailableError) {
+      pluginLogger.warn(`${where}: build provenance not checked`, {
+        operation: "plugin_provenance",
+        error: error.message,
+      });
+      return unchecked(bundleUrl);
+    }
+    throw new Error(
+      `${where}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+function unchecked(bundleUrl: string): ProvenanceRecord {
+  return {
+    status: "unchecked",
+    checkedAt: new Date().toISOString(),
+    signer: null,
+    runUrl: null,
+    bundleUrl,
+  };
+}
+
+/** The provenance kept beside an installed plugin file, or null. */
+export function readInstalledProvenance(
+  artifact: string | undefined,
+): ProvenanceRecord | null {
+  if (!artifact) return null;
+  try {
+    const raw = JSON.parse(
+      fs.readFileSync(`${artifact}${PROVENANCE_SUFFIX}`, "utf8"),
+    ) as Partial<ProvenanceRecord>;
+    if (raw.status !== "verified" && raw.status !== "unchecked") return null;
+    return {
+      status: raw.status,
+      checkedAt: String(raw.checkedAt ?? ""),
+      signer: typeof raw.signer === "string" ? raw.signer : null,
+      runUrl: typeof raw.runUrl === "string" ? raw.runUrl : null,
+      bundleUrl: String(raw.bundleUrl ?? ""),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** A dot folder inside the plugins dir, which the loader's scan skips. */

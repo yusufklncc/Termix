@@ -3,44 +3,133 @@
     {
       "id": "acme-ssl",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-ACME-SSL/releases/download/v1.0.2/acme-ssl-1.0.2.tmxplug",
-      "sha256": "157d0f96dc42136ff64e618b6904db7862079cd31c1f1cf5f19846b1d127b00f"
+      "url": "https://github.com/Termix-SSH/Plugin-ACME-SSL/releases/download/v1.2.1/acme-ssl-1.2.1.tmxplug",
+      "sha256": "6138a4e795ebde0a66078a7b44463af04506e11186db144f74dcc44bddee26c0",
+      "tier": "full"
     },
     {
       "id": "ai",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-AI/releases/download/v1.1.0/ai-1.1.0.tmxplug",
-      "sha256": "71dda6940d62c9eede7821bbac21e99443fbc08728a47759f215e2416f1d162f"
+      "url": "https://github.com/Termix-SSH/Plugin-AI/releases/download/v1.4.4/ai-1.4.4.tmxplug",
+      "sha256": "4899abed99e80fb9eee0ae242c3b9c4e2f5ca701f9596b314de066517832dd8e",
+      "tier": "full"
     },
     {
       "id": "alerts",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Alerts/releases/download/v1.0.2/alerts-1.0.2.tmxplug",
-      "sha256": "50768e77019276343a5d162c85d081659fb89d1cc3733ac45cd0db4436918faa",
+      "url": "https://github.com/Termix-SSH/Plugin-Alerts/releases/download/v1.4.0/alerts-1.4.0.tmxplug",
+      "sha256": "0182dede402a44e1ac6926ae4dd637c06fe73f6d72ca6ea316ace4e8f7c1e326",
+      "tier": "standard",
       "onboarding": {
         "recommended": true,
         "consent": false
       }
+    },
+    {
+      "id": "ansible",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Ansible/releases/download/v1.1.0/ansible-1.1.0.tmxplug",
+      "sha256": "e35969f3c729128519c26eee1e6e192f51e48073d8e6380c5be2e73ca8240c1a",
+      "tier": "full"
+    },
+    {
+      "id": "audit-tools",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Audit-Tools/releases/download/v1.2.0/audit-tools-1.2.0.tmxplug",
+      "sha256": "b9d6239a1783e00bd3e18941becfe9b4bd34034995b0d84e226dab25c3e78735",
+      "tier": "full"
     },
     {
       "id": "automations",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Automations/releases/download/v1.0.2/automations-1.0.2.tmxplug",
-      "sha256": "674eb04276b4a0c77c794b30647f8680218a78de8d52b73e99ec900cc1b3fdb3"
+      "url": "https://github.com/Termix-SSH/Plugin-Automations/releases/download/v1.4.0/automations-1.4.0.tmxplug",
+      "sha256": "4f9147302d0c0c424444d9a287e5c9628280af6a3f450aa501a57725e9693f97",
+      "tier": "full"
     },
     {
-      "id": "desktop-stream",
-      "source": "workspace",
+      "id": "backups",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Backups/releases/download/v1.2.0/backups-1.2.0.tmxplug",
+      "sha256": "cbea761393617befbb25402d250f64f661f9ab94ae1a7ac343b2e429e6888a55",
+      "tier": "full"
+    },
+    {
+      "id": "certificates",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Certificates/releases/download/v1.1.0/certificates-1.1.0.tmxplug",
+      "sha256": "3c55e4318c8f9bd3613ac84c8a007592c932144e95a5970f859e5b2c53ac5be7",
+      "tier": "full"
+    },
+    {
+      "id": "classic-layout",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Classic-Layout/releases/download/v1.2.0/classic-layout-1.2.0.tmxplug",
+      "sha256": "c65fc03e15ee7541c1ba62a63d3d4c54893f485272aca1de0f34943dc9c2c80a",
+      "tier": "minimal",
+      "defaultLook": true
+    },
+    {
+      "id": "classic-themes",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Classic-Themes/releases/download/v1.2.0/classic-themes-1.2.0.tmxplug",
+      "sha256": "02830e80bc2f9641390cc50042b886b513560ad29444e6eb7c3bf90df069f56c",
+      "tier": "minimal",
+      "defaultLook": true
+    },
+    {
+      "id": "cloud-providers",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Cloud-Providers/releases/download/v1.3.0/cloud-providers-1.3.0.tmxplug",
+      "sha256": "fc364de41fccb4800d89bfcd70be091903cd5f2259bda02f7edbd1581ff0ccc3",
+      "tier": "full"
+    },
+    {
+      "id": "credential-tools",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Credential-Tools/releases/download/v1.2.0/credential-tools-1.2.0.tmxplug",
+      "sha256": "55edf364be65eebde0d34efbe5a4202cfc6e1ed3c423ce43ede01838ace3be29",
+      "tier": "standard",
       "onboarding": {
         "recommended": true,
         "consent": false
       }
     },
     {
+      "id": "cron",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Cron/releases/download/v1.1.0/cron-1.1.0.tmxplug",
+      "sha256": "f9aaf4a49aad24210ea6fceb620797e60e081fdea538cf6998bd9d3da05a28fa",
+      "tier": "full"
+    },
+    {
+      "id": "databases",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Databases/releases/download/v1.4.0/databases-1.4.0.tmxplug",
+      "sha256": "ff3811bf0499ebc35644a3fe4822a2d991b6396ecff4949e74fce65a69120e36",
+      "tier": "full"
+    },
+    {
+      "id": "desktop-stream",
+      "source": "workspace",
+      "tier": "full",
+      "onboarding": {
+        "recommended": true,
+        "consent": false
+      }
+    },
+    {
+      "id": "dns",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-DNS/releases/download/v1.1.0/dns-1.1.0.tmxplug",
+      "sha256": "27b928fc78cae09aa5c24b468db20b5fd9436715da529293e9381e1df5400672",
+      "tier": "full"
+    },
+    {
       "id": "docker",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Docker/releases/download/v1.0.2/docker-1.0.2.tmxplug",
-      "sha256": "0e1c722682faac6a027fd9b01e6910eb53ce5acb13332c6c8d8868554f3701ab",
+      "url": "https://github.com/Termix-SSH/Plugin-Docker/releases/download/v1.4.0/docker-1.4.0.tmxplug",
+      "sha256": "fe465f7f94c6582d73cd03ea74fb38f0ce3f9b734a313c563ff31baaa534acdf",
+      "tier": "standard",
       "onboarding": {
         "recommended": true,
         "consent": false
@@ -49,62 +138,216 @@
     {
       "id": "file-manager",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-File-Manager/releases/download/v1.0.3/file-manager-1.0.3.tmxplug",
-      "sha256": "250e9779a6b1caf11721f1ee2baf76655ae6e52d963e894d8db84eb9677cf0b3",
+      "url": "https://github.com/Termix-SSH/Plugin-File-Manager/releases/download/v1.3.0/file-manager-1.3.0.tmxplug",
+      "sha256": "1f501e4cc36a2051d6ff8d44e84dc735ba6fdc7a3c843c3e1c6cd8298b68dc6a",
+      "tier": "standard",
       "onboarding": {
         "recommended": true,
         "consent": false
       }
+    },
+    {
+      "id": "firewall",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Firewall/releases/download/v1.2.0/firewall-1.2.0.tmxplug",
+      "sha256": "dc50e734b49fcc74a19cdb324521d026cfbea168f3dcf9ee685941f76fc6c3ed",
+      "tier": "full"
     },
     {
       "id": "fleets",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Fleets/releases/download/v1.0.2/fleets-1.0.2.tmxplug",
-      "sha256": "50dab38e1c6c95fdb4d0544ce50cdf84dae84789e64aa34ea9d04fdac3a38c59"
+      "url": "https://github.com/Termix-SSH/Plugin-Fleets/releases/download/v1.3.0/fleets-1.3.0.tmxplug",
+      "sha256": "541273459c3a9a8e7ffbae3b5fb72aa4b6632352c1530e44c245de8e68eaa015",
+      "tier": "full"
+    },
+    {
+      "id": "git",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Git/releases/download/v1.1.0/git-1.1.0.tmxplug",
+      "sha256": "a0e73b3c8746f702ff74e086d912215c1505e5e70dc9f2b6feca883253132f0c",
+      "tier": "full"
     },
     {
       "id": "homepage",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Homepage/releases/download/v1.0.2/homepage-1.0.2.tmxplug",
-      "sha256": "88cdea8ba8f458fcf124e7ab97e3d419896d8d22ffa9a372af34f1818872975b"
+      "url": "https://github.com/Termix-SSH/Plugin-Homepage/releases/download/v1.2.2/homepage-1.2.2.tmxplug",
+      "sha256": "abe3b8a676a507efd9f419f0b681bd812f3a0e33ad6090c60b4b2c1f18a97e3d",
+      "tier": "full"
+    },
+    {
+      "id": "host-layout",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Host-Layout/releases/download/v1.0.0/host-layout-1.0.0.tmxplug",
+      "sha256": "5ed55c0d93b1b37deb8128bc39a297579e790694280472f5b5e963d63efb8147",
+      "tier": "standard"
     },
     {
       "id": "host-metrics",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Host-Metrics/releases/download/v1.0.3/host-metrics-1.0.3.tmxplug",
-      "sha256": "8f6022568349fc4318d509781bdb9d5b40973c010a9e27f720eed6baf68b881e",
+      "url": "https://github.com/Termix-SSH/Plugin-Host-Metrics/releases/download/v1.5.0/host-metrics-1.5.0.tmxplug",
+      "sha256": "16e16439331de29549559befa66338355ad0a0e340949ef99211bab60031cdad",
+      "tier": "standard",
       "onboarding": {
         "recommended": true,
         "consent": false
       }
     },
     {
+      "id": "host-status",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Host-Status/releases/download/v1.2.0/host-status-1.2.0.tmxplug",
+      "sha256": "0d16e0bb696938982b9e902b4e9aaabfd5c996ae4f3e89b6bce961f4ea5f069e",
+      "tier": "standard",
+      "onboarding": {
+        "recommended": true,
+        "consent": false
+      }
+    },
+    {
+      "id": "hosts-config",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Hosts-Config/releases/download/v1.2.0/hosts-config-1.2.0.tmxplug",
+      "sha256": "941b87f9638cbcb257f772a2c53d959b39c3d9a33320609869cd885f8f7ca566",
+      "tier": "full"
+    },
+    {
+      "id": "import-export",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Import-Export/releases/download/v1.3.0/import-export-1.3.0.tmxplug",
+      "sha256": "42e5b0e5bd383a015f916e7949fe1dcc119c1b9a0899da5e9273c1d9fae8ddf6",
+      "tier": "standard",
+      "onboarding": {
+        "recommended": true,
+        "consent": false
+      }
+    },
+    {
+      "id": "ip-kvm",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-IP-KVM/releases/download/v1.1.0/ip-kvm-1.1.0.tmxplug",
+      "sha256": "c6800be5b1e048732ee1d87bbb39c1e7f530add8bc7233bc9a938a7186d7f139",
+      "tier": "full"
+    },
+    {
+      "id": "kubernetes",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Kubernetes/releases/download/v1.2.0/kubernetes-1.2.0.tmxplug",
+      "sha256": "c0192f1b413edceda1ed955beaa885b298f50e15f27aa6cd3ebfb457659d8ca5",
+      "tier": "full"
+    },
+    {
       "id": "ldap",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-LDAP/releases/download/v1.0.2/ldap-1.0.2.tmxplug",
-      "sha256": "9ef269ad281f1c68cea53e0d43ccb7a5d4f949f11b30b22eac3d01047b20eb03"
+      "url": "https://github.com/Termix-SSH/Plugin-LDAP/releases/download/v1.1.0/ldap-1.1.0.tmxplug",
+      "sha256": "f457c1c176bbd08cc7e8106738ddb6bddfd87bb4210096c895b689e716bcbf75",
+      "tier": "full"
+    },
+    {
+      "id": "log-search",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Log-Search/releases/download/v1.2.0/log-search-1.2.0.tmxplug",
+      "sha256": "8938070db23d37243d6db10ef50a83dbf76dd29f358794cd06f93e520511337d",
+      "tier": "full"
+    },
+    {
+      "id": "login-security",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Login-Security/releases/download/v1.2.0/login-security-1.2.0.tmxplug",
+      "sha256": "d8c4f1e9ad6b4b345fa199782c4ecee496511b66ac8d3a4108fbbf890404e96b",
+      "tier": "full"
+    },
+    {
+      "id": "network-devices",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Network-Devices/releases/download/v1.2.0/network-devices-1.2.0.tmxplug",
+      "sha256": "017d83a300bfb73d99552d8635e0b3a1b71cd0c068ad2ab181586ced3ab9df96",
+      "tier": "full"
     },
     {
       "id": "network-topology",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Network-Topology/releases/download/v1.0.2/network-topology-1.0.2.tmxplug",
-      "sha256": "8d32340a0d0f9674b872da5d3d53e90f529b80dfe0d73ab294eed00e565fbb56"
+      "url": "https://github.com/Termix-SSH/Plugin-Network-Topology/releases/download/v1.1.1/network-topology-1.1.1.tmxplug",
+      "sha256": "e73abc802ee2b3f2250c891bb713931ac3ff35f7b4fc0ac65e59cf4d827274d9",
+      "tier": "full"
+    },
+    {
+      "id": "notes",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Notes/releases/download/v1.1.0/notes-1.1.0.tmxplug",
+      "sha256": "a22ca82be87cec6da48558544e091ab55fc0326faeb0fcbde52bee6d64f98f43",
+      "tier": "full"
+    },
+    {
+      "id": "object-storage",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Object-Storage/releases/download/v1.2.0/object-storage-1.2.0.tmxplug",
+      "sha256": "6bf4b47de73088a86f96dfd75742b5fc25b03cc7b0f9a940e5da245f53f43281",
+      "tier": "full"
+    },
+    {
+      "id": "operations-center",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Operations-Center/releases/download/v1.1.1/operations-center-1.1.1.tmxplug",
+      "sha256": "98d6d11b888a55a5011ee4b21fef4586c350cc2e8b331a1088140a78f16842ca",
+      "tier": "standard",
+      "onboarding": {
+        "recommended": true,
+        "consent": false
+      }
     },
     {
       "id": "opkssh",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-OPKSSH/releases/download/v1.0.2/opkssh-1.0.2.tmxplug",
-      "sha256": "4bb8f1ac5d39bd18ac3d0fe82ddbf2f26ab4c01bd75e6f7a073d65c2e9aef219"
+      "url": "https://github.com/Termix-SSH/Plugin-OPKSSH/releases/download/v1.0.4/opkssh-1.0.4.tmxplug",
+      "sha256": "acd0ee2b0382d4c7042dfc802e94f2a1bc91d0a43cc7b23aa8fbab08ff8edf20",
+      "tier": "full"
+    },
+    {
+      "id": "original-layout",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Original-Layout/releases/download/v1.0.0/original-layout-1.0.0.tmxplug",
+      "sha256": "aa464b979de089b576718088b3026dc94a0157e51f4913050d31bd3be90fa9ef",
+      "tier": "standard"
+    },
+    {
+      "id": "out-of-band",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Out-Of-Band/releases/download/v1.1.0/out-of-band-1.1.0.tmxplug",
+      "sha256": "d09f0c5eb7d1fc3c6896ef242406838a40d6cd27c3728730df445ccd36b5607d",
+      "tier": "full"
+    },
+    {
+      "id": "package-manager",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Package-Manager/releases/download/v1.2.0/package-manager-1.2.0.tmxplug",
+      "sha256": "794520c90504ad58678bc613c66b06ddee6c43a79963e2b7e5d18a0760e0f6a1",
+      "tier": "full"
+    },
+    {
+      "id": "privileged-access",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Privileged-Access/releases/download/v1.0.1/privileged-access-1.0.1.tmxplug",
+      "sha256": "df13c177bfdbfd31585e80e068452ab68820d031a1306fd3f2bc5f3a64143851",
+      "tier": "full"
+    },
+    {
+      "id": "process-manager",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Process-Manager/releases/download/v1.1.0/process-manager-1.1.0.tmxplug",
+      "sha256": "80b9c59f9649ed02b4e2c0e206cbd05a8b0e4a42ae9ec47eae458e3040ee6e76",
+      "tier": "full"
     },
     {
       "id": "proxmox",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Proxmox/releases/download/v1.0.2/proxmox-1.0.2.tmxplug",
-      "sha256": "b92be2644b0c8121732103b922069a6cb3cf00caad4e6549f7a8cb471bda5e4e"
+      "url": "https://github.com/Termix-SSH/Plugin-Proxmox/releases/download/v1.4.0/proxmox-1.4.0.tmxplug",
+      "sha256": "99f0574e6691b9a80350c5ba3aa04b6871a9cdc701968abe72737c404484e4e5",
+      "tier": "full"
     },
     {
       "id": "rdp-direct",
       "source": "workspace",
+      "tier": "full",
       "onboarding": {
         "recommended": true,
         "consent": false
@@ -113,44 +356,92 @@
     {
       "id": "remote-desktop",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Remote-Desktop/releases/download/v1.1.0/remote-desktop-1.1.0.tmxplug",
-      "sha256": "6f74f1d26f91a43b2d2203417d744211f366c335d5fff7bed34bfce33874dd01",
+      "url": "https://github.com/Termix-SSH/Plugin-Remote-Desktop/releases/download/v1.4.3/remote-desktop-1.4.3.tmxplug",
+      "sha256": "6a720deb4deb69ee8802f8be9ef6ed6e3aaa73f10354b7e5f5e7fb14d121c4da",
+      "tier": "standard",
       "onboarding": {
         "recommended": true,
         "consent": false
       }
     },
     {
+      "id": "reverse-proxy",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Reverse-Proxy/releases/download/v1.2.1/reverse-proxy-1.2.1.tmxplug",
+      "sha256": "0f3553f8274f8751da5db730fcf53437eb619b3ef092eaedc692f528ac31fa83",
+      "tier": "full"
+    },
+    {
+      "id": "samba",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Samba/releases/download/v1.2.0/samba-1.2.0.tmxplug",
+      "sha256": "0be25b173e61555cbff67d0e732896c729231af8d71e7e3022290239216a00f0",
+      "tier": "full"
+    },
+    {
+      "id": "scim",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-SCIM/releases/download/v1.0.0/scim-1.0.0.tmxplug",
+      "sha256": "95ea40e4c8609c0d4851391347b99ac2e6dd45cebde272aefe307a0569ed9aa2",
+      "tier": "full"
+    },
+    {
       "id": "secret-sources",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Secret-Sources/releases/download/v1.0.2/secret-sources-1.0.2.tmxplug",
-      "sha256": "82e2b1e95b0837dd3e5fee277be4eea2d1ce68567b0e204941c48150f415d134"
+      "url": "https://github.com/Termix-SSH/Plugin-Secret-Sources/releases/download/v1.2.0/secret-sources-1.2.0.tmxplug",
+      "sha256": "7a0ede6cfa854dba1d3e0ef9ef41c30e697aa3628bfe378736bdc59af2677fb9",
+      "tier": "full"
+    },
+    {
+      "id": "security-center",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Security-Center/releases/download/v1.1.0/security-center-1.1.0.tmxplug",
+      "sha256": "5d4b6493bd0f6362eb06e153c15a6ea54396509a414b74d812851cbc9f795f45",
+      "tier": "full"
     },
     {
       "id": "serial",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Serial/releases/download/v1.0.2/serial-1.0.2.tmxplug",
-      "sha256": "6ede7e8726a7312429473f34a46f93ba6657c5b7ebc12bed18f80ec62c211715",
+      "url": "https://github.com/Termix-SSH/Plugin-Serial/releases/download/v1.1.0/serial-1.1.0.tmxplug",
+      "sha256": "d6f989299f39ab1fbf6d91d001e03488705dbd5188f2af2b6a0ef4ced331b59b",
+      "tier": "standard",
       "onboarding": {
         "recommended": "desktop",
         "consent": false
       }
     },
     {
+      "id": "service-manager",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Service-Manager/releases/download/v1.1.3/service-manager-1.1.3.tmxplug",
+      "sha256": "f8343798c01edeaad53bf3fe81c82a67932160723b49490b79369ff76e6c1e98",
+      "tier": "full"
+    },
+    {
       "id": "session-recording",
-      "source": "workspace"
+      "source": "workspace",
+      "tier": "full"
     },
     {
       "id": "session-sharing",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Session-Sharing/releases/download/v1.0.2/session-sharing-1.0.2.tmxplug",
-      "sha256": "6408e7949a9549ac5ec94b35205729099138e730df1598d50f4bb618d8d90804"
+      "url": "https://github.com/Termix-SSH/Plugin-Session-Sharing/releases/download/v1.2.2/session-sharing-1.2.2.tmxplug",
+      "sha256": "dba112623381e6acb7ada2c965b32b23c5a0462c2051c53af821e1efe0214394",
+      "tier": "full"
+    },
+    {
+      "id": "simple-layout",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Simple-Layout/releases/download/v1.2.0/simple-layout-1.2.0.tmxplug",
+      "sha256": "208601b15f03874b27899a4eeeadc4cd09a13faea0e64305a94ecb0f6186db98",
+      "tier": "standard"
     },
     {
       "id": "snippets",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Snippets/releases/download/v1.0.2/snippets-1.0.2.tmxplug",
-      "sha256": "cc1f5d74cf97f9a9c8f800fccf481c8a000e6fa516bc260ce24a7249d4f4c8e5",
+      "url": "https://github.com/Termix-SSH/Plugin-Snippets/releases/download/v1.4.1/snippets-1.4.1.tmxplug",
+      "sha256": "2b982fddf2fc93a110d0e8652823c815ea5854f5c53baebf859cbf8926b2e9f0",
+      "tier": "standard",
       "onboarding": {
         "recommended": true,
         "consent": false
@@ -158,7 +449,10 @@
     },
     {
       "id": "ssh-terminal",
-      "source": "workspace",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-SSH-Terminal/releases/download/v1.5.0/ssh-terminal-1.5.0.tmxplug",
+      "sha256": "7bfc295739b7b7ac87ef6f647a0a1f5d72b99c2538635d4a106fc488fd819884",
+      "tier": "standard",
       "onboarding": {
         "recommended": true,
         "consent": false
@@ -167,8 +461,9 @@
     {
       "id": "sso",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-SSO/releases/download/v1.0.3/sso-1.0.3.tmxplug",
-      "sha256": "87b03c0789d981dbc806162d73dfcc2c624150375277efd2ae40ab9d7657d48e",
+      "url": "https://github.com/Termix-SSH/Plugin-SSO/releases/download/v1.3.0/sso-1.3.0.tmxplug",
+      "sha256": "2548e2740b4de8e0f94fecb66a5f0791e2b08ce312665b0e3c457e479872e315",
+      "tier": "standard",
       "onboarding": {
         "recommended": false,
         "consent": false,
@@ -178,42 +473,73 @@
     {
       "id": "step-ca",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Step-CA/releases/download/v1.0.2/step-ca-1.0.2.tmxplug",
-      "sha256": "685b644fe44c2d3fa007baee16e8ea8a7d5204f039ebc8aa65e8093ad93adf8a"
+      "url": "https://github.com/Termix-SSH/Plugin-Step-CA/releases/download/v1.1.0/step-ca-1.1.0.tmxplug",
+      "sha256": "e17a1924983f369e342112d55ad8f93b40bcbd7ecb8d3a41cfc0745506590475",
+      "tier": "full"
+    },
+    {
+      "id": "storage-health",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Storage-Health/releases/download/v1.1.0/storage-health-1.1.0.tmxplug",
+      "sha256": "1cefa70ab3fab7c25eeb199b3ff33c21b604824da910cec27165a6e861567d41",
+      "tier": "full"
+    },
+    {
+      "id": "sync",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Sync/releases/download/v1.3.1/sync-1.3.1.tmxplug",
+      "sha256": "42a09266b039bf60ed8b1f8db1c0640cb3fe8253ff538f58f802a835d759fce5",
+      "tier": "standard",
+      "onboarding": {
+        "recommended": "desktop",
+        "consent": false
+      }
     },
     {
       "id": "tailscale",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Tailscale/releases/download/v1.0.2/tailscale-1.0.2.tmxplug",
-      "sha256": "5c7b00d6b6b0186d833302e39a9d31b92ea92d4542e9e2dab550b95837a59d97"
+      "url": "https://github.com/Termix-SSH/Plugin-Tailscale/releases/download/v1.3.0/tailscale-1.3.0.tmxplug",
+      "sha256": "500fec6ef2a8342c330467bb7eec51b6dcb9ad966d64f422ba4da7606e7fd852",
+      "tier": "full"
     },
     {
       "id": "telemetry",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Telemetry/releases/download/v1.0.2/telemetry-1.0.2.tmxplug",
-      "sha256": "5ffdc58b05cd8b37fd0a207f99d2d3a256164130c950032501c499f869edb9ec",
+      "url": "https://github.com/Termix-SSH/Plugin-Telemetry/releases/download/v1.1.0/telemetry-1.1.0.tmxplug",
+      "sha256": "5643a9ae5100f6551faf9c1a4d62043ecd9006325d21b6ea4081f0aa84586a9b",
+      "tier": "standard",
       "onboarding": {
         "recommended": true,
         "consent": true
       }
     },
     {
+      "id": "terminal-layout",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Terminal-Layout/releases/download/v1.0.0/terminal-layout-1.0.0.tmxplug",
+      "sha256": "2166fdd054bf875a6a6c6534bae451902b44207108cc0418ae39fcde95cc8f8e",
+      "tier": "standard"
+    },
+    {
       "id": "termix-identity",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Termix-Identity/releases/download/v1.0.2/termix-identity-1.0.2.tmxplug",
-      "sha256": "ac6c90a48b4f1e9cff6773a5fd267b2bf7319d2fc7e2aa2cd4004cec82f0f927"
+      "url": "https://github.com/Termix-SSH/Plugin-Termix-Identity/releases/download/v1.1.1/termix-identity-1.1.1.tmxplug",
+      "sha256": "e087f8b4071d3b057cedfb8286477e7d62a2aa01da150eb7d891411cbfec6983",
+      "tier": "full"
     },
     {
       "id": "tmux-monitor",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Tmux-Monitor/releases/download/v1.0.3/tmux-monitor-1.0.3.tmxplug",
-      "sha256": "f152d64f433d3f1de7c3fdf172e752ea7e333909f0fdda77336a6b8dddb9f242"
+      "url": "https://github.com/Termix-SSH/Plugin-Tmux-Monitor/releases/download/v1.3.0/tmux-monitor-1.3.0.tmxplug",
+      "sha256": "1a3d8b8a434d9a86d6d0ced4311fb69881231cbad4295050669bf8cbd862f2d5",
+      "tier": "full"
     },
     {
       "id": "totp",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-TOTP/releases/download/v1.0.2/totp-1.0.2.tmxplug",
-      "sha256": "94a0772660fa8e4dfd9afc15b68d5bc9fe02fe28a1acfd35e65a57c304d460c0",
+      "url": "https://github.com/Termix-SSH/Plugin-TOTP/releases/download/v1.1.0/totp-1.1.0.tmxplug",
+      "sha256": "3f71d8d1b7a64ed9d9321c8cb1b526aa0113a2bd5cb199fe9a6d63274cb02df4",
+      "tier": "standard",
       "onboarding": {
         "recommended": true,
         "consent": false
@@ -222,22 +548,53 @@
     {
       "id": "tunnels",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Tunnels/releases/download/v1.0.3/tunnels-1.0.3.tmxplug",
-      "sha256": "d0de9e59ccc9e1a0f2817dd1ec9951021f2d7e89304894bb1e8cefd65aebff0b",
+      "url": "https://github.com/Termix-SSH/Plugin-Tunnels/releases/download/v1.5.0/tunnels-1.5.0.tmxplug",
+      "sha256": "d4298a1b84d25074369be8feaa754c0bda44484d96398a76324e8cc6db017ea2",
+      "tier": "standard",
       "onboarding": {
         "recommended": true,
         "consent": false
       }
     },
     {
+      "id": "ups-manager",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-UPS-Manager/releases/download/v1.0.1/ups-manager-1.0.1.tmxplug",
+      "sha256": "4926694f5f9974d072427fd0d4e1f85a7e2e4af57dcaaa339062558d126a471e",
+      "tier": "full"
+    },
+    {
+      "id": "uptime",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Uptime/releases/download/v1.0.1/uptime-1.0.1.tmxplug",
+      "sha256": "d71b9ba0fe2b0f6500454c6f538373e4e5c0caf9302785b303fa8f2e325c30be",
+      "tier": "full"
+    },
+    {
+      "id": "user-manager",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-User-Manager/releases/download/v1.1.0/user-manager-1.1.0.tmxplug",
+      "sha256": "0639aba4836778f96d4ccb07d0fde0f09c937f0e73830f7c0d04462f99786e87",
+      "tier": "full"
+    },
+    {
       "id": "vault",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Vault/releases/download/v1.0.2/vault-1.0.2.tmxplug",
-      "sha256": "48ef402d030912a836489edf0fdfcaf7929cbd67c21f16a2079cb4925134cc28"
+      "url": "https://github.com/Termix-SSH/Plugin-Vault/releases/download/v1.2.0/vault-1.2.0.tmxplug",
+      "sha256": "e712f8ebf392bb3f33b368b03f0b4dfc3c637deef6f55cc7de4610917b86a9db",
+      "tier": "full"
+    },
+    {
+      "id": "virtual-machines",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Virtual-Machines/releases/download/v1.2.0/virtual-machines-1.2.0.tmxplug",
+      "sha256": "c21e9de520d56343fe46685cd8759fa55fa33abbc5f5ecee8aa7cb847b6b57b0",
+      "tier": "full"
     },
     {
       "id": "vpn",
       "source": "workspace",
+      "tier": "full",
       "onboarding": {
         "recommended": true,
         "consent": false
@@ -246,36 +603,62 @@
     {
       "id": "wake-on-lan",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Wake-On-LAN/releases/download/v1.0.2/wake-on-lan-1.0.2.tmxplug",
-      "sha256": "3e9cf9a133b4dd96ec5f2b9fbf2d6a3ff7e08f8dfbf1e86b8d45de0c2f024f42"
+      "url": "https://github.com/Termix-SSH/Plugin-Wake-On-LAN/releases/download/v1.3.0/wake-on-lan-1.3.0.tmxplug",
+      "sha256": "89be7a9105715d945298235f3ee4f3d27e08e76bd1bd2da58533ef48ce277994",
+      "tier": "full"
+    },
+    {
+      "id": "wall-display",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Wall-Display/releases/download/v1.0.0/wall-display-1.0.0.tmxplug",
+      "sha256": "deaa8be11df0feb4ad80127fbc56288f7f46cfd7e57aff7d3577b6579c794444",
+      "tier": "standard"
     },
     {
       "id": "warpgate",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Warpgate/releases/download/v1.0.2/warpgate-1.0.2.tmxplug",
-      "sha256": "5c2c1c9aef40dbbf98424d02303f2ee77e6e869334247881e8aa0fcd8c415b47"
+      "url": "https://github.com/Termix-SSH/Plugin-Warpgate/releases/download/v1.1.0/warpgate-1.1.0.tmxplug",
+      "sha256": "511802fbd07376a2ce135bb9f2dbbc7bacda0a5da9f2701498a511c6c0242419",
+      "tier": "full"
     },
     {
       "id": "web-endpoint",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Web-Endpoint/releases/download/v1.0.2/web-endpoint-1.0.2.tmxplug",
-      "sha256": "0326edb1052d1debd083004c2dd1711d21a902cfacb55ce74d1a8856a5122477"
+      "url": "https://github.com/Termix-SSH/Plugin-Web-Endpoint/releases/download/v1.3.0/web-endpoint-1.3.0.tmxplug",
+      "sha256": "ad0162855f1d1490dc2e1fd217f0acb0f8fc3f8c89fb3e89d48a76e2e3ffa446",
+      "tier": "full"
+    },
+    {
+      "id": "web-servers",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-Web-Servers/releases/download/v1.1.0/web-servers-1.1.0.tmxplug",
+      "sha256": "b968beb19705f81b82009518cd592c281dc37dfc292c7a8df4a8dd2ec40744dd",
+      "tier": "full"
     },
     {
       "id": "webauthn",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-WebAuthn/releases/download/v1.0.2/webauthn-1.0.2.tmxplug",
-      "sha256": "8269f6e407897332648c8526b65383c4db071ea782bf1e58aa7c7c00627f3f4b",
+      "url": "https://github.com/Termix-SSH/Plugin-WebAuthn/releases/download/v1.4.0/webauthn-1.4.0.tmxplug",
+      "sha256": "ecde6ffcdf61dc7c6da9889d394b60a576f704133ee361d6cc4acf5bfaa216ae",
+      "tier": "standard",
       "onboarding": {
         "recommended": true,
         "consent": false
       }
     },
     {
+      "id": "wireguard",
+      "source": "tmxplug",
+      "url": "https://github.com/Termix-SSH/Plugin-WireGuard/releases/download/v1.1.0/wireguard-1.1.0.tmxplug",
+      "sha256": "56ae1a4b23079a95140c48933e49c97db48b9457027b02d11b65f4d66e217cfa",
+      "tier": "full"
+    },
+    {
       "id": "workspaces",
       "source": "tmxplug",
-      "url": "https://github.com/Termix-SSH/Plugin-Workspaces/releases/download/v1.0.2/workspaces-1.0.2.tmxplug",
-      "sha256": "97519a01fbb2eb2eecf21d7b9ab9028c740457bcff9fc6b075fb6facbc5ccb6b",
+      "url": "https://github.com/Termix-SSH/Plugin-Workspaces/releases/download/v1.2.0/workspaces-1.2.0.tmxplug",
+      "sha256": "260b1d30c0171462bfa005a58dff5af581cd7ea210d8601bee4a80515310b959",
+      "tier": "standard",
       "onboarding": {
         "recommended": true,
         "consent": false

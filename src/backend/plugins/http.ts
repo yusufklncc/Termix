@@ -90,6 +90,10 @@ export function getPluginPublicHttpRoutes(pluginId: string): string[] {
   return [...(publicRoutes.get(pluginId) ?? [])];
 }
 
+export function listRouterIds(): string[] {
+  return [...routers.keys()];
+}
+
 export function getPluginRouter(pluginId: string): Router | undefined {
   return routers.get(pluginId);
 }
@@ -131,12 +135,33 @@ export function isPluginInstalled(pluginId: string): boolean {
   return isInstalled(pluginId);
 }
 
+/**
+ * Starts a plugin whose process is stopped (it starts on first use). True
+ * when it is now running. Injected by the sandbox supervisor.
+ */
+type WakeHook = (pluginId: string) => Promise<boolean>;
+
+let wakeHook: WakeHook = async () => false;
+
+export function setPluginWakeHook(hook: WakeHook): void {
+  wakeHook = hook;
+}
+
+export async function wakePlugin(pluginId: string): Promise<boolean> {
+  try {
+    return await wakeHook(pluginId);
+  } catch {
+    return false;
+  }
+}
+
 /** Test seam, so one test's stub does not leak into the next. */
 export function resetPluginHttp(): void {
   routers.clear();
   publicRoutes.clear();
   isPluginEnabled = () => true;
   isInstalled = () => false;
+  wakeHook = async () => false;
 }
 
 function normalizePublicPath(path: string): string {
@@ -281,7 +306,11 @@ export function createPluginRouter({
       `Plugin ${pluginId} serves ${declaredPublic.length} route(s) without authentication: ${declaredPublic.join(", ")}`,
       { operation: "plugin_http_public" },
     );
-    void writePublicRouteAudit(manifest, declaredPublic);
+    void writePublicRouteAudit(
+      manifest,
+      declaredPublic,
+      options?.publicAuthorization === true,
+    );
   }
 
   const outer = express.Router();
@@ -322,7 +351,10 @@ export function createPluginRouter({
     })();
   });
 
-  const authenticate = AuthManager.getInstance().createAuthMiddleware();
+  // This plugin's sandboxed frames call in with their own short token.
+  const authenticate = AuthManager.getInstance().createAuthMiddleware({
+    framePluginId: pluginId,
+  });
 
   outer.use((req: Request, res: Response, next: NextFunction) => {
     if (isPublicRequest(req, publicPaths, inner)) {
@@ -336,6 +368,8 @@ export function createPluginRouter({
       pluginLogger.info(`Unauthenticated request to ${pluginId}${req.path}`, {
         operation: "plugin_http_public_request",
       });
+      (req as Request & { termixPublicRoute?: boolean }).termixPublicRoute =
+        true;
       next();
       return;
     }
@@ -349,20 +383,31 @@ export function createPluginRouter({
     // /plugin-api so this limit is the one that actually applies.
     outer.use(express.json({ limit }));
     outer.use(express.urlencoded({ limit, extended: true }));
+    // No body leaves req.body undefined in Express 5; give handlers {}.
+    outer.use((req: Request, _res: Response, next: NextFunction) => {
+      req.body ??= {};
+      next();
+    });
   }
 
   // After auth, so the actor is the user core authenticated rather than
   // whatever the request claimed.
   outer.use((req: Request, _res: Response, next: NextFunction) => {
-    const { userId, sessionId } = req as Request & {
+    const { userId, sessionId, apiKeyId, apiKeyScopes } = req as Request & {
       userId?: string;
       sessionId?: string;
+      apiKeyId?: string;
+      apiKeyScopes?: string[] | null;
     };
     if (!userId) {
       next();
       return;
     }
-    runAsActor(userId, "request", () => next(), sessionId);
+    runAsActor(userId, "request", () => next(), sessionId, {
+      origin: { kind: apiKeyId ? "api" : "ui" },
+      apiKeyId,
+      apiKeyScopes,
+    });
   });
 
   outer.use(inner);
@@ -424,6 +469,7 @@ function clientErrorStatus(error: unknown): number | null {
 async function writePublicRouteAudit(
   manifest: PluginManifest,
   paths: string[],
+  authorization = false,
 ): Promise<void> {
   try {
     const { logAudit } = await import("../utils/audit-logger.js");
@@ -434,7 +480,9 @@ async function writePublicRouteAudit(
       resourceType: "plugin",
       resourceId: manifest.id,
       resourceName: manifest.name,
-      details: `unauthenticated routes: ${paths.join(", ")}`,
+      details: `unauthenticated routes: ${paths.join(", ")}${
+        authorization ? " (receive the Authorization header)" : ""
+      }`,
       success: true,
     });
   } catch {

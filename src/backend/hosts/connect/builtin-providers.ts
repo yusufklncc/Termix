@@ -99,7 +99,12 @@ async function prepareKey(
 
   if (passphrase) config.passphrase = passphrase;
   // Lets a server that wants key then password (or password only) still work.
-  if (host.password) config.password = host.password;
+  // ssh2 tries password first by default, so it has none left to answer with
+  // once the key was accepted as the first step.
+  if (host.password) {
+    config.password = host.password;
+    config.authHandler = ["publickey", "password", "keyboard-interactive"];
+  }
 
   const certPublicKey = host.certPublicKey;
   if (certPublicKey && certPublicKey.trim()) {
@@ -164,6 +169,18 @@ const credentialProvider: SshAuthProvider = {
   prepare: async (config, host, env) => {
     if (keyText(host.key).trim()) return prepareKey(config, host, env);
     if (host.password) return preparePassword(config, host, env);
+    // An unsaved host (Quick Connect) names its credential by id. It is read
+    // here on the server, so a use level share never reaches the browser.
+    const expanded = await expandCredential(host, env.userId);
+    if (expanded) {
+      if (expanded.username && !config.username) {
+        config.username = expanded.username;
+      }
+      if (keyText(expanded.key).trim()) {
+        return prepareKey(config, expanded, env);
+      }
+      if (expanded.password) return preparePassword(config, expanded, env);
+    }
     return {
       status: "error",
       code: "missing-secret",
@@ -171,6 +188,27 @@ const credentialProvider: SshAuthProvider = {
     };
   },
 };
+
+async function expandCredential(
+  host: SshConnectHost,
+  userId: string,
+): Promise<SshConnectHost | null> {
+  const credentialId = Number(
+    (host as SshConnectHost & { credentialId?: unknown }).credentialId,
+  );
+  if (!Number.isInteger(credentialId) || credentialId <= 0) return null;
+  const { findUsableCredential } = await import("../usable-credential.js");
+  const credential = await findUsableCredential(credentialId, userId);
+  if (!credential) return null;
+  return {
+    ...host,
+    username: host.username || credential.username || host.username,
+    password: credential.password ?? undefined,
+    key: credential.privateKey ?? credential.key ?? undefined,
+    keyPassword: credential.keyPassword ?? undefined,
+    keyType: credential.keyType ?? undefined,
+  } as SshConnectHost;
+}
 
 const agentProvider: SshAuthProvider = {
   type: "agent",

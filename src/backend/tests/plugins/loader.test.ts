@@ -19,6 +19,10 @@ import {
   unsafeArchivePath,
 } from "../../plugins/loader.js";
 import { createFixturePlugin } from "./fixture-plugin.js";
+import {
+  clearRevocationLists,
+  setRevocationList,
+} from "../../plugins/revocation-state.js";
 
 vi.mock("../../database/repositories/factory.js", () => ({
   createCurrentPluginStorageRepository: () => ({
@@ -129,6 +133,85 @@ describe("PluginLoader discovery", () => {
     expect(loaded).toHaveLength(1);
     expect(loaded[0].source).toBe("bundled");
     expect(loaded[0].manifest.name).toBe("Sample Plugin");
+  });
+});
+
+describe("PluginLoader themes and skipped looks", () => {
+  const themed = {
+    capabilities: ["ui:theme", "ui:layout"],
+    manifestOverrides: {
+      contributes: {
+        themes: [
+          {
+            id: "paper",
+            label: "Paper",
+            mode: "light",
+            css: "themes/paper.css",
+          },
+        ],
+        layouts: [{ id: "fancy", label: "Fancy" }],
+      },
+    },
+  };
+
+  it("loads a plugin whose theme CSS is allowed", async () => {
+    const fixture = createFixturePlugin(themed);
+    cleanups.push(fixture.cleanup);
+    fs.mkdirSync(path.join(fixture.dir, "themes"));
+    fs.writeFileSync(
+      path.join(fixture.dir, "themes", "paper.css"),
+      ".paper { --background: #fff; }",
+    );
+    const plugin = await new PluginLoader().load(fixture.dir, "bundled");
+    expect(plugin.manifest.contributes?.themes?.[0].id).toBe("paper");
+  });
+
+  it("refuses a plugin whose theme CSS reaches outside", async () => {
+    const fixture = createFixturePlugin(themed);
+    cleanups.push(fixture.cleanup);
+    fs.mkdirSync(path.join(fixture.dir, "themes"));
+    fs.writeFileSync(
+      path.join(fixture.dir, "themes", "paper.css"),
+      '@import url("https://example.com/x.css");',
+    );
+    await expect(
+      new PluginLoader().load(fixture.dir, "bundled"),
+    ).rejects.toThrow(/theme paper is not allowed: @import/);
+  });
+
+  it("refuses a plugin whose theme file is missing", async () => {
+    const fixture = createFixturePlugin(themed);
+    cleanups.push(fixture.cleanup);
+    await expect(
+      new PluginLoader().load(fixture.dir, "bundled"),
+    ).rejects.toThrow(/theme paper file themes\/paper.css is missing/);
+  });
+
+  it("remembers why a layout plugin was skipped", async () => {
+    const bundled = tempRoot("termix-bundled-");
+    const user = tempRoot("termix-data-");
+    createFixturePlugin({
+      ...themed,
+      id: "fancy-layout",
+      root: bundled,
+      manifestOverrides: {
+        ...themed.manifestOverrides,
+        version: "2.0.0",
+        engine: { termix: ">=99.0.0", api: "1" },
+      },
+    });
+    setRoots(bundled, user);
+
+    const loader = new PluginLoader();
+    await loader.loadAll();
+    const [skipped] = loader.skipped();
+    expect(skipped).toMatchObject({
+      id: "fancy-layout",
+      version: "2.0.0",
+      layouts: ["fancy"],
+      themes: ["paper"],
+    });
+    expect(skipped.error).toMatch(/needs Termix >=99.0.0/);
   });
 });
 
@@ -287,6 +370,36 @@ describe("PluginLoader lifecycle", () => {
     await loader.deactivate("sample-plugin");
     expect(loader.get("sample-plugin")?.state).toBe("stopped");
     expect(fs.readFileSync(marker, "utf8")).toBe("up\ndown\n");
+  });
+
+  it("never starts a plugin version Termix revoked", async () => {
+    const marker = path.join(tempRoot("termix-revoked-"), "ran.txt");
+    const loader = await single(`
+      import fs from "node:fs";
+      export async function activate() {
+        fs.writeFileSync(${JSON.stringify(marker)}, "ran");
+      }
+    `);
+    const version = loader.get("sample-plugin")!.manifest.version;
+    setRevocationList("official", {
+      type: "termix-revocations",
+      tier: "official",
+      version: 1,
+      issued: "",
+      keys: [],
+      plugins: [],
+      versions: [{ id: "sample-plugin", version, reason: "bad build" }],
+    });
+    try {
+      await loader.activate("sample-plugin");
+      expect(loader.get("sample-plugin")?.state).toBe("blocked");
+      expect(loader.get("sample-plugin")?.lastError).toMatch(
+        /revoked: bad build/,
+      );
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      clearRevocationLists();
+    }
   });
 
   it("marks a plugin failed when activate throws", async () => {

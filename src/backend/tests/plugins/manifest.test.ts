@@ -93,11 +93,11 @@ describe("manifest v2 validation", () => {
 
   it("refuses a manifest targeting another SDK api version", () => {
     const { manifest, errors } = parseManifest(
-      base({ engine: { termix: ">=2.9.0", api: "2" } }),
+      base({ engine: { termix: ">=2.9.0", api: "3" } }),
     );
 
     expect(manifest).toBeUndefined();
-    expect(errors.join()).toMatch(/needs plugin API 2/);
+    expect(errors.join()).toMatch(/needs plugin API 3/);
   });
 
   it("accepts an api range this build satisfies", () => {
@@ -650,6 +650,110 @@ describe("panels, dashboard cards and guest pages", () => {
   });
 });
 
+describe("contributes.mobile", () => {
+  const tabs = [
+    { id: "sample", titleKey: "nav.sample", icon: "Box", openFrom: ["rail"] },
+  ];
+
+  it("accepts each mode with its own fields", () => {
+    for (const mobile of [
+      {
+        mode: "webview",
+        entry: "dist/mobile.js",
+        sizes: ["phone", "tablet"],
+        views: ["sample"],
+        note: "mobile.note",
+      },
+      { mode: "webview" },
+      { mode: "native", feature: "file-manager" },
+      { mode: "none", note: "Not on phones" },
+    ]) {
+      expect(validateManifest(base({ contributes: { tabs, mobile } }))).toEqual(
+        [],
+      );
+    }
+  });
+
+  it("needs a known mode and rejects unknown fields", () => {
+    const errors = validateManifest(
+      base({ contributes: { mobile: { mode: "app", width: 3 } } }),
+    ).join();
+    expect(errors).toMatch(/Unknown field "width" in "contributes\.mobile"/);
+    expect(errors).toMatch(/contributes\.mobile\.mode must be one of/);
+    expect(
+      validateManifest(base({ contributes: { mobile: "webview" } })).join(),
+    ).toMatch(/"contributes\.mobile" must be an object/);
+  });
+
+  it("keeps webview and native fields to their own mode", () => {
+    const errors = validateManifest(
+      base({
+        contributes: {
+          tabs,
+          mobile: {
+            mode: "native",
+            entry: "dist/mobile.js",
+            views: ["sample"],
+          },
+        },
+      }),
+    ).join();
+    expect(errors).toMatch(/mobile\.entry is only for mode "webview"/);
+    expect(errors).toMatch(/mobile\.views is only for mode "webview"/);
+    expect(
+      validateManifest(
+        base({ contributes: { mobile: { mode: "webview", feature: "x1" } } }),
+      ).join(),
+    ).toMatch(/mobile\.feature is only for mode "native"/);
+  });
+
+  it("puts the entry beside the frontend bundle", () => {
+    const check = (entry: string, frontend?: string) =>
+      validateManifest(
+        base({
+          ...(frontend ? { frontend } : {}),
+          contributes: { mobile: { mode: "webview", entry } },
+        }),
+      ).join();
+    expect(check("dist/mobile.js")).toBe("");
+    expect(check("./dist/mobile.js")).toBe("");
+    expect(check("build/mobile.js", "build/frontend.js")).toBe("");
+    expect(check("mobile.js")).toMatch(/same folder as the frontend bundle/);
+    expect(check("dist/mobile.css")).toMatch(/entry must be a \.js file/);
+    expect(check("../dist/mobile.js")).toMatch(/relative path inside/);
+  });
+
+  it("checks sizes, views and the feature id", () => {
+    const errors = validateManifest(
+      base({
+        contributes: {
+          tabs,
+          panels: [{ id: "side", titleKey: "nav.side" }],
+          mobile: {
+            mode: "webview",
+            sizes: ["phone", "phone", "watch"],
+            views: ["sample", "side", "missing"],
+          },
+        },
+      }),
+    ).join();
+    expect(errors).toMatch(/sizes duplicates "phone"/);
+    expect(errors).toMatch(/sizes entries must be one of: phone, tablet/);
+    expect(errors).toMatch(/views entries must be ids .*"missing"/);
+    expect(errors).not.toMatch(/"side"/);
+    expect(
+      validateManifest(
+        base({ contributes: { mobile: { mode: "webview", sizes: [] } } }),
+      ).join(),
+    ).toMatch(/sizes must be a non-empty array/);
+    expect(
+      validateManifest(
+        base({ contributes: { mobile: { mode: "native", feature: "Files" } } }),
+      ).join(),
+    ).toMatch(/mobile\.feature must match/);
+  });
+});
+
 describe("named service providers", () => {
   const provides = (names: unknown) => [
     {
@@ -1015,5 +1119,155 @@ describe("docs and env fields", () => {
     expect(pluginDocsPage(base, "/setup/")).toBe(`${base}/setup`);
     expect(pluginDocsPage(base, "setup", "#ports")).toBe(`${base}/setup#ports`);
     expect(pluginDocsPage(base, "", "top")).toBe(`${base}#top`);
+  });
+});
+
+describe("layouts and themes", () => {
+  const layouts = [
+    {
+      id: "fancy",
+      label: "layout.fancy",
+      defaultTheme: "paper",
+      default: true,
+    },
+  ];
+  const themes = [
+    {
+      id: "paper",
+      label: "theme.paper",
+      mode: "light",
+      css: "themes/paper.css",
+      swatch: { background: "#ffffff", panel: "#eeeeee", text: "#111111" },
+    },
+  ];
+
+  it("accepts layouts and themes with their capabilities", () => {
+    const { manifest, errors } = parseManifest(
+      base({
+        capabilities: ["ui:layout", "ui:theme"],
+        contributes: { layouts, themes },
+      }),
+    );
+    expect(errors).toEqual([]);
+    expect(manifest?.contributes?.layouts?.[0].id).toBe("fancy");
+    expect(manifest?.contributes?.themes?.[0].mode).toBe("light");
+  });
+
+  it("needs ui:layout for layouts and ui:theme for themes", () => {
+    const { errors } = parseManifest(
+      base({ capabilities: ["kv:own"], contributes: { layouts, themes } }),
+    );
+    expect(errors.some((e) => e.includes('"ui:layout"'))).toBe(true);
+    expect(errors.some((e) => e.includes('"ui:theme"'))).toBe(true);
+  });
+
+  it("refuses bad ids, modes, paths and swatches", () => {
+    const errors = validateManifest(
+      base({
+        capabilities: ["ui:layout", "ui:theme"],
+        contributes: {
+          layouts: [
+            { id: "Fancy", label: "x" },
+            { id: "two", label: "x", default: true },
+            { id: "three", label: "x", default: true, extra: 1 },
+          ],
+          themes: [
+            { id: "paper", label: "x", mode: "sepia", css: "../paper.css" },
+            { id: "ink", label: "x", mode: "dark", css: "ink.scss" },
+            {
+              id: "dusk",
+              label: "x",
+              mode: "dark",
+              css: "dusk.css",
+              swatch: { background: "red", panel: "#000", text: "#fff" },
+            },
+            { id: "dusk", label: "x", mode: "dark", css: "dusk2.css" },
+          ],
+        },
+      }),
+    );
+    const has = (text: string) => errors.some((e) => e.includes(text));
+    expect(has("contributes.layouts[0].id must match")).toBe(true);
+    expect(has("Only one entry")).toBe(true);
+    expect(has('Unknown field "extra"')).toBe(true);
+    expect(has('mode must be "light" or "dark"')).toBe(true);
+    expect(has("relative path inside the plugin")).toBe(true);
+    expect(has("must be a .css file")).toBe(true);
+    expect(has("swatch.background must be a hex color")).toBe(true);
+    expect(has('duplicates "dusk"')).toBe(true);
+  });
+});
+
+describe("manifest runtime", () => {
+  it("accepts a desktop runtime plugin", () => {
+    expect(
+      validateManifest(
+        base({ runtime: "desktop", capabilities: ["desktop:local"] }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects an unknown runtime", () => {
+    expect(validateManifest(base({ runtime: "cloud" })).join()).toMatch(
+      /runtime/,
+    );
+  });
+
+  it("rejects a desktop runtime that is mirrored or server only", () => {
+    expect(
+      validateManifest(base({ runtime: "desktop", desktop: "mirror" })).join(),
+    ).toMatch(/local/);
+  });
+});
+
+describe("sandbox block (plugin API 2)", () => {
+  it("accepts schedules, events, registry keys and limits", () => {
+    expect(
+      validateManifest(
+        base({
+          sandbox: {
+            alwaysOn: false,
+            memoryMb: 384,
+            schedules: [{ id: "poll", every: 60_000 }],
+            events: ["host.deleted"],
+            registry: ["sample-plugin.variables"],
+            workers: true,
+          },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it.each([
+    [{ workers: "yes" }, /workers must be a boolean/],
+    [{ memoryMb: 16 }, /memoryMb/],
+    [{ schedules: [{ id: "Bad Id", every: 60_000 }] }, /id must be/],
+    [{ schedules: [{ id: "a", every: 10 }] }, /at least 1000/],
+    [
+      {
+        schedules: [
+          { id: "a", every: 1000 },
+          { id: "a", every: 2000 },
+        ],
+      },
+      /duplicates/,
+    ],
+    [{ events: ["Not A Topic!"] }, /array of names/],
+    [{ registry: ["x.y", "x.y"] }, /duplicates/],
+    [{ listeners: true }, /listeners/],
+  ])("refuses %j", (sandbox, message) => {
+    expect(validateManifest(base({ sandbox })).join()).toMatch(message);
+  });
+
+  it("knows which engine ranges only fit API 1", async () => {
+    const { isLegacyPluginApi, isApiCompatible } =
+      await import("@termix-ssh/plugin-sdk/manifest");
+    expect(isLegacyPluginApi("^1.15")).toBe(true);
+    expect(isLegacyPluginApi("1")).toBe(true);
+    expect(isLegacyPluginApi("^2.0.0")).toBe(false);
+    expect(isLegacyPluginApi(">=1")).toBe(false);
+    expect(isApiCompatible("^1.15")).toBe(true);
+    expect(isApiCompatible("^2.0.0")).toBe(true);
+    expect(isApiCompatible("3")).toBe(false);
   });
 });

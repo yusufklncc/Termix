@@ -19,8 +19,19 @@ export const users = sqliteTable(
     registeredAt: text("registered_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    displayName: text("display_name"),
+    email: text("email"),
+    // Set while the account is turned off or waiting for approval.
+    disabledAt: text("disabled_at"),
+    disabledReason: text("disabled_reason"),
+    lastLoginAt: text("last_login_at"),
+    // Plugin that created the account, like a SCIM provisioner.
+    managedBy: text("managed_by"),
   },
-  (table) => [uniqueIndex("idx_users_username").on(table.username)],
+  (table) => [
+    uniqueIndex("idx_users_username").on(table.username),
+    uniqueIndex("idx_users_email").on(table.email),
+  ],
 );
 
 export const settings = sqliteTable("settings", {
@@ -47,6 +58,10 @@ export const sessions = sqliteTable(
     lastActiveAt: text("last_active_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    // Set while the session may only set up a second factor.
+    restriction: text("restriction", { length: 32 }),
+    // Seconds without a request before the session ends, from the login policy.
+    idleTimeout: integer("idle_timeout"),
   },
   // Listing a user's devices, and the startup sweep of expired rows.
   (table) => [
@@ -179,6 +194,9 @@ export const hosts = sqliteTable(
     // legacy algorithms, agent, environment). JSON.
     sshOptions: text("ssh_options"),
     notes: text("notes"),
+    // Hex color and Lucide icon name a layout may show next to the host.
+    color: text("color"),
+    icon: text("icon"),
     enableSsh: integer("enable_ssh", { mode: "boolean" }).notNull().default(true),
 
     sshPort: integer("ssh_port").default(22),
@@ -273,6 +291,7 @@ export const sshCredentials = sqliteTable(
   lastUsed: text("last_used"),
   syncId: text("sync_id").unique(),
   sharedSource: text("shared_source"),
+  localOnly: integer("local_only", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at")
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),
@@ -405,28 +424,6 @@ export const hostDefaults = sqliteTable(
   ],
 );
 
-export const recentActivity = sqliteTable(
-  "recent_activity",
-  {
-    id: integer("id").primaryKey({ autoIncrement: true }),
-    userId: text("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    type: text("type").notNull(),
-    hostId: integer("host_id")
-      .notNull()
-      .references(() => hosts.id, { onDelete: "cascade" }),
-    hostName: text("host_name"),
-    timestamp: text("timestamp")
-      .notNull()
-      .default(sql`CURRENT_TIMESTAMP`),
-  },
-  // Always read newest-first for one user, so timestamp follows user_id.
-  (table) => [
-    index("idx_recent_activity_user_ts").on(table.userId, table.timestamp),
-  ],
-);
-
 export const hostAccess = sqliteTable(
   "host_access",
   {
@@ -491,6 +488,38 @@ export const sharedHostAuthOverrides = sqliteTable(
     uniqueIndex("shared_host_auth_overrides_host_user_protocol_unique").on(
       table.hostId,
       table.userId,
+      table.protocol,
+    ),
+  ],
+);
+
+/**
+ * A recipient's own login for the shared hosts in a folder ("Parent / Child")
+ * and its subfolders. A host's own override still wins.
+ */
+export const sharedFolderAuthOverrides = sqliteTable(
+  "shared_folder_auth_overrides",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    folder: text("folder").notNull(),
+    protocol: text("protocol").notNull().default("ssh"),
+    credentialId: integer("credential_id")
+      .notNull()
+      .references(() => sshCredentials.id, { onDelete: "cascade" }),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("shared_folder_auth_overrides_user_folder_protocol_unique").on(
+      table.userId,
+      table.folder,
       table.protocol,
     ),
   ],
@@ -621,6 +650,11 @@ export const auditLogs = sqliteTable(
     timestamp: text("timestamp")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+
+    // Each row's hash covers the one before, so an edit or a removed row shows.
+    // Null on rows written before the chain existed.
+    prevHash: text("prev_hash"),
+    hash: text("hash"),
   },
   // This table only grows, and is always read newest-first with an optional
   // filter. Each composite leads with the filtered column so the same index
@@ -631,6 +665,29 @@ export const auditLogs = sqliteTable(
     index("idx_audit_logs_action_ts").on(table.action, table.timestamp),
     index("idx_audit_logs_resource_ts").on(table.resourceType, table.timestamp),
   ],
+);
+
+// Dangerous admin changes waiting out the cooling-off time.
+export const adminHolds = sqliteTable(
+  "admin_holds",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull(),
+    // Ids and flags only, never secrets.
+    payload: text("payload").notNull(),
+    summary: text("summary").notNull(),
+    requestedBy: text("requested_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    requestedByName: text("requested_by_name").notNull(),
+    requestedAt: text("requested_at").notNull(),
+    runsAt: text("runs_at").notNull(),
+    status: text("status").notNull().default("pending"),
+    decidedBy: text("decided_by"),
+    decidedAt: text("decided_at"),
+    error: text("error"),
+  },
+  (table) => [index("idx_admin_holds_status_runs").on(table.status, table.runsAt)],
 );
 
 export const apiKeys = sqliteTable(
@@ -647,8 +704,124 @@ export const apiKeys = sqliteTable(
     expiresAt: text("expires_at"),
     lastUsedAt: text("last_used_at"),
     isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+    // JSON list. Null means full access, which every older key has.
+    scopes: text("scopes"),
   },
   (table) => [index("idx_api_keys_user_id").on(table.userId)],
+);
+
+// A link an admin hands out so someone can make an account.
+export const userInvites = sqliteTable(
+  "user_invites",
+  {
+    id: text("id").primaryKey(),
+    tokenHash: text("token_hash").notNull(),
+    note: text("note"),
+    // JSON list of role ids given on sign up.
+    roleIds: text("role_ids"),
+    makeAdmin: integer("make_admin", { mode: "boolean" }).notNull().default(false),
+    maxUses: integer("max_uses").notNull().default(1),
+    uses: integer("uses").notNull().default(0),
+    createdBy: text("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    expiresAt: text("expires_at").notNull(),
+    revokedAt: text("revoked_at"),
+  },
+  (table) => [uniqueIndex("idx_user_invites_token_hash").on(table.tokenHash)],
+);
+
+export const operationRuns = sqliteTable(
+  "operation_runs",
+  {
+    id: text("id").primaryKey(),
+    actionId: text("action_id").notNull(),
+    actionVersion: integer("action_version").notNull().default(1),
+    pluginId: text("plugin_id").notNull(),
+    pluginVersion: text("plugin_version").notNull(),
+
+    // Nullable on purpose: history outlives the account, like audit_logs.
+    userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
+    username: text("username").notNull(),
+
+    origin: text("origin").notNull(),
+    hostId: integer("host_id"),
+    hostName: text("host_name"),
+    batchId: text("batch_id"),
+    dryRun: integer("dry_run", { mode: "boolean" }).notNull().default(false),
+    risk: text("risk").notNull(),
+    status: text("status").notNull(),
+    summary: text("summary"),
+    changed: integer("changed", { mode: "boolean" }),
+    input: text("input"),
+    // Only until the run ends, then wiped.
+    sealedInput: text("sealed_input"),
+    output: text("output"),
+    undoInput: text("undo_input"),
+    error: text("error"),
+    errorCode: text("error_code"),
+    undoOf: text("undo_of"),
+    idempotencyKey: text("idempotency_key"),
+    createdAt: text("created_at").notNull(),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+  },
+  (table) => [
+    index("idx_operation_runs_created").on(table.createdAt),
+    index("idx_operation_runs_user_created").on(table.userId, table.createdAt),
+    index("idx_operation_runs_host_created").on(table.hostId, table.createdAt),
+    index("idx_operation_runs_status").on(table.status),
+    index("idx_operation_runs_batch").on(table.batchId),
+  ],
+);
+
+export const operationApprovals = sqliteTable(
+  "operation_approvals",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => operationRuns.id, { onDelete: "cascade" }),
+    requestedBy: text("requested_by"),
+    reason: text("reason"),
+    allowSelf: integer("allow_self", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    status: text("status").notNull(),
+    decidedBy: text("decided_by"),
+    comment: text("comment"),
+    createdAt: text("created_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    decidedAt: text("decided_at"),
+  },
+  (table) => [
+    index("idx_operation_approvals_status").on(table.status, table.expiresAt),
+    index("idx_operation_approvals_run").on(table.runId),
+  ],
+);
+
+export const operationEvents = sqliteTable(
+  "operation_events",
+  {
+    id: text("id").primaryKey(),
+    eventId: text("event_id").notNull(),
+    pluginId: text("plugin_id").notNull(),
+    hostId: integer("host_id"),
+    severity: text("severity"),
+    payload: text("payload"),
+    runId: text("run_id"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    index("idx_operation_events_created").on(table.createdAt),
+    index("idx_operation_events_host_created").on(
+      table.hostId,
+      table.createdAt,
+    ),
+  ],
 );
 
 export const userOpenTabs = sqliteTable(
@@ -704,6 +877,8 @@ export const userPreferences = sqliteTable("user_preferences", {
   compactHostView: integer("compact_host_view", { mode: "boolean" }),
   statusColorScheme: text("status_color_scheme"),
   customKeybindings: text("custom_keybindings"),
+  layoutId: text("layout_id"),
+  themeId: text("theme_id"),
   updatedAt: text("updated_at")
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),
@@ -748,6 +923,33 @@ export const uiPreferences = sqliteTable("ui_preferences", {
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),
 });
+
+/**
+ * What a framed plugin registers, per user, client kind and plugin, so a new
+ * browser or device skips booting every plugin's frame. No answers or values.
+ */
+export const frameRegistrations = sqliteTable(
+  "frame_registrations",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    client: text("client").notNull(),
+    pluginId: text("plugin_id").notNull(),
+    data: text("data").notNull(),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_frame_registrations_user_client_plugin").on(
+      table.userId,
+      table.client,
+      table.pluginId,
+    ),
+  ],
+);
 
 // --- sync begin ---
 /**
@@ -1009,6 +1211,13 @@ export const plugins = sqliteTable(
     pinnedVersion: text("pinned_version"),
     /** stable | beta: which registry releases updates offer. */
     channel: text("channel").notNull().default("stable"),
+    /**
+     * An admin let this API 1 plugin run inside the server process. Only
+     * official plugins can have it; API 2 plugins ignore it.
+     */
+    runUnisolated: integer("run_unisolated", { mode: "boolean" })
+      .notNull()
+      .default(false),
     manifestJson: text("manifest_json").notNull(),
   },
   (table) => [index("idx_plugins_registry_id").on(table.registryId)],

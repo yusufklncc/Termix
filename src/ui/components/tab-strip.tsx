@@ -57,7 +57,9 @@ export function TabStrip({
     const el = ref.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      if (e.deltaY === 0) return;
+      // Only a strip that overflows turns the wheel sideways; otherwise the
+      // page under it keeps scrolling.
+      if (e.deltaY === 0 || el.scrollWidth <= el.clientWidth) return;
       e.preventDefault();
       el.scrollLeft += e.deltaY;
     };
@@ -71,6 +73,8 @@ export function TabStrip({
       <button
         key={tab.id}
         type="button"
+        data-slot="tab-strip-tab"
+        data-state={active ? "active" : "inactive"}
         onClick={() => onTabChange(tab.id)}
         className={`flex items-center gap-1.5 px-3 ${
           variant === "secondary" ? "py-1.5 text-[11px]" : "py-2 text-xs"
@@ -94,9 +98,10 @@ export function TabStrip({
   const overflow = scroll.left || scroll.right;
   return (
     <div
+      data-slot="tab-strip"
       className={cn(
         "flex min-w-0 items-center",
-        variant === "secondary" && "border-t border-border bg-card",
+        variant === "secondary" && "border-t border-border",
         className,
       )}
     >
@@ -118,7 +123,9 @@ export function TabStrip({
         </button>
       )}
       <div ref={ref} className="min-w-0 flex-1 overflow-x-auto scrollbar-none">
-        <div className="flex min-w-max">{tabs.map(renderTab)}</div>
+        <div data-slot="tab-strip-list" className="flex min-w-max">
+          {tabs.map(renderTab)}
+        </div>
       </div>
       {overflow && (
         <button
@@ -138,7 +145,9 @@ export function TabStrip({
         </button>
       )}
       {trailing && (
-        <div className="flex shrink-0 items-center gap-1 px-1">{trailing}</div>
+        <div className="flex shrink-0 items-center gap-1 px-2 [&_[data-slot=button]]:!h-6 [&_[data-slot=button][data-size^=icon]]:!size-6 [&_[data-slot=input]]:!h-6 [&_[data-slot=select-trigger]]:!h-6 [&_[data-slot=segmented]]:!h-6 [&_[data-slot=view-toggle]]:!h-6">
+          {trailing}
+        </div>
       )}
     </div>
   );

@@ -9,9 +9,15 @@ import {
   Facts,
   PanelSearch,
   PanelShell,
+  PanelToolbar,
   Segmented,
+  ToolbarBand,
+  ToolbarSelect,
   ViewToggle,
+  gridSizeStyle,
 } from "@/components/panel-layout";
+import { TileColumn } from "@/components/tile-grid/TileColumn";
+import { TileStack } from "@/components/tile-grid/TileStack";
 
 afterEach(cleanup);
 
@@ -32,6 +38,38 @@ describe("PanelSearch", () => {
   it("hides the clear button while empty", () => {
     render(<PanelSearch value="" onChange={() => {}} />);
     expect(screen.queryByLabelText("panel.clearSearch")).toBeNull();
+  });
+});
+
+describe("PanelToolbar", () => {
+  it("puts search, the panel's buttons and an icon add button on one row", () => {
+    const onAdd = vi.fn();
+    render(
+      <PanelToolbar
+        search=""
+        onSearchChange={() => {}}
+        onAdd={onAdd}
+        addLabel="New snippet"
+        below={<span>target</span>}
+      >
+        <button type="button">sort</button>
+      </PanelToolbar>,
+    );
+    const add = screen.getByLabelText("New snippet");
+    expect(add.textContent).toBe("");
+    const row = screen
+      .getByRole("textbox")
+      .closest(".relative")!.parentElement!;
+    expect(row.contains(screen.getByText("sort"))).toBe(true);
+    expect(row.contains(add)).toBe(true);
+    expect(row.contains(screen.getByText("target"))).toBe(false);
+    fireEvent.click(add);
+    expect(onAdd).toHaveBeenCalledOnce();
+  });
+
+  it("leaves out the add button without onAdd", () => {
+    render(<PanelToolbar search="" onSearchChange={() => {}} />);
+    expect(screen.queryByLabelText("common.new")).toBeNull();
   });
 });
 
@@ -71,6 +109,34 @@ describe("ViewToggle", () => {
     expect(onView).toHaveBeenCalledWith("list");
     fireEvent.click(screen.getByLabelText("panel.compactRows"));
     expect(onDensity).toHaveBeenCalledWith("compact");
+  });
+
+  it("shows the columns picker only in grid view", () => {
+    const props = { onView: vi.fn(), columns: "auto" as const };
+    const { rerender } = render(
+      <ViewToggle view="grid" {...props} onColumns={vi.fn()} />,
+    );
+    expect(screen.getByLabelText("panel.columns.title")).toBeTruthy();
+
+    rerender(<ViewToggle view="list" {...props} onColumns={vi.fn()} />);
+    expect(screen.queryByLabelText("panel.columns.title")).toBeNull();
+
+    rerender(<ViewToggle view="grid" {...props} />);
+    expect(screen.queryByLabelText("panel.columns.title")).toBeNull();
+  });
+});
+
+describe("gridSizeStyle", () => {
+  it("fits auto cards to the pane", () => {
+    expect(gridSizeStyle("auto", 280).gridTemplateColumns).toBe(
+      "repeat(auto-fill, minmax(min(100%, 280px), 1fr))",
+    );
+  });
+
+  it("splits the width for a fixed count", () => {
+    expect(gridSizeStyle("4").gridTemplateColumns).toContain(
+      "(100% - 3 * 0.5rem) / 4",
+    );
   });
 });
 
@@ -117,5 +183,85 @@ describe("PanelShell", () => {
     expect(screen.getByText("2 running")).toBeTruthy();
     expect(screen.getByText("toolbar")).toBeTruthy();
     expect(screen.getByText("footer")).toBeTruthy();
+  });
+});
+
+describe("toolbar sizing", () => {
+  it("fits small controls in the toolbar and in ToolbarBand", () => {
+    render(
+      <>
+        <PanelShell title="X" toolbar={<span>tools</span>}>
+          body
+        </PanelShell>
+        <ToolbarBand>band</ToolbarBand>
+      </>,
+    );
+    const band = screen.getByText("band");
+    expect(band.className).toContain(
+      "[&_[data-slot=button][data-size=sm]]:h-8",
+    );
+    expect(screen.getByText("tools").parentElement!.className).toContain(
+      "[&_[data-slot=input]]:h-8",
+    );
+  });
+
+  it("keeps Segmented at its natural width", () => {
+    render(
+      <Segmented<"a" | "b">
+        value="a"
+        onChange={() => {}}
+        options={[
+          { value: "a", label: "A" },
+          { value: "b", label: "B" },
+        ]}
+      />,
+    );
+    expect(screen.getByRole("radiogroup").className).toContain("w-fit");
+  });
+
+  it("clips the last tile line when a footer is pinned", () => {
+    const { container } = render(
+      <PanelShell title="Form" footer={<span>save</span>}>
+        <TileColumn>
+          <div>field</div>
+        </TileColumn>
+      </PanelShell>,
+    );
+    expect(container.querySelector(".-mb-px")).toBeTruthy();
+  });
+});
+
+describe("ToolbarBand in a tile stack", () => {
+  it("leaves the line under it to the stack", () => {
+    render(
+      <TileStack>
+        <ToolbarBand>inside</ToolbarBand>
+      </TileStack>,
+    );
+    expect(screen.getByText("inside").parentElement!.className).toContain(
+      "[&>[data-slot=toolbar-band]]:border-b-0",
+    );
+  });
+});
+
+describe("ToolbarSelect", () => {
+  it("puts contentClassName on the open menu", () => {
+    render(
+      <ToolbarSelect<"a" | "b">
+        value="a"
+        onChange={() => {}}
+        label="pick"
+        contentClassName="z-[1001]"
+        options={[
+          { value: "a", label: "A" },
+          { value: "b", label: "B" },
+        ]}
+      />,
+    );
+    const trigger = screen.getByLabelText("pick");
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    const menu = document.querySelector('[data-slot="select-content"]');
+    expect(menu?.className).toContain("z-[1001]");
+    expect(menu?.className).not.toContain("z-50");
   });
 });

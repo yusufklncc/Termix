@@ -13,12 +13,18 @@
 import semver from "semver";
 import { isKnownCapability } from "./capabilities.js";
 import {
+  checkOperationReferences,
+  validateOperations,
+  type PluginOperationsContribution,
+} from "./operations.js";
+import {
   ENV_NAME_PATTERN,
   MAX_ENV_DESCRIPTION_LENGTH,
   pluginDocsUrl,
   type PluginEnvVar,
 } from "./docs.js";
 
+export { validateThemeCss } from "./theme-css.js";
 export {
   ENV_NAME_PATTERN,
   MAX_ENV_DESCRIPTION_LENGTH,
@@ -36,7 +42,34 @@ export {
  * "^1.2" needs 1.2 or later). engine.termix is checked against the core
  * version by the server.
  */
-export const PLUGIN_API_VERSION = "1.3.0";
+export const PLUGIN_API_VERSION = "2.9.0";
+
+/**
+ * Data slots in core and the official plugins. A component in one of these
+ * gets a warning from validate: give `kind: "data"` and `useValue` instead.
+ * `rows` says what the row key is.
+ */
+export const DATA_SLOTS: Readonly<
+  Record<
+    string,
+    {
+      shapes: ("bars" | "stat" | "badge" | "dot" | "text")[];
+      rows: "host" | "tab" | "credential";
+    }
+  >
+> = {
+  "dashboard.hostRow": { shapes: ["bars", "stat", "text"], rows: "host" },
+  "dashboard.hostRowBadge": { shapes: ["badge"], rows: "host" },
+  "homepage.hostMetrics": { shapes: ["bars", "stat", "text"], rows: "host" },
+  "terminal.toolbarStatus": { shapes: ["bars", "stat", "text"], rows: "tab" },
+  "credentials.badges": { shapes: ["badge", "text"], rows: "credential" },
+};
+
+/**
+ * The last API 1 release. Core still loads API 1 plugins, but only in process
+ * and only when an admin turns on "Run without isolation" for an official one.
+ */
+export const LEGACY_PLUGIN_API_VERSION = "1.17.0";
 
 /** The API major, the default engine.api for a new plugin. */
 export const SUPPORTED_PLUGIN_API_VERSION = String(
@@ -45,9 +78,22 @@ export const SUPPORTED_PLUGIN_API_VERSION = String(
 
 /** Whether this build's plugin API satisfies a manifest's engine.api. */
 export function isApiCompatible(range: string): boolean {
+  if (semver.validRange(range) === null) return false;
   return (
-    semver.validRange(range) !== null &&
-    semver.satisfies(PLUGIN_API_VERSION, range)
+    semver.satisfies(PLUGIN_API_VERSION, range) ||
+    semver.satisfies(LEGACY_PLUGIN_API_VERSION, range)
+  );
+}
+
+/**
+ * True when engine.api only fits API 1. Such a plugin can't run in its own
+ * process, so core needs the admin switch to load it at all.
+ */
+export function isLegacyPluginApi(range: string): boolean {
+  if (semver.validRange(range) === null) return false;
+  return (
+    !semver.satisfies(PLUGIN_API_VERSION, range) &&
+    semver.satisfies(LEGACY_PLUGIN_API_VERSION, range)
   );
 }
 
@@ -395,6 +441,11 @@ export interface PluginHostSettingsContribution {
   enableDescriptionKey?: string;
   /** What the enable switch reads before a host saves it. Off by default. */
   enableDefault?: boolean;
+  /**
+   * Who may change the enable switch, like a field's permission. Without it
+   * anyone with host edit can. Core 26.11.1+.
+   */
+  enablePermission?: string;
   /** Host editor strip the generated tab sits in. Defaults to "top". */
   editorGroup?: "top" | "ssh";
   /** Position among that strip's tabs, core ones included. */
@@ -426,10 +477,48 @@ export interface PluginAuthContribution {
   keyboardInteractive?: string[];
 }
 
+/** A layout id or theme id: short, lowercase, used as a CSS class for themes. */
+export const LOOK_ID_PATTERN = /^[a-z][a-z0-9-]{1,39}$/;
+
+/**
+ * A whole-app layout the frontend registers with app.registerLayout. Needs
+ * the ui:layout capability. Declared here so core can list and choose it
+ * before any plugin code runs.
+ */
+export interface PluginLayoutContribution {
+  id: string;
+  /** i18n key in the plugin's namespace, or plain text. */
+  label: string;
+  description?: string;
+  /** Theme picked with this layout when nobody chose one. */
+  defaultTheme?: string;
+  /** The layout a default-look plugin starts with. */
+  default?: boolean;
+}
+
+/**
+ * A theme: one CSS file of token rules scoped under `.<id>`, applied as a
+ * class on <html>. Needs the ui:theme capability. No code runs for a theme.
+ */
+export interface PluginThemeContribution {
+  id: string;
+  /** i18n key in the plugin's namespace, or plain text. */
+  label: string;
+  mode: "light" | "dark";
+  /** Path of the CSS file inside the plugin. */
+  css: string;
+  /** Colors the theme picker previews it with. */
+  swatch?: { background: string; panel: string; text: string };
+}
+
 export interface PluginContributions {
   tabs?: PluginTabContribution[];
   panels?: PluginViewContribution[];
   dashboardCards?: PluginViewContribution[];
+  /** Cards on the host page, filled with app.registerHostSection. */
+  hostSections?: PluginViewContribution[];
+  /** What this plugin can do, for every surface to find on its own. */
+  operations?: PluginOperationsContribution;
   /**
    * The frontend also runs on anonymous guest pages (shared-session and
    * collab links), where it is activated with app.guest set.
@@ -487,6 +576,40 @@ export interface PluginContributions {
    * ctx.credentials.resolveHostProtocol.
    */
   protocols?: PluginProtocolContribution[];
+  /** Whole-app layouts. Needs the ui:layout capability. */
+  layouts?: PluginLayoutContribution[];
+  /** Themes. Needs the ui:theme capability. */
+  themes?: PluginThemeContribution[];
+  /** How the plugin shows in the Termix mobile app. Plugin API 1.13. */
+  mobile?: PluginMobileContribution;
+}
+
+/**
+ * - "webview": the app shows the plugin's UI from the server in a WebView.
+ * - "native": the app has its own screens for this plugin.
+ * - "none": nothing to show in the app.
+ */
+export const MOBILE_MODES = ["webview", "native", "none"] as const;
+export type PluginMobileMode = (typeof MOBILE_MODES)[number];
+
+export const MOBILE_SIZES = ["phone", "tablet"] as const;
+export type PluginMobileSize = (typeof MOBILE_SIZES)[number];
+
+export interface PluginMobileContribution {
+  mode: PluginMobileMode;
+  /**
+   * webview: a bundle built for the app, in the same folder as the frontend
+   * bundle. Unset means the normal frontend runs in a phone sized frame.
+   */
+  entry?: string;
+  /** webview: screen sizes the UI works at. Defaults to both. */
+  sizes?: PluginMobileSize[];
+  /** webview: tab, panel or card ids the app offers. Defaults to every tab. */
+  views?: string[];
+  /** native: the app feature that stands in for it. Defaults to the plugin id. */
+  feature?: string;
+  /** i18n key in the plugin's namespace, or plain text, shown in the app. */
+  note?: string;
 }
 
 /** A field a protocol login carries besides username and password. */
@@ -568,6 +691,7 @@ export const CORE_KEYBINDING_ACTIONS: readonly string[] = [
   "previousTab",
   "openCommandPalette",
   "reconnectSession",
+  "toggleSidebar",
 ];
 
 /**
@@ -649,6 +773,8 @@ export interface PluginManifest {
   contributes?: PluginContributions;
   /** Built backend entry, relative to the plugin root. */
   backend?: string;
+  /** How the backend process runs (API 2). */
+  sandbox?: PluginSandbox;
   /** Built frontend entry, relative to the plugin root. */
   frontend?: string;
   /** Locales directory, relative to the plugin root. */
@@ -664,6 +790,57 @@ export interface PluginManifest {
   nativeDependencies?: string[];
   /** How a linked desktop treats this plugin. Defaults to "mirror". */
   desktop?: PluginDesktopMode;
+  /**
+   * "desktop": the plugin only loads on a desktop app's own embedded backend,
+   * never on a server. It implies desktop "local" and may declare desktop:local.
+   */
+  runtime?: PluginRuntime;
+}
+
+/**
+ * What core needs to know about a backend before running any of its code, so
+ * it can start the process only when something needs it. Requests to the
+ * plugin's routes and sockets always start it; these are the other things
+ * that can.
+ */
+export interface PluginSandbox {
+  /** Never stop the process when idle. Plugins with their own listeners. */
+  alwaysOn?: boolean;
+  /** Heap limit in MiB. 256 when left out. */
+  memoryMb?: number;
+  /**
+   * Repeating jobs. ctx.schedule.every must pass one of these ids. A job
+   * that runs more often than the idle time keeps the process on.
+   */
+  schedules?: PluginSandboxSchedule[];
+  /** Event topics this plugin listens to with ctx.events.on. */
+  events?: string[];
+  /** Registry keys this plugin fills with ctx.registry.provide. */
+  registry?: string[];
+  /**
+   * The backend starts worker threads (plugin API 2.3). Each worker keeps
+   * the process's limits; workers from code strings (eval) are refused.
+   */
+  workers?: boolean;
+}
+
+export interface PluginSandboxSchedule {
+  id: string;
+  /** Interval in milliseconds. */
+  every: number;
+}
+
+export const SANDBOX_MEMORY_MIN_MB = 64;
+export const SANDBOX_MEMORY_MAX_MB = 4096;
+
+export type PluginRuntime = "desktop";
+export const PLUGIN_RUNTIMES: readonly PluginRuntime[] = ["desktop"];
+
+/** The desktop mode a manifest resolves to. */
+export function resolvePluginDesktopMode(
+  m: Pick<PluginManifest, "desktop" | "runtime">,
+): PluginDesktopMode {
+  return m.desktop ?? (m.runtime === "desktop" ? "local" : "mirror");
 }
 
 export const DEFAULT_BACKEND_ENTRY = "dist/backend.js";
@@ -698,17 +875,21 @@ const ALLOWED_TOP_LEVEL = new Set([
   "requiresSecret",
   "contributes",
   "backend",
+  "sandbox",
   "frontend",
   "locales",
   "platforms",
   "nativeDependencies",
   "desktop",
+  "runtime",
 ]);
 
 const ALLOWED_CONTRIBUTES = new Set([
   "tabs",
   "panels",
   "dashboardCards",
+  "hostSections",
+  "operations",
   "guest",
   "guestViews",
   "actions",
@@ -723,6 +904,9 @@ const ALLOWED_CONTRIBUTES = new Set([
   "uses",
   "keybindingActions",
   "protocols",
+  "layouts",
+  "themes",
+  "mobile",
 ]);
 
 const ALLOWED_SETTINGS_FIELD = [
@@ -878,6 +1062,22 @@ export function validateManifest(manifest: unknown): string[] {
       `Field "desktop" must be one of: ${PLUGIN_DESKTOP_MODES.join(", ")}`,
     );
   }
+  if (
+    m.runtime !== undefined &&
+    !PLUGIN_RUNTIMES.includes(m.runtime as PluginRuntime)
+  ) {
+    errors.push(
+      `Field "runtime" must be one of: ${PLUGIN_RUNTIMES.join(", ")}`,
+    );
+  }
+  if (
+    m.runtime === "desktop" &&
+    m.desktop !== undefined &&
+    m.desktop !== "local"
+  ) {
+    errors.push(`A "desktop" runtime plugin must use desktop "local"`);
+  }
+  validateSandbox(m.sandbox, errors);
   validateDependencyMap(m.dependencies, "dependencies", errors);
   validateDependencyMap(m.optionalDependencies, "optionalDependencies", errors);
   validateProvides(m.provides, errors);
@@ -889,8 +1089,216 @@ export function validateManifest(manifest: unknown): string[] {
     typeof m.id === "string" ? m.id : undefined,
     errors,
   );
+  if (isPlainObject(m.contributes)) {
+    validateMobile(
+      m.contributes,
+      typeof m.frontend === "string" ? m.frontend : DEFAULT_FRONTEND_ENTRY,
+      errors,
+    );
+  }
 
   return errors;
+}
+
+const SANDBOX_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const SANDBOX_TOPIC = /^[a-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+function validateSandbox(sandbox: unknown, errors: string[]): void {
+  if (sandbox === undefined) return;
+  if (!isPlainObject(sandbox)) {
+    errors.push('Field "sandbox" must be an object');
+    return;
+  }
+  rejectUnknown(
+    sandbox,
+    ["alwaysOn", "memoryMb", "schedules", "events", "registry", "workers"],
+    '"sandbox"',
+    errors,
+  );
+  if (sandbox.alwaysOn !== undefined && typeof sandbox.alwaysOn !== "boolean") {
+    errors.push("sandbox.alwaysOn must be a boolean");
+  }
+  if (sandbox.workers !== undefined && typeof sandbox.workers !== "boolean") {
+    errors.push("sandbox.workers must be a boolean");
+  }
+  if (sandbox.memoryMb !== undefined) {
+    const mb = sandbox.memoryMb;
+    if (
+      typeof mb !== "number" ||
+      !Number.isInteger(mb) ||
+      mb < SANDBOX_MEMORY_MIN_MB ||
+      mb > SANDBOX_MEMORY_MAX_MB
+    ) {
+      errors.push(
+        `sandbox.memoryMb must be a whole number from ${SANDBOX_MEMORY_MIN_MB} to ${SANDBOX_MEMORY_MAX_MB}`,
+      );
+    }
+  }
+  if (sandbox.schedules !== undefined) {
+    if (!Array.isArray(sandbox.schedules)) {
+      errors.push("sandbox.schedules must be an array");
+    } else {
+      const seen = new Set<string>();
+      sandbox.schedules.forEach((raw, index) => {
+        const where = `sandbox.schedules[${index}]`;
+        if (!isPlainObject(raw)) {
+          errors.push(`${where} must be an object`);
+          return;
+        }
+        rejectUnknown(raw, ["id", "every"], where, errors);
+        if (typeof raw.id !== "string" || !SANDBOX_ID.test(raw.id)) {
+          errors.push(`${where}.id must be a short lowercase id`);
+        } else if (seen.has(raw.id)) {
+          errors.push(`${where}.id duplicates "${raw.id}"`);
+        } else {
+          seen.add(raw.id);
+        }
+        if (
+          typeof raw.every !== "number" ||
+          !Number.isInteger(raw.every) ||
+          raw.every < 1000
+        ) {
+          errors.push(
+            `${where}.every must be a whole number of ms, at least 1000`,
+          );
+        }
+      });
+    }
+  }
+  for (const key of ["events", "registry"] as const) {
+    const list = sandbox[key];
+    if (list === undefined) continue;
+    if (
+      !Array.isArray(list) ||
+      !list.every(
+        (item) => typeof item === "string" && SANDBOX_TOPIC.test(item),
+      )
+    ) {
+      errors.push(
+        `sandbox.${key} must be an array of names (letters, digits, . _ : -)`,
+      );
+    } else if (new Set(list).size !== list.length) {
+      errors.push(`sandbox.${key} has duplicates`);
+    }
+  }
+}
+
+function folderOf(file: string): string {
+  const parts = file.split("/").filter((part) => part !== "" && part !== ".");
+  return parts.slice(0, -1).join("/");
+}
+
+function validateMobile(
+  contributes: Record<string, unknown>,
+  frontend: string,
+  errors: string[],
+): void {
+  const mobile = contributes.mobile;
+  if (mobile === undefined) return;
+  const where = "contributes.mobile";
+  if (!isPlainObject(mobile)) {
+    errors.push(`Field "${where}" must be an object`);
+    return;
+  }
+  rejectUnknown(
+    mobile,
+    ["mode", "entry", "sizes", "views", "feature", "note"],
+    `"${where}"`,
+    errors,
+  );
+  const mode = mobile.mode;
+  if (!(MOBILE_MODES as readonly unknown[]).includes(mode)) {
+    errors.push(`${where}.mode must be one of: ${MOBILE_MODES.join(", ")}`);
+    return;
+  }
+  for (const key of ["entry", "sizes", "views"]) {
+    if (mobile[key] !== undefined && mode !== "webview") {
+      errors.push(`${where}.${key} is only for mode "webview"`);
+    }
+  }
+  if (mobile.feature !== undefined && mode !== "native") {
+    errors.push(`${where}.feature is only for mode "native"`);
+  }
+
+  if (
+    mobile.entry !== undefined &&
+    requireString(mobile.entry, `${where}.entry`, errors)
+  ) {
+    const before = errors.length;
+    requireRelativePath(mobile.entry, `${where}.entry`, errors);
+    if (!mobile.entry.endsWith(".js")) {
+      errors.push(`${where}.entry must be a .js file`);
+    } else if (
+      errors.length === before &&
+      folderOf(mobile.entry) !== folderOf(frontend)
+    ) {
+      // Core only serves the folder the frontend bundle sits in.
+      errors.push(
+        `${where}.entry must sit in the same folder as the frontend bundle (${frontend})`,
+      );
+    }
+  }
+
+  if (mobile.sizes !== undefined) {
+    const sizes = mobile.sizes;
+    if (!Array.isArray(sizes) || sizes.length === 0) {
+      errors.push(`${where}.sizes must be a non-empty array`);
+    } else {
+      const seen = new Set<unknown>();
+      for (const size of sizes) {
+        if (!(MOBILE_SIZES as readonly unknown[]).includes(size)) {
+          errors.push(
+            `${where}.sizes entries must be one of: ${MOBILE_SIZES.join(", ")}`,
+          );
+        } else if (seen.has(size)) {
+          errors.push(`${where}.sizes duplicates "${String(size)}"`);
+        }
+        seen.add(size);
+      }
+    }
+  }
+
+  if (mobile.views !== undefined) {
+    const views = mobile.views;
+    if (!Array.isArray(views) || views.length === 0) {
+      errors.push(`${where}.views must be a non-empty array`);
+    } else {
+      const declared = new Set<string>();
+      for (const field of ["tabs", "panels", "dashboardCards"]) {
+        const list = contributes[field];
+        if (!Array.isArray(list)) continue;
+        for (const view of list) {
+          if (isPlainObject(view) && typeof view.id === "string") {
+            declared.add(view.id);
+          }
+        }
+      }
+      const seen = new Set<unknown>();
+      for (const view of views) {
+        if (typeof view !== "string" || !declared.has(view)) {
+          errors.push(
+            `${where}.views entries must be ids from contributes.tabs, panels or dashboardCards, got: ${JSON.stringify(view)}`,
+          );
+        } else if (seen.has(view)) {
+          errors.push(`${where}.views duplicates "${view}"`);
+        }
+        seen.add(view);
+      }
+    }
+  }
+
+  if (
+    mobile.feature !== undefined &&
+    (typeof mobile.feature !== "string" ||
+      !LOOK_ID_PATTERN.test(mobile.feature))
+  ) {
+    errors.push(
+      `${where}.feature must match ${LOOK_ID_PATTERN} (lowercase letters, digits, dashes)`,
+    );
+  }
+  if (mobile.note !== undefined) {
+    requireString(mobile.note, `${where}.note`, errors);
+  }
 }
 
 function validateFeatures(features: unknown, errors: string[]): void {
@@ -930,7 +1338,7 @@ function validateEnv(env: unknown, errors: string[]): void {
     }
     rejectUnknown(
       entry,
-      ["name", "description", "default", "required", "secret"],
+      ["name", "description", "default", "required", "secret", "file"],
       where,
       errors,
     );
@@ -955,7 +1363,7 @@ function validateEnv(env: unknown, errors: string[]): void {
     if ("default" in entry && typeof entry.default !== "string") {
       errors.push(`Field "${where}.default" must be a string`);
     }
-    for (const flag of ["required", "secret"] as const) {
+    for (const flag of ["required", "secret", "file"] as const) {
       if (flag in entry && typeof entry[flag] !== "boolean") {
         errors.push(`Field "${where}.${flag}" must be true or false`);
       }
@@ -1287,6 +1695,8 @@ function validateContributes(
   validateTabs(contributes.tabs, errors);
   validateViews(contributes.panels, "panels", errors);
   validateViews(contributes.dashboardCards, "dashboardCards", errors);
+  validateViews(contributes.hostSections, "hostSections", errors);
+  validateOperations(contributes.operations, pluginId, errors);
   if (
     contributes.guest !== undefined &&
     typeof contributes.guest !== "boolean"
@@ -1315,6 +1725,111 @@ function validateContributes(
   validateUiPresets(contributes.uiPresets, errors);
   validateKeybindingActions(contributes.keybindingActions, errors);
   validateProtocols(contributes.protocols, errors);
+  validateLayouts(contributes.layouts, errors);
+  validateThemes(contributes.themes, errors);
+}
+
+/** An array of objects with unique look ids; calls `each` for every valid entry. */
+function validateLookList(
+  value: unknown,
+  field: string,
+  allowed: string[],
+  errors: string[],
+  each: (raw: Record<string, unknown>, where: string) => void,
+): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    errors.push(`Field "contributes.${field}" must be an array`);
+    return;
+  }
+  const seen = new Set<string>();
+  value.forEach((raw, index) => {
+    const where = `contributes.${field}[${index}]`;
+    if (!isPlainObject(raw)) {
+      errors.push(`${where} must be an object`);
+      return;
+    }
+    rejectUnknown(raw, allowed, where, errors);
+    if (typeof raw.id !== "string" || !LOOK_ID_PATTERN.test(raw.id)) {
+      errors.push(
+        `${where}.id must match ${LOOK_ID_PATTERN} (lowercase letters, digits, dashes)`,
+      );
+    } else {
+      if (seen.has(raw.id)) errors.push(`${where}.id duplicates "${raw.id}"`);
+      seen.add(raw.id);
+    }
+    requireString(raw.label, `${where}.label`, errors);
+    each(raw, where);
+  });
+}
+
+function validateLayouts(value: unknown, errors: string[]): void {
+  validateLookList(
+    value,
+    "layouts",
+    ["id", "label", "description", "defaultTheme", "default"],
+    errors,
+    (raw, where) => {
+      if (raw.description !== undefined)
+        requireString(raw.description, `${where}.description`, errors);
+      if (
+        raw.defaultTheme !== undefined &&
+        (typeof raw.defaultTheme !== "string" ||
+          !LOOK_ID_PATTERN.test(raw.defaultTheme))
+      ) {
+        errors.push(`${where}.defaultTheme must be a theme id`);
+      }
+      if (raw.default !== undefined && typeof raw.default !== "boolean") {
+        errors.push(`${where}.default must be a boolean`);
+      }
+    },
+  );
+  if (
+    Array.isArray(value) &&
+    value.filter((raw) => isPlainObject(raw) && raw.default === true).length > 1
+  ) {
+    errors.push('Only one entry in "contributes.layouts" may set default');
+  }
+}
+
+const HEX_COLOR = /^#[0-9a-fA-F]{3,8}$/;
+
+function validateThemes(value: unknown, errors: string[]): void {
+  validateLookList(
+    value,
+    "themes",
+    ["id", "label", "mode", "css", "swatch"],
+    errors,
+    (raw, where) => {
+      if (raw.mode !== "light" && raw.mode !== "dark") {
+        errors.push(`${where}.mode must be "light" or "dark"`);
+      }
+      if (requireString(raw.css, `${where}.css`, errors)) {
+        requireRelativePath(raw.css, `${where}.css`, errors);
+        if (!raw.css.endsWith(".css")) {
+          errors.push(`${where}.css must be a .css file`);
+        }
+      }
+      if (raw.swatch !== undefined) {
+        if (!isPlainObject(raw.swatch)) {
+          errors.push(`${where}.swatch must be an object`);
+          return;
+        }
+        rejectUnknown(
+          raw.swatch,
+          ["background", "panel", "text"],
+          `${where}.swatch`,
+          errors,
+        );
+        for (const key of ["background", "panel", "text"]) {
+          const color = raw.swatch[key];
+          if (typeof color !== "string" || !HEX_COLOR.test(color)) {
+            errors.push(`${where}.swatch.${key} must be a hex color`);
+          }
+        }
+      }
+    },
+  );
 }
 
 export const PROTOCOL_ID_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
@@ -1750,6 +2265,7 @@ function validateSettings(settings: unknown, errors: string[]): void {
         "enableLabelKey",
         "enableDescriptionKey",
         "enableDefault",
+        "enablePermission",
         "editorGroup",
         "editorOrder",
         "fields",
@@ -1774,6 +2290,9 @@ function validateSettings(settings: unknown, errors: string[]): void {
         `${at}.enableDescriptionKey`,
         errors,
       );
+    }
+    if ("enablePermission" in host) {
+      requireString(host.enablePermission, `${at}.enablePermission`, errors);
     }
     if ("enableDefault" in host && typeof host.enableDefault !== "boolean") {
       errors.push(`${at}.enableDefault must be a boolean`);
@@ -2320,6 +2839,12 @@ export function parseManifest(raw: unknown): ParsedManifest {
       );
     }
   }
+  checkOperationReferences(
+    manifest.contributes?.operations,
+    manifest.capabilities,
+    (name) => declared.has(qualifyPermission(manifest.id, name)),
+    errors,
+  );
   // A settings field may gate on one of this plugin's own permissions, or on
   // a core/other-plugin id used as given. Only the first form is checkable
   // here, and an undeclared one would hide the field from every admin.
@@ -2352,6 +2877,23 @@ export function parseManifest(raw: unknown): ParsedManifest {
   if (contributesAuth && !manifest.capabilities.includes("auth:provide")) {
     errors.push(
       'contributes.auth needs the "auth:provide" capability in the capabilities array',
+    );
+  }
+
+  if (
+    (manifest.contributes?.layouts?.length ?? 0) > 0 &&
+    !manifest.capabilities.includes("ui:layout")
+  ) {
+    errors.push(
+      'contributes.layouts needs the "ui:layout" capability in the capabilities array',
+    );
+  }
+  if (
+    (manifest.contributes?.themes?.length ?? 0) > 0 &&
+    !manifest.capabilities.includes("ui:theme")
+  ) {
+    errors.push(
+      'contributes.themes needs the "ui:theme" capability in the capabilities array',
     );
   }
 

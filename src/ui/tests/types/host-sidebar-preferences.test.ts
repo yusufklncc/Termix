@@ -23,10 +23,11 @@ describe("defaultHostSidebarPreferences", () => {
       display: {
         density: "comfortable",
         showTags: true,
-        trayTrigger: "always",
+        trayTrigger: "actionsOnly",
         statusColorScheme: "accent",
         openOnDoubleClick: false,
         showFolderPaths: true,
+        stripedRows: true,
         hostClickBehavior: "newTab",
         closeOnOpen: false,
         barActions: {},
@@ -74,6 +75,7 @@ describe("sanitizeHostSidebarPreferences", () => {
         statusColorScheme: "status",
         openOnDoubleClick: true,
         showFolderPaths: false,
+        stripedRows: true,
         hostClickBehavior: "focusExistingDoubleClickNew",
         closeOnOpen: true,
         barActions: { maintenance: true },
@@ -132,7 +134,7 @@ describe("sanitizeHostSidebarPreferences", () => {
     expect(result.sort).toEqual({ key: "default", pinnedFirst: false });
     expect(result.groupKey).toBe("folder");
     expect(result.display.density).toBe("comfortable");
-    expect(result.display.trayTrigger).toBe("always");
+    expect(result.display.trayTrigger).toBe("actionsOnly");
   });
 
   it("filters out invalid entries from filter arrays instead of rejecting them", () => {

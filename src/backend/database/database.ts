@@ -1,4 +1,3 @@
-import { getErrorMessage } from "../utils/error-message.js";
 import { sshOptionsForWrite } from "../hosts/ssh-options.js";
 import {
   applyDefaultsAfterHostWrites,
@@ -22,28 +21,33 @@ import sshAuthRoutes from "./routes/ssh-auth-routes.js";
 import rbacRoutes from "./routes/rbac.js";
 import openTabsRoutes from "./routes/open-tabs.js";
 import userPreferencesRoutes from "./routes/user-preferences.js";
+import lookRoutes from "./routes/look.js";
 import hostSidebarPreferencesRoutes from "./routes/host-sidebar-preferences.js";
 import credentialSidebarPreferencesRoutes from "./routes/credential-sidebar-preferences.js";
 import uiPreferencesRoutes from "./routes/ui-preferences.js";
 import { registerAuditLogRoutes } from "./routes/audit-log-routes.js";
-import syncRoutes from "../sync/server/routes.js";
-import syncLinkRoutes from "../sync/client/routes.js";
+import { syncForwarder } from "../sync/provider.js";
 import { syncChangeWatcher } from "../sync/server/change-watcher.js";
 import dashboardRoutes from "./routes/dashboard-routes.js";
+import operationsRoutes from "./routes/operations-routes.js";
+import diagnosticsRoutes from "../diagnostics/routes.js";
 import {
   mountPluginApi,
   mountPluginLegacyPaths,
 } from "./routes/plugin-api-routes.js";
 import { attachPluginWebSockets } from "../plugins/ws.js";
+import { registerSshRelay } from "../hosts/ssh-relay.js";
 import pluginRoutes from "./routes/plugins.js";
+import frameRegistrationRoutes from "./routes/frame-registrations.js";
 import { createPluginAssetsRouter } from "../plugins/assets.js";
 import { getPluginRuntime } from "../plugins/index.js";
 import { pluginEvents, TOPICS } from "../plugins/events.js";
 import { createCorsMiddleware } from "../utils/cors-config.js";
+import { embeddedHostGuard } from "../utils/embedded-host.js";
 import { createCompressionMiddleware } from "../utils/compression-config.js";
 import fs from "fs";
 import path from "path";
-import os from "os";
+import { randomUUID } from "crypto";
 import "dotenv/config";
 import { databaseLogger, apiLogger } from "../utils/logger.js";
 import { getLocalVersion } from "../utils/app-version.js";
@@ -51,6 +55,7 @@ import {
   fetchGitHubAPI,
   fetchLatestRelease,
   isPrereleaseVersion,
+  publishedReleases,
   REPO_NAME,
   REPO_OWNER,
   updateStatus,
@@ -67,11 +72,41 @@ import { DatabaseFileEncryption } from "../utils/database-file-encryption.js";
 import { DatabaseMigration } from "../utils/database-migration.js";
 import { UserDataExport } from "../utils/user-data-export.js";
 import {
+  createExportFile,
+  exportDownloadName,
+  removeExportFile,
+  type ExportFile,
+} from "./export-file.js";
+import { resolveRestorePaths } from "./restore-paths.js";
+import {
   importUserPluginRows,
   writeUserPluginTables,
 } from "../plugins/user-data.js";
 import { configureDirectHttps, getTlsConfig } from "../tls/tls-service.js";
 import { acmeChallengeHandler } from "../tls/acme-challenges.js";
+import { securityTxtHandler } from "../http/security-txt.js";
+import { httpsPolicyMiddleware } from "../tls/https-policy.js";
+import {
+  pluginFrameCsp,
+  readImportMapHash,
+  securityHeadersMiddleware,
+  setAppShellHeaders,
+} from "../http/security-headers.js";
+import {
+  findFrameRuntimeDir,
+  frameAncestors,
+  frameImportMapHash,
+  framePage,
+} from "../http/frame-runtime.js";
+import {
+  getRequestBaseUrl,
+  getRequestBaseUrlWithForceHTTPS,
+} from "../utils/request-origin.js";
+import { openApiEnabled, servedSpec } from "../openapi-served.js";
+import { normalizeCookiesMiddleware } from "../auth/session-cookie.js";
+import { finalErrorHandler } from "../http/error-handler.js";
+import { registerEncryptionRoutes } from "./routes/encryption-routes.js";
+import { CORE_RATE_LIMITS, rateLimitMiddleware } from "../utils/rate-limit.js";
 import {
   createCurrentCredentialRepository,
   createCurrentHostRepository,
@@ -82,6 +117,7 @@ import {
 } from "./repositories/factory.js";
 import { applyPluginHostImportSettings } from "./routes/host-plugin-settings.js";
 import {
+  isImportableSetting,
   selectExportableSettings,
   type SettingData,
 } from "../utils/export-settings.js";
@@ -93,6 +129,7 @@ import {
   writeProtocolAuth,
 } from "../hosts/protocol-auth/protocol-auth.js";
 import { parseUserAgent } from "../utils/user-agent-parser.js";
+import { staticCacheControl } from "../utils/static-cache.js";
 import type { GitHubRelease, AuthenticatedRequest } from "../../types/index.js";
 import { DatabaseSaveTrigger } from "./db/index.js";
 import Database from "better-sqlite3";
@@ -102,8 +139,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.disable("x-powered-by");
 
 app.set("trust proxy", "loopback");
+app.use(embeddedHostGuard);
+app.use(httpsPolicyMiddleware);
+app.use(securityHeadersMiddleware());
 
 const authManager = AuthManager.getInstance();
 const authenticateJWT = authManager.createAuthMiddleware();
@@ -131,9 +172,9 @@ function writeSettingsToExportDatabase(
 }
 
 function readImportedSettings(importDb: Database.Database): SettingData[] {
-  return importDb
-    .prepare("SELECT key, value FROM settings")
-    .all() as SettingData[];
+  return (
+    importDb.prepare("SELECT key, value FROM settings").all() as SettingData[]
+  ).filter((row) => isImportableSetting(row.key));
 }
 
 async function upsertImportedSetting(setting: SettingData): Promise<void> {
@@ -147,8 +188,7 @@ const storage = multer.diskStorage({
     cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
-    const timestamp = Date.now();
-    cb(null, `${timestamp}-${file.originalname}`);
+    cb(null, `${Date.now()}-${randomUUID()}.sqlite`);
   },
 });
 
@@ -156,6 +196,7 @@ const upload = multer({
   storage: storage,
   limits: {
     fileSize: 1024 * 1024 * 1024,
+    files: 1,
   },
   fileFilter: (req, file, cb) => {
     if (
@@ -164,7 +205,12 @@ const upload = multer({
     ) {
       cb(null, true);
     } else {
-      cb(new Error("Only .termix-export.sqlite files are allowed"));
+      cb(
+        Object.assign(
+          new Error("Only .termix-export.sqlite files are allowed"),
+          { status: 400 },
+        ),
+      );
     }
   },
 });
@@ -186,7 +232,15 @@ app.use((req, res, next) => {
   if (req.path.startsWith("/plugin-api/")) return next();
   coreUrlencodedParser(req, res, next);
 });
+// Express 5 leaves req.body undefined with no body, so handlers that
+// destructure it would throw a 500 instead of answering 400.
+app.use((req, _res, next) => {
+  if (!req.path.startsWith("/plugin-api/")) req.body ??= {};
+  next();
+});
+app.use(normalizeCookiesMiddleware);
 app.use(cookieParser());
+app.use(rateLimitMiddleware(CORE_RATE_LIMITS));
 app.use((_req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
   next();
@@ -238,6 +292,61 @@ app.get("/health", (req, res) => {
  *         description: No challenge is published for this token.
  */
 app.get("/.well-known/acme-challenge/:token", acmeChallengeHandler);
+
+/**
+ * @openapi
+ * /.well-known/security.txt:
+ *   get:
+ *     summary: Get the security contact file
+ *     description: Public. RFC 9116 security.txt that says where to report a security problem in Termix.
+ *     tags:
+ *       - General
+ *     responses:
+ *       200:
+ *         description: The security.txt file, as text/plain.
+ */
+app.get("/.well-known/security.txt", securityTxtHandler);
+
+/**
+ * @openapi
+ * /version/openapi.json:
+ *   get:
+ *     summary: This server's API spec
+ *     description: The OpenAPI spec of core and every plugin that is on, at the versions this server runs, with servers set to this server's address. Only when the SERVE_OPENAPI environment variable is "true". Needs a signed in user or an API key.
+ *     tags:
+ *       - General
+ *     responses:
+ *       200:
+ *         description: The merged OpenAPI document.
+ *       404:
+ *         description: Serving the spec is turned off.
+ */
+app.get("/version/openapi.json", authenticateJWT, (req, res) => {
+  if (!openApiEnabled()) {
+    return res.status(404).json({ error: "Not found" });
+  }
+  try {
+    const plugins = getPluginRuntime()
+      .loader.list()
+      .map((plugin) => ({
+        id: plugin.id,
+        dir: plugin.dir,
+        state: plugin.state,
+      }));
+    res.json(
+      servedSpec(
+        plugins,
+        getRequestBaseUrlWithForceHTTPS(req),
+        getLocalVersion() ?? "0.0.0",
+      ),
+    );
+  } catch (error) {
+    databaseLogger.error("Failed to build the API spec", error, {
+      operation: "openapi_served",
+    });
+    res.status(500).json({ error: "Failed to build the API spec" });
+  }
+});
 
 /**
  * @openapi
@@ -510,7 +619,7 @@ app.get("/releases/rss", authenticateJWT, async (req, res) => {
       cacheKey,
     );
 
-    const rssItems = releasesData.data.map((release) => ({
+    const rssItems = publishedReleases(releasesData.data).map((release) => ({
       id: release.id,
       title: release.name || release.tag_name,
       description: release.body,
@@ -547,7 +656,6 @@ app.get("/releases/rss", authenticateJWT, async (req, res) => {
     });
     res.status(500).json({
       error: "Failed to generate RSS format",
-      details: getErrorMessage(error),
     });
   }
 });
@@ -624,99 +732,23 @@ app.post("/encryption/initialize", requireAdmin, async (req, res) => {
   }
 });
 
-/**
- * @openapi
- * /encryption/regenerate:
- *   post:
- *     summary: Regenerate JWT secret
- *     description: Regenerates the system JWT secret. This will invalidate all existing JWT tokens.
- *     tags:
- *       - Encryption
- *     responses:
- *       200:
- *         description: System JWT secret regenerated.
- *       500:
- *         description: Failed to regenerate JWT secret.
- */
-app.post("/encryption/regenerate", requireAdmin, async (req, res) => {
-  try {
-    apiLogger.warn("System JWT secret regenerated via API", {
-      operation: "jwt_regenerate_api",
-    });
-
-    res.json({
-      success: true,
-      message: "System JWT secret regenerated",
-      warning:
-        "All existing JWT tokens are now invalid - users must re-authenticate",
-      note: "User data encryption keys are protected by passwords and cannot be regenerated",
-    });
-  } catch (error) {
-    apiLogger.error("Failed to regenerate JWT secret", error, {
-      operation: "jwt_regenerate_failed",
-    });
-    res.status(500).json({ error: "Failed to regenerate JWT secret" });
-  }
-});
-
-/**
- * @openapi
- * /encryption/regenerate-jwt:
- *   post:
- *     summary: Regenerate JWT secret
- *     description: Regenerates the JWT secret. This will invalidate all existing JWT tokens.
- *     tags:
- *       - Encryption
- *     responses:
- *       200:
- *         description: New JWT secret generated.
- *       500:
- *         description: Failed to regenerate JWT secret.
- */
-app.post("/encryption/regenerate-jwt", requireAdmin, async (req, res) => {
-  try {
-    apiLogger.warn("JWT secret regenerated via API", {
-      operation: "jwt_secret_regenerate_api",
-    });
-
-    res.json({
-      success: true,
-      message: "New JWT secret generated",
-      warning:
-        "All existing JWT tokens are now invalid - users must re-authenticate",
-    });
-  } catch (error) {
-    apiLogger.error("Failed to regenerate JWT secret", error, {
-      operation: "jwt_secret_regenerate_failed",
-    });
-    res.status(500).json({ error: "Failed to regenerate JWT secret" });
-  }
-});
+registerEncryptionRoutes(app, requireAdmin);
 
 /**
  * @openapi
  * /database/export:
  *   post:
  *     summary: Export user data
- *     description: Exports the user's data as a SQLite database file.
+ *     description: Exports the signed in user's data as a SQLite database file, with saved passwords and keys in plain text. Takes no body.
  *     tags:
  *       - Database
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               password:
- *                 type: string
  *     responses:
  *       200:
  *         description: User data exported successfully.
- *       400:
- *         description: Password required for export.
- *       401:
- *         description: Invalid password.
+ *       403:
+ *         description: The user's data is locked; sign in again.
+ *       404:
+ *         description: User not found.
  *       500:
  *         description: Failed to export user data.
  */
@@ -761,25 +793,20 @@ app.post("/database/export", authenticateJWT, async (req, res) => {
       throw new Error("User data not unlocked");
     }
 
-    const tempDir = path.join(os.tmpdir(), "termix-exports");
-
+    let exportFile: ExportFile;
     try {
-      if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
-      }
+      exportFile = createExportFile();
     } catch (dirError) {
       apiLogger.error("Failed to create temp directory", dirError, {
         operation: "export_temp_dir_error",
-        tempDir,
       });
       throw new Error(`Failed to create temp directory: ${dirError.message}`, {
         cause: dirError,
       });
     }
 
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `termix-export-${user.username}-${timestamp}.sqlite`;
-    const tempPath = path.join(tempDir, filename);
+    const filename = exportDownloadName(String(user.username ?? ""));
+    const tempPath = exportFile.path;
 
     apiLogger.info("Creating export database", {
       operation: "export_db_creation",
@@ -1046,12 +1073,15 @@ app.post("/database/export", authenticateJWT, async (req, res) => {
         await getExportableSettings(!!user.isAdmin),
       );
       await writeHostDefaultsToExport(exportDb, userId);
-    } finally {
+    } catch (writeError) {
       exportDb.close();
+      removeExportFile(exportFile);
+      throw writeError;
     }
+    exportDb.close();
 
     res.setHeader("Content-Type", "application/x-sqlite3");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.attachment(filename);
 
     const fileStream = fs.createReadStream(tempPath);
 
@@ -1064,7 +1094,6 @@ app.post("/database/export", authenticateJWT, async (req, res) => {
       if (!res.headersSent) {
         res.status(500).json({
           error: "Failed to stream export file",
-          details: streamError.message,
         });
       }
     });
@@ -1079,17 +1108,7 @@ app.post("/database/export", authenticateJWT, async (req, res) => {
 
     // "close" also fires when the client aborts mid download, which "end"
     // does not, so the decrypted export never stays behind on disk.
-    fileStream.on("close", () => {
-      fs.unlink(tempPath, (err) => {
-        if (err && err.code !== "ENOENT") {
-          apiLogger.warn("Failed to clean up export file", {
-            operation: "export_cleanup_failed",
-            path: tempPath,
-            error: err.message,
-          });
-        }
-      });
-    });
+    fileStream.on("close", () => removeExportFile(exportFile));
     res.on("close", () => fileStream.destroy());
 
     fileStream.pipe(res);
@@ -1099,7 +1118,6 @@ app.post("/database/export", authenticateJWT, async (req, res) => {
     });
     res.status(500).json({
       error: "Failed to export user data",
-      details: getErrorMessage(error),
     });
   }
 });
@@ -1372,6 +1390,7 @@ app.post(
               await applyPluginHostImportSettings(
                 Number(created.id),
                 importedHostPluginSettings(importDb, host),
+                userId,
               );
               importedHostIds.push(Number(created.id));
               await importHostProtocolLogins(
@@ -1472,7 +1491,6 @@ app.post(
       });
       res.status(500).json({
         error: "Failed to import SQLite data",
-        details: getErrorMessage(error),
       });
     } finally {
       if (req.file) {
@@ -1544,7 +1562,6 @@ app.post("/database/export/preview", authenticateJWT, async (req, res) => {
     });
     res.status(500).json({
       error: "Failed to generate export preview",
-      details: getErrorMessage(error),
     });
   }
 });
@@ -1578,11 +1595,21 @@ app.post("/database/export/preview", authenticateJWT, async (req, res) => {
  */
 app.post("/database/restore", requireAdmin, async (req, res) => {
   try {
-    const { backupPath, targetPath } = req.body;
-
-    if (!backupPath) {
+    if (!req.body.backupPath) {
       return res.status(400).json({ error: "Backup path is required" });
     }
+
+    const paths = resolveRestorePaths(
+      process.env.DATA_DIR || "./db/data",
+      req.body.backupPath,
+      req.body.targetPath,
+    );
+    if (!paths) {
+      return res
+        .status(400)
+        .json({ error: "Backup and target must be inside the data folder" });
+    }
+    const { backupPath, targetPath } = paths;
 
     if (!DatabaseFileEncryption.isEncryptedDatabaseFile(backupPath)) {
       return res.status(400).json({ error: "Invalid encrypted backup file" });
@@ -1605,7 +1632,6 @@ app.post("/database/restore", requireAdmin, async (req, res) => {
     });
     res.status(500).json({
       error: "Database restore failed",
-      details: getErrorMessage(error),
     });
   }
 });
@@ -1616,18 +1642,31 @@ app.use("/credentials", credentialsRoutes);
 app.use("/ssh-auth", sshAuthRoutes);
 app.use("/rbac", rbacRoutes);
 app.use("/open-tabs", openTabsRoutes);
+app.use("/user-preferences/look", lookRoutes);
 app.use("/user-preferences", userPreferencesRoutes);
 app.use("/host-sidebar/preferences", hostSidebarPreferencesRoutes);
 app.use("/credential-sidebar/preferences", credentialSidebarPreferencesRoutes);
 app.use("/ui-preferences", uiPreferencesRoutes);
 registerAuditLogRoutes(app, authenticateJWT);
-app.use("/sync", syncRoutes);
-app.use("/sync", syncLinkRoutes);
+app.use("/sync", syncForwarder);
 app.use("/dashboard", dashboardRoutes);
+app.use("/operations", operationsRoutes);
+app.use("/diagnostics", diagnosticsRoutes);
+app.use("/plugins/frame-registrations", frameRegistrationRoutes);
 app.use("/plugins", pluginRoutes);
 app.use(
   "/plugin-assets",
-  createPluginAssetsRouter((id) => getPluginRuntime().loader.get(id)),
+  createPluginAssetsRouter((id) => getPluginRuntime().loader.get(id), {
+    frameDir: findFrameRuntimeDir,
+    framePage,
+    frameCsp: (req, pluginId) =>
+      pluginFrameCsp({
+        baseUrl: getRequestBaseUrl(req),
+        pluginId,
+        hash: frameImportMapHash(),
+        ancestors: frameAncestors(),
+      }),
+  }),
 );
 mountPluginApi(app);
 mountPluginLegacyPaths(app, () =>
@@ -1655,6 +1694,8 @@ const frontendDist = frontendDistPaths.find((p) =>
   fs.existsSync(path.join(p, "index.html")),
 );
 
+const importMapHash = readImportMapHash(frontendDist);
+
 if (frontendDist) {
   databaseLogger.info(`Serving frontend from: ${frontendDist}`, {
     operation: "static_files",
@@ -1662,25 +1703,13 @@ if (frontendDist) {
   app.use(
     express.static(frontendDist, {
       setHeaders: (res, filePath) => {
+        setAppShellHeaders(res, importMapHash);
         const relativePath = path
           .relative(frontendDist, filePath)
           .replaceAll(path.sep, "/");
 
-        if (relativePath.startsWith("assets/")) {
-          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-          return;
-        }
-
-        if (
-          relativePath === "index.html" ||
-          relativePath === "sw.js" ||
-          relativePath === "manifest.json"
-        ) {
-          res.setHeader(
-            "Cache-Control",
-            "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
-          );
-        }
+        const cacheControl = staticCacheControl(relativePath);
+        if (cacheControl) res.setHeader("Cache-Control", cacheControl);
       },
     }),
   );
@@ -1695,6 +1724,7 @@ if (frontendDist) {
         "Cache-Control",
         "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
       );
+      setAppShellHeaders(res, importMapHash);
       res.sendFile(path.join(frontendDist, "index.html"));
     } else {
       next();
@@ -1702,23 +1732,7 @@ if (frontendDist) {
   });
 }
 
-app.use(
-  (
-    err: unknown,
-    req: express.Request,
-    res: express.Response,
-    _next: express.NextFunction,
-  ) => {
-    void _next;
-    apiLogger.error("Unhandled error in request", err, {
-      operation: "error_handler",
-      method: req.method,
-      url: req.url,
-      userAgent: req.get("User-Agent"),
-    });
-    res.status(500).json({ error: "Internal Server Error" });
-  },
-);
+app.use(finalErrorHandler);
 
 // The desktop app moves its embedded backend off 30001 when that is taken.
 const HTTP_PORT = Number(process.env.EMBEDDED_BACKEND_PORT) || 30001;
@@ -1807,7 +1821,6 @@ app.get(
       });
       res.status(500).json({
         error: "Failed to get migration status",
-        details: getErrorMessage(error),
       });
     }
   },
@@ -1885,7 +1898,6 @@ app.get(
       });
       res.status(500).json({
         error: "Failed to get migration history",
-        details: getErrorMessage(error),
       });
     }
   },
@@ -1896,6 +1908,7 @@ const httpServer = http.createServer(app);
 // Plugin sockets ride this server at /plugin-ws/<id>/<path>. Anything else is
 // left alone, so core's own upgrade handling is unaffected.
 attachPluginWebSockets(httpServer);
+registerSshRelay();
 
 httpServer.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {

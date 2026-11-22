@@ -1,7 +1,9 @@
+import { resolveDeviceLogin } from "./device-auth.js";
 import { getErrorMessage } from "../utils/error-message.js";
 import { parseSshOptions } from "./ssh-options.js";
 import { findUsableCredential } from "./usable-credential.js";
 import { resolveExternalSecretRefs } from "./external-secrets.js";
+import { ConnectPolicyError } from "./connect-policy.js";
 import {
   createCurrentHostResolutionRepository,
   createCurrentUserRepository,
@@ -36,14 +38,27 @@ const sshLogger = logger;
 export async function resolveHostBySyncId(
   syncId: string,
   userId: string,
+  options: ResolveHostOptions = {},
 ): Promise<SSHHost | null> {
+  // On a desktop two linked accounts can each hold a copy with this sync id,
+  // so the caller's own copy comes first.
+  const repository = createCurrentHostResolutionRepository();
   const hostId =
-    await createCurrentHostResolutionRepository().findHostIdBySyncId(syncId);
+    (await repository.findHostIdBySyncIdForUser(syncId, userId)) ??
+    (await repository.findHostIdBySyncId(syncId));
   if (hostId === null) return null;
 
   // Permissions, decryption, shared-host handling and auditing all belong to
   // the id-based path; this only decides which row it is pointed at.
-  return resolveHostById(hostId, userId);
+  return resolveHostById(hostId, userId, options);
+}
+
+export interface ResolveHostOptions {
+  /**
+   * A shared host the user can reach but has no login for comes back without
+   * one and with `loginRequired: true`, instead of null.
+   */
+  allowMissingLogin?: boolean;
 }
 
 /**
@@ -53,6 +68,7 @@ export async function resolveHostBySyncId(
 export async function resolveHostById(
   hostId: number,
   userId: string,
+  options: ResolveHostOptions = {},
 ): Promise<SSHHost | null> {
   const { PermissionManager } = await import("../utils/permission-manager.js");
   const access = await PermissionManager.getInstance().canAccessHost(
@@ -129,7 +145,13 @@ export async function resolveHostById(
   let sharedAuthResolution: SharedAuthResolution | undefined;
   if (!ownerEquivalent) {
     sharedAuthResolution = await resolveRecipientSshAuth(host, hostId, userId);
-    if (!sharedAuthResolution) return null;
+    if (!sharedAuthResolution) {
+      if (!options.allowMissingLogin) return null;
+      // resolveRecipientSshAuth already cleared the owner's login.
+      host.authType = "none";
+      host.loginRequired = true;
+      sharedAuthResolution = "secretless";
+    }
   } else {
     const effectiveCredentialId = host.credentialId as
       number | null | undefined;
@@ -171,6 +193,21 @@ export async function resolveHostById(
     }
   }
 
+  // A login kept on this desktop beats the one synced for a shared host.
+  const deviceLogin = await resolveDeviceLogin(host, userId, "ssh").catch(
+    () => null,
+  );
+  if (deviceLogin) {
+    host.password = deviceLogin.password;
+    host.key = deviceLogin.privateKey || deviceLogin.key;
+    host.keyPassword = deviceLogin.keyPassword;
+    host.keyType = deviceLogin.keyType;
+    host.certPublicKey = deviceLogin.certPublicKey || null;
+    host.username = deviceLogin.username || host.username;
+    host.authType = host.key ? "key" : host.password ? "password" : "none";
+    host.credentialId = null;
+  }
+
   host.username = await expandExternalUsername(
     host.username as string | undefined,
     ownerEquivalent ? ownerId : userId,
@@ -179,10 +216,22 @@ export async function resolveHostById(
   // "op://..." references become real secrets here, once, for everyone
   // downstream. They resolve in the context of whoever owns the secret
   // fields: the owner for their own host, the recipient for an override.
-  await resolveExternalSecretRefs(
-    host as Record<string, unknown>,
-    sharedAuthResolution === "recipient-override" ? userId : ownerId,
-  );
+  const secretsUserId =
+    sharedAuthResolution === "recipient-override" ? userId : ownerId;
+  try {
+    await resolveExternalSecretRefs(
+      host as Record<string, unknown>,
+      secretsUserId,
+    );
+  } catch (error) {
+    // Someone else's unlock prompt is no use to the person connecting.
+    if (error instanceof ConnectPolicyError && secretsUserId !== userId) {
+      throw new Error(
+        "This host's login comes from a vault its owner has to unlock first",
+      );
+    }
+    throw error;
+  }
 
   // Keyboard-interactive handlers run synchronously mid-handshake and can
   // only read their host settings from here.

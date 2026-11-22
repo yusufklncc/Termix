@@ -11,6 +11,7 @@ import path from "node:path";
 import * as tar from "tar";
 import { createFixturePlugin } from "./fixture-plugin.js";
 import type { LoadedPlugin } from "../../plugins/loader.js";
+import { LEGACY_OFFICIAL_ERROR } from "../../plugins/isolation.js";
 
 interface Row {
   id: string;
@@ -81,6 +82,12 @@ vi.mock("../../database/repositories/factory.js", () => ({
     listKeys: async () => [],
     countKeys: async () => 0,
   }),
+}));
+
+const desktopLink = vi.hoisted(() => ({ linked: false }));
+
+vi.mock("../../sync/client/link-store.js", () => ({
+  getLink: async () => (desktopLink.linked ? { serverUrl: "https://s" } : null),
 }));
 
 vi.mock("../../plugins/data.js", () => ({
@@ -200,7 +207,11 @@ async function stageArtifact(
   fs.mkdirSync(staging, { recursive: true });
   const file = path.join(staging, `${id}-staged.tmxplug`);
   await tar.c({ gzip: true, file, cwd: path.join(build, id) }, ["."]);
-  return { file, signatureFile: `${file}.sig` };
+  return {
+    file,
+    signatureFile: `${file}.sig`,
+    provenanceFile: `${file}.provenance.json`,
+  };
 }
 
 async function boot() {
@@ -228,6 +239,7 @@ beforeEach(() => {
   registry.index.plugins = [];
   registry.others = {};
   registry.download.mockReset();
+  desktopLink.linked = false;
 });
 
 afterEach(async () => {
@@ -236,6 +248,7 @@ afterEach(async () => {
   for (const plugin of loader.list()) loader.forget(plugin.id);
   delete process.env.TERMIX_BUNDLED_PLUGINS_DIR;
   delete process.env.DATA_DIR;
+  delete process.env.ELECTRON_EMBEDDED;
   while (roots.length) {
     fs.rmSync(roots.pop()!, { recursive: true, force: true });
   }
@@ -289,6 +302,32 @@ describe("uninstall and reinstall of a bundled plugin", () => {
     expect(loader.get("docker")?.source).toBe("user");
   });
 
+  it("refuses to uninstall the default look but lets it be turned off", async () => {
+    createFixturePlugin({ id: "some-look", root: bundled });
+    fs.writeFileSync(
+      path.join(bundled, "bundled-index.json"),
+      JSON.stringify({
+        version: 1,
+        plugins: { "some-look": { defaultLook: true } },
+      }),
+    );
+    const { resetBundledIndexCache } =
+      await import("../../plugins/bundled-index.js");
+    resetBundledIndexCache();
+    try {
+      const loader = await boot();
+      await expect(manage.uninstallPlugin("some-look")).rejects.toMatchObject({
+        code: "DEFAULT_LOOK",
+        status: 409,
+      });
+      expect(loader.get("some-look")?.state).toBe("active");
+      expect(fs.existsSync(path.join(bundled, "some-look"))).toBe(true);
+    } finally {
+      fs.rmSync(path.join(bundled, "bundled-index.json"), { force: true });
+      resetBundledIndexCache();
+    }
+  });
+
   it("deletes a plugin dropped in as a plain folder", async () => {
     createFixturePlugin({ id: "notes", root: path.join(data, "plugins") });
     const loader = await boot();
@@ -332,6 +371,33 @@ describe("installing from the registry", () => {
     expect(db.grants).toEqual([
       expect.objectContaining({ pluginId: "notes", capability: "kv:own" }),
     ]);
+  });
+
+  it("keeps the checked build provenance beside the plugin and drops it on uninstall", async () => {
+    registry.index.plugins = [registryEntry("notes", [{ version: "1.0.0" }])];
+    registry.download.mockImplementation(async () => {
+      const staged = await stageArtifact("notes", { capabilities: ["kv:own"] });
+      fs.writeFileSync(
+        staged.provenanceFile,
+        JSON.stringify({
+          status: "verified",
+          checkedAt: "x",
+          signer: null,
+          runUrl: null,
+          bundleUrl: "https://b",
+        }),
+      );
+      return staged;
+    });
+    await boot();
+    await manage.installPlugin("notes", {
+      userId: "admin",
+      capabilities: DEFAULT_CAPS,
+    });
+    const kept = path.join(data, "plugins", "notes.tmxplug.provenance.json");
+    expect(JSON.parse(fs.readFileSync(kept, "utf8")).status).toBe("verified");
+    await manage.uninstallPlugin("notes");
+    expect(fs.existsSync(kept)).toBe(false);
   });
 
   it("refuses a plugin that is not in the registry", async () => {
@@ -394,6 +460,20 @@ describe("updates", () => {
       code: "CAPABILITIES_ADDED",
       details: { capabilities: ["notify:send"] },
     });
+    expect(registry.download).not.toHaveBeenCalled();
+  });
+
+  it("never moves to an older version unless the admin names it", async () => {
+    createFixturePlugin({ id: "docker", root: bundled });
+    registry.index.plugins = [registryEntry("docker", [{ version: "0.9.0" }])];
+    await boot();
+
+    await expect(
+      manage.updatePlugin("docker", { userId: "admin" }),
+    ).rejects.toMatchObject({ code: "NOT_NEWER" });
+    expect(registry.download).not.toHaveBeenCalled();
+    const result = await manage.updateAllPlugins({ userId: "admin" });
+    expect(result.updated).toEqual([]);
     expect(registry.download).not.toHaveBeenCalled();
   });
 
@@ -595,6 +675,26 @@ describe("dependencies", () => {
   });
 });
 
+describe("safe mode", () => {
+  afterEach(() => {
+    delete process.env.TERMIX_SAFE_MODE;
+  });
+
+  it("refuses to start a plugin that is not a layout or theme, but still stops one", async () => {
+    createFixturePlugin({ id: "base", root: bundled });
+    const loader = await boot();
+    await manage.setPluginState("base", false);
+
+    process.env.TERMIX_SAFE_MODE = "1";
+    await expect(manage.setPluginState("base", true)).rejects.toMatchObject({
+      status: 409,
+      code: "SAFE_MODE",
+    });
+    expect(loader.get("base")?.state).toBe("stopped");
+    expect(db.rows.get("base")?.state).toBe("disabled");
+  });
+});
+
 describe("reloading a bundled plugin for the dev runner", () => {
   it("loads the rebuilt copy and restarts what depends on it", async () => {
     createFixturePlugin({ id: "base", root: bundled });
@@ -632,6 +732,54 @@ describe("reloading a bundled plugin for the dev runner", () => {
     const result = await manage.reloadBundledPlugin("base");
     expect(result.state).toBe("stopped");
     expect(loader.get("base")?.state).toBe("loaded");
+  });
+});
+
+describe("restoring the bundled copy", () => {
+  it("drops a downloaded update, loads the shipped copy and pins it", async () => {
+    createFixturePlugin({ id: "docker", root: bundled });
+    const loader = await boot();
+    // What a signed update leaves behind next to the shipped copy.
+    const artifact = path.join(data, "plugins", "docker.tmxplug");
+    fs.mkdirSync(path.dirname(artifact), { recursive: true });
+    fs.writeFileSync(artifact, "update");
+    fs.writeFileSync(`${artifact}.sig`, "sig");
+
+    const result = await manage.restoreBundledPlugin("docker");
+
+    expect(result).toEqual({ id: "docker", version: "1.0.0", state: "active" });
+    expect(loader.get("docker")?.manifest.version).toBe("1.0.0");
+    expect(fs.existsSync(artifact)).toBe(false);
+    expect(fs.existsSync(`${artifact}.sig`)).toBe(false);
+    expect(db.rows.get("docker")).toMatchObject({
+      pinnedVersion: "1.0.0",
+      autoUpdate: false,
+    });
+  });
+
+  it("keeps a plugin that is turned off stopped", async () => {
+    createFixturePlugin({ id: "docker", root: bundled });
+    const loader = await boot();
+    await manage.setPluginState("docker", false);
+    const result = await manage.restoreBundledPlugin("docker");
+    expect(result.state).toBe("stopped");
+    expect(loader.get("docker")?.state).toBe("loaded");
+  });
+
+  it("refuses a plugin that has no bundled copy", async () => {
+    createFixturePlugin({ id: "notes", root: path.join(data, "plugins") });
+    await boot();
+    await expect(manage.restoreBundledPlugin("notes")).rejects.toMatchObject({
+      code: "NO_BUNDLED_COPY",
+      status: 409,
+    });
+  });
+
+  it("refuses a bad id", async () => {
+    await expect(manage.restoreBundledPlugin("../x")).rejects.toMatchObject({
+      code: "INVALID_ID",
+      status: 400,
+    });
   });
 });
 
@@ -808,6 +956,57 @@ describe("installing from a file", () => {
     expect(db.rows.get("notes")?.tier).toBe(manage.UNVERIFIED_TIER);
   });
 
+  it("refuses a signature that does not match the file", async () => {
+    await boot();
+    await manage.setDeveloperMode(true);
+    await expect(
+      manage.stageUpload(await artifactBuffer("notes"), "bm90IGEgc2ln"),
+    ).rejects.toMatchObject({ code: "INVALID_SIGNATURE" });
+  });
+
+  it("keeps a signature from a non official key unverified", async () => {
+    const { setCustomPluginKeys } = await import("../../plugins/trust.js");
+    const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+    setCustomPluginKeys([
+      {
+        id: "mine",
+        publicKey: publicKey
+          .export({ format: "der", type: "spki" })
+          .subarray(12)
+          .toString("base64"),
+        addedIn: "26.10.6",
+      },
+    ]);
+    try {
+      await boot();
+      await manage.setDeveloperMode(true);
+      setCustomPluginKeys([
+        {
+          id: "mine",
+          publicKey: publicKey
+            .export({ format: "der", type: "spki" })
+            .subarray(12)
+            .toString("base64"),
+          addedIn: "26.10.6",
+        },
+      ]);
+      const buffer = await artifactBuffer("notes");
+      const digest = crypto.createHash("sha256").update(buffer).digest();
+      const signature = crypto
+        .sign(null, digest, privateKey)
+        .toString("base64");
+      const preview = await manage.stageUpload(buffer, signature);
+      expect(preview.official).toBe(false);
+      await manage.installUpload(preview.token, {
+        userId: "admin",
+        capabilities: preview.capabilities,
+      });
+      expect(db.rows.get("notes")?.tier).toBe(manage.UNVERIFIED_TIER);
+    } finally {
+      setCustomPluginKeys([]);
+    }
+  });
+
   it("refuses a file that is not a plugin archive", async () => {
     await boot();
     await manage.setDeveloperMode(true);
@@ -941,8 +1140,12 @@ describe("more registries", () => {
       capabilities: DEFAULT_CAPS,
     });
     expect(result.state).toBe("active");
-    const keys = registry.download.mock.calls[0][2] as Array<{ id: string }>;
-    expect(keys.map((key) => key.id)).toEqual(["be5b24ea07b36624"]);
+    const source = registry.download.mock.calls[0][2] as {
+      tier: string;
+      keys: Array<{ id: string }>;
+    };
+    expect(source.tier).toBe("community");
+    expect(source.keys.map((key) => key.id)).toEqual(["be5b24ea07b36624"]);
     expect(db.rows.get("neat")).toMatchObject({
       registryId: "community",
       tier: "community",
@@ -975,9 +1178,10 @@ describe("more registries", () => {
     );
     const result = await manage.updatePlugin("neat", { userId: "admin" });
     expect(result.version).toBe("1.1.0");
-    const [, release, keys] = registry.download.mock.calls[0];
+    const [, release, source] = registry.download.mock.calls[0];
     expect(release.url).toContain("neat-1.1.0");
-    expect(keys.map((key: { id: string }) => key.id)).toEqual([
+    expect(source.tier).toBe("community");
+    expect(source.keys.map((key: { id: string }) => key.id)).toEqual([
       "be5b24ea07b36624",
     ]);
     expect(db.rows.get("neat")).toMatchObject({ registryId: "community" });
@@ -1128,4 +1332,108 @@ it("requires exact consent before enabling a mirrored plugin with capabilities",
       grantedBy: "admin",
     }),
   );
+});
+
+describe("plugins made for plugin API 1", () => {
+  const legacy = { engine: { termix: ">=2.9.0", api: "^1.15" } };
+
+  it("keeps an official API 1 plugin off, with no way to run it inside the server", async () => {
+    createFixturePlugin({
+      id: "docker",
+      root: bundled,
+      manifestOverrides: legacy,
+    });
+    const loader = await boot();
+    expect(loader.get("docker")).toMatchObject({
+      state: "blocked",
+      lastError: LEGACY_OFFICIAL_ERROR,
+    });
+
+    const options = await manage.setPluginOptions("docker", {
+      runUnisolated: true,
+    } as never);
+    expect(options).not.toHaveProperty("runUnisolated");
+    expect(loader.get("docker")?.state).toBe("blocked");
+  });
+
+  describe("the sync provider on a linked desktop", () => {
+    const syncCaps = ["sync:provide", "kv:own"];
+
+    function stuckSync() {
+      // A copy the desktop once took from its server, signed by the
+      // official key.
+      createFixturePlugin({
+        id: "sync",
+        root: path.join(data, "plugins"),
+        capabilities: syncCaps,
+        manifestOverrides: legacy,
+      });
+      db.rows.set("sync", {
+        id: "sync",
+        name: "Sync",
+        version: "1.0.0",
+        tier: "official",
+        source: "user",
+        state: "enabled",
+        lastError: null,
+        registryId: "official",
+        autoUpdate: false,
+        pinnedVersion: null,
+        manifestJson: "{}",
+      });
+      registry.index.plugins = [
+        registryEntry("sync", [
+          { version: "1.1.0", capabilities: [...syncCaps, "notify:send"] },
+        ]),
+      ];
+      registry.download.mockImplementation(() =>
+        stageArtifact("sync", {
+          version: "1.1.0",
+          capabilities: [...syncCaps, "notify:send"],
+        }),
+      );
+    }
+
+    it("updates an official API 1 sync provider from the registry", async () => {
+      process.env.ELECTRON_EMBEDDED = "true";
+      desktopLink.linked = true;
+      stuckSync();
+      const loader = await boot();
+      loader.get("sync")!.signedTier = "official";
+      expect(loader.get("sync")?.state).toBe("blocked");
+
+      expect(await manage.updateStuckSyncProvider()).toEqual(["sync"]);
+      expect(loader.get("sync")).toMatchObject({
+        state: "active",
+        manifest: { version: "1.1.0" },
+      });
+    });
+
+    it("leaves it alone when the desktop is not linked", async () => {
+      process.env.ELECTRON_EMBEDDED = "true";
+      stuckSync();
+      const loader = await boot();
+      loader.get("sync")!.signedTier = "official";
+
+      expect(await manage.updateStuckSyncProvider()).toEqual([]);
+      expect(registry.download).not.toHaveBeenCalled();
+    });
+
+    it("leaves other API 1 plugins to the sync", async () => {
+      process.env.ELECTRON_EMBEDDED = "true";
+      desktopLink.linked = true;
+      createFixturePlugin({
+        id: "docker",
+        root: bundled,
+        manifestOverrides: legacy,
+      });
+      registry.index.plugins = [
+        registryEntry("docker", [{ version: "1.1.0" }]),
+      ];
+      await boot();
+
+      expect(await manage.updateStuckSyncProvider()).toEqual([]);
+      expect(registry.download).not.toHaveBeenCalled();
+    });
+  });
 });

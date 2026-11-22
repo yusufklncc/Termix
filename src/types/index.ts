@@ -37,6 +37,13 @@ export interface JumpHost {
   hostId: number;
 }
 
+/** The plugin that manages a host, from ctx.hosts.locks. */
+export interface HostLock {
+  pluginId: string;
+  pluginName: string;
+  note: string | null;
+}
+
 export type Host = {
   id: number;
   name: string;
@@ -65,6 +72,10 @@ export type Host = {
   terminalConfig?: HostTerminalConfig;
   sshOptions?: HostSshOptions;
   notes?: string;
+  /** Hex color, like #3b82f6. */
+  color?: string | null;
+  /** Lucide icon name. */
+  icon?: string | null;
 
   useSocks5?: boolean;
   socks5Host?: string;
@@ -116,6 +127,8 @@ export type Host = {
   ownerUsername?: string;
   /** A read-only copy of a host shared with the linked account. */
   sharedCopy?: boolean;
+  /** Set when a plugin manages this host: read only, pins and order still work. */
+  lock?: HostLock;
   /** Desktop only: kept on this device, never synced to the server. */
   localOnly?: boolean;
 
@@ -133,10 +146,8 @@ export interface ProxyNode {
   host: string;
   port: number;
   /**
-   * The host editor writes "socks4"/"socks5"/"http", while proxy-helper.ts
-   * tests for "http" and casts everything else to 4|5 before handing it to the
-   * socks client. The two spellings have never agreed; typed as the union of
-   * what is actually stored rather than pretending one side is right.
+   * The host editor writes "socks4"/"socks5"/"http"; older rows may hold 4 or 5.
+   * proxy-helper.ts turns them into the numbers the socks client takes.
    */
   type: 4 | 5 | "http" | "socks4" | "socks5";
   username?: string;
@@ -173,6 +184,10 @@ export interface HostData {
   terminalConfig?: HostTerminalConfig;
   sshOptions?: HostSshOptions;
   notes?: string;
+  /** Hex color, like #3b82f6. */
+  color?: string | null;
+  /** Lucide icon name. */
+  icon?: string | null;
 
   useSocks5?: boolean;
   socks5Host?: string;
@@ -319,6 +334,8 @@ export interface AuthenticatedRequest extends Request {
   sessionId?: string;
   apiKeyId?: string;
   actingAdminUserId?: string;
+  /** Set while the session may only set up a second factor. */
+  sessionRestriction?: string | null;
   user?: {
     id: string;
     username: string;

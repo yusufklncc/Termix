@@ -7,7 +7,7 @@ import { getPluginStoreState, type PluginRecord } from "./plugin-store";
  * because a disabled plugin never runs its frontend and so never registers
  * anything, yet a saved tab or card of its still has to say whose it is.
  */
-export type ViewKind = "tab" | "panel" | "card";
+export type ViewKind = "tab" | "panel" | "card" | "layout";
 
 export type ViewStatus =
   /** Registered by a running plugin. */
@@ -30,6 +30,9 @@ function declares(record: PluginRecord, kind: ViewKind, id: string): boolean {
       !!contributes.panels?.some((panel) => panel.id === id) ||
       !!contributes.tabs?.some((tab) => tab.id === id)
     );
+  }
+  if (kind === "layout") {
+    return !!contributes.layouts?.some((layout) => layout.id === id);
   }
   return !!contributes.dashboardCards?.some((card) => card.id === id);
 }
@@ -71,7 +74,9 @@ export function unregisteredViewStatus(
     return { status: getPluginStoreState().loaded ? "missing" : "loading" };
   }
   const serverState = owner.summary.state;
-  if (!owner.summary.enabled) return { status: "disabled", owner };
+  if (!owner.summary.enabled || serverState === "safe-mode") {
+    return { status: "disabled", owner };
+  }
   if (
     owner.frontend === "failed" ||
     owner.frontend === "blocked" ||

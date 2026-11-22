@@ -149,6 +149,18 @@ describe("signed plugins gate off", () => {
     ).toBe(true);
   });
 
+  it.skipIf(process.platform === "win32")(
+    "opens a private plugins folder so each plugin's user can reach its code",
+    async () => {
+      const { userDir } = setup();
+      // A first install makes the folder under core's private umask.
+      fs.chmodSync(userDir, 0o700);
+      await writeArtifact(userDir, "signed-one", "valid");
+      expect(await loadedIds()).toContain("signed-one");
+      expect(fs.statSync(userDir).mode & 0o777).toBe(0o755);
+    },
+  );
+
   it("still blocks an archive whose .sig does not verify", async () => {
     const { userDir } = setup();
     await writeArtifact(userDir, "forged-one", "wrong-key");
@@ -229,6 +241,16 @@ describe("updating a bundled plugin", () => {
     const loader = new PluginLoader();
     await loader.loadAll();
     expect(loader.get("bundled-one")?.manifest.version).toBe("1.0.0");
+  });
+
+  it("removes an update the bundled copy caught up with", async () => {
+    const { userDir } = setup();
+    const file = await writeArtifact(userDir, "bundled-one", "valid", "0.9.0");
+    const loader = new PluginLoader();
+    await loader.loadAll();
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.existsSync(`${file}.sig`)).toBe(false);
+    expect(loader.skipped()).toEqual([]);
   });
 
   it("refuses a downgrade after the bundled copy was unloaded", async () => {

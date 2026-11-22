@@ -34,7 +34,7 @@ export type HostTrayTrigger = "always" | "hover" | "click" | "actionsOnly";
 
 /** What clicking a host does when it already has an open tab. */
 export type HostClickBehavior =
-  "newTab" | "focusExisting" | "focusExistingDoubleClickNew";
+  "newTab" | "focusExisting" | "focusExistingDoubleClickNew" | "hostPage";
 
 export interface HostSidebarFilterState {
   status: ("online" | "offline" | "pinned")[];
@@ -87,6 +87,8 @@ export interface HostSidebarDisplayPreferences extends HostRowFields {
   openOnDoubleClick: boolean;
   /** When false, nested folders hide the parent-path breadcrumb before their name. */
   showFolderPaths: boolean;
+  /** When false, rows keep one background instead of alternating. */
+  stripedRows: boolean;
   hostClickBehavior: HostClickBehavior;
   /** When true, the sidebar closes after a host is opened from it. */
   closeOnOpen: boolean;
@@ -134,6 +136,7 @@ const HOST_CLICK_BEHAVIORS: HostClickBehavior[] = [
   "newTab",
   "focusExisting",
   "focusExistingDoubleClickNew",
+  "hostPage",
 ];
 const STATUS_COLOR_SCHEMES: StatusColorScheme[] = ["accent", "status"];
 const FILTER_STATUS: HostSidebarFilterState["status"] = [
@@ -160,10 +163,12 @@ export function defaultHostSidebarPreferences(): HostSidebarPreferences {
     display: {
       density: "comfortable",
       showTags: true,
-      trayTrigger: "always",
+      // The connect bar always shows; the chevron opens edit and share.
+      trayTrigger: "actionsOnly",
       statusColorScheme: "accent",
       openOnDoubleClick: false,
       showFolderPaths: true,
+      stripedRows: true,
       hostClickBehavior: "newTab",
       closeOnOpen: false,
       barActions: {},
@@ -272,6 +277,10 @@ export function sanitizeHostSidebarPreferences(
       typeof displayObj.showFolderPaths === "boolean"
         ? displayObj.showFolderPaths
         : defaults.display.showFolderPaths,
+    stripedRows:
+      typeof displayObj.stripedRows === "boolean"
+        ? displayObj.stripedRows
+        : defaults.display.stripedRows,
     hostClickBehavior: HOST_CLICK_BEHAVIORS.includes(
       displayObj.hostClickBehavior as HostClickBehavior,
     )

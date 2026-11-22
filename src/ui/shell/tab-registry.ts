@@ -33,6 +33,8 @@ export interface TabShellCallbacks {
   closeRailView: (id: string) => void;
   /** Opens the host editor for a new host with these fields filled in. */
   openHostEditor?: (draft?: HostDraft) => void;
+  /** Opens the editor of a saved host. */
+  editHost?: (hostId: number) => void;
   /** Saves a quick-connect tab's host. Core terminal only. */
   saveQuickConnect?: (tab: Tab, host: Host) => Promise<void>;
   /** Asks a yes or no question over the main area. */
@@ -113,6 +115,8 @@ function isOwnedButAbsent(type: string): boolean {
 
 export function isPersistentTabType(type: string): boolean {
   if (CORE_PERSISTENT.has(type)) return true;
+  // The fixed dashboard tab is never saved, even while its layout is off.
+  if (CORE_HOSTLESS.has(type)) return false;
   const def = registry.get(type);
   if (def) return !!def.persistent;
   return isOwnedButAbsent(type);

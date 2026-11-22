@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import {
   BookOpen,
   Bug,
+  Stethoscope,
   Check,
   Database,
   Download,
@@ -17,8 +18,9 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { Button } from "@/components/button";
-import { Card } from "@/components/card";
-import { Facts, PANEL } from "@/components/panel-layout";
+import { Facts } from "@/components/panel-layout";
+import { TileStack } from "@/components/tile-grid/TileStack";
+import { TileWall } from "@/components/tile-grid/TileWall";
 import { FakeSwitch, SectionCard } from "@/components/section-card";
 import {
   Select,
@@ -27,7 +29,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/select";
-import { getPluginData, type PluginDataSummary } from "@/api/plugins-api";
+import {
+  getPluginData,
+  type PluginDataSummary,
+  type PluginProvenance,
+} from "@/api/plugins-api";
 import {
   BetaBadge,
   CapabilityRow,
@@ -41,18 +47,20 @@ import {
   betaToTry,
   describeContributions,
   formatBytes,
+  hasSourceBadge,
   orderByRisk,
   reportIssueUrl,
   requestFeatureUrl,
   type PluginEntry,
 } from "./plugin-model";
 import { openPluginSettings } from "./open-plugins";
+import { openDiagnostics } from "@/diagnostics/open-diagnostics";
 import { hasSettingsPage } from "@/settings/settings-fields-util";
 import { PluginReleaseNotes, PluginVideo } from "./PluginReleaseNotes";
 import type { PluginsManager } from "./use-plugins-manager";
 
 const LINK_ROW =
-  "flex items-center gap-2 border border-border bg-card px-3 py-2.5 text-left text-[11px] text-muted-foreground transition-colors hover:border-accent-brand/40 hover:text-foreground";
+  "flex w-full items-center gap-2 px-3 py-2.5 text-left text-[11px] text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground";
 
 export function PluginDetail({
   plugin,
@@ -69,13 +77,16 @@ export function PluginDetail({
   const running = plugin.status === "running";
   const failed = plugin.status === "failed" || plugin.status === "blocked";
   const compatible = plugin.versions.filter((v) => v.compatible);
-  const [picked, setPicked] = useState<string>(
-    plugin.version ?? plugin.latestVersion ?? "",
-  );
+  // A local build can be a version the registry never listed.
+  const startVersion =
+    plugin.version && compatible.some((v) => v.version === plugin.version)
+      ? plugin.version
+      : (plugin.latestVersion ?? compatible[0]?.version ?? "");
+  const [picked, setPicked] = useState<string>(startVersion);
 
   useEffect(() => {
-    setPicked(plugin.version ?? plugin.latestVersion ?? "");
-  }, [plugin.version, plugin.latestVersion]);
+    setPicked(startVersion);
+  }, [startVersion]);
 
   const contributions = describeContributions(plugin.contributes);
   // Only people who can manage plugins get here, and they see admin settings
@@ -93,10 +104,8 @@ export function PluginDetail({
   const tryableBeta = betaToTry(plugin);
 
   return (
-    <div
-      className={`mx-auto flex w-full max-w-5xl flex-col ${PANEL.gap} ${PANEL.body}`}
-    >
-      <Card className="flex-row flex-wrap items-start gap-4 px-4 py-4">
+    <TileStack>
+      <div className="flex flex-row flex-wrap items-start gap-3 p-3">
         <PluginIconBox
           name={plugin.icon}
           size="lg"
@@ -109,10 +118,12 @@ export function PluginDetail({
           </span>
           <Facts className="text-[11px] text-muted-foreground/70">
             {plugin.unverified && <UnverifiedBadge />}
-            <SourceBadge
-              source={plugin.source}
-              registryName={plugin.registryName}
-            />
+            {hasSourceBadge(plugin.source) && (
+              <SourceBadge
+                source={plugin.source}
+                registryName={plugin.registryName}
+              />
+            )}
             {plugin.isBeta && <BetaBadge />}
             {plugin.author && <span>{plugin.author}</span>}
             {plugin.version ? (
@@ -121,6 +132,9 @@ export function PluginDetail({
               plugin.latestVersion && <span>v{plugin.latestVersion}</span>
             )}
             {plugin.category && <span>{plugin.category}</span>}
+            {plugin.installed && plugin.provenance && (
+              <ProvenanceFact provenance={plugin.provenance} />
+            )}
             {plugin.pinnedVersion && (
               <span>
                 {t("plugins.manager.pinnedTo", {
@@ -184,19 +198,32 @@ export function PluginDetail({
                   ? t("plugins.manager.disable")
                   : t("plugins.manager.enable")}
               </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                className="gap-1.5"
-                disabled={busy || locked}
-                onClick={async () => {
-                  if (await manager.uninstall(plugin)) onUninstalled();
-                }}
-              >
-                <Trash2 className="size-3.5" />
-                {t("plugins.manager.uninstall")}
-              </Button>
+              {!plugin.defaultLook && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={busy || locked}
+                  onClick={async () => {
+                    if (await manager.uninstall(plugin)) onUninstalled();
+                  }}
+                >
+                  <Trash2 className="size-3.5" />
+                  {t("plugins.manager.uninstall")}
+                </Button>
+              )}
             </>
+          ) : plugin.unsupported ? (
+            <span
+              className="text-xs text-muted-foreground"
+              title={t("plugins.manager.unsupportedHint")}
+            >
+              {plugin.needsTermix
+                ? t("plugins.manager.needsTermix", {
+                    range: plugin.needsTermix,
+                  })
+                : t("plugins.manager.unsupported")}
+            </span>
           ) : (
             <Button
               variant="outline"
@@ -210,10 +237,10 @@ export function PluginDetail({
             </Button>
           )}
         </div>
-      </Card>
+      </div>
 
       {plugin.installed && failed && plugin.lastError && (
-        <div className="flex items-start gap-2 border border-destructive/30 bg-destructive/5 px-3 py-2.5">
+        <div className="flex items-start gap-2 bg-destructive/5 px-3 py-2.5">
           <TriangleAlert className="mt-px size-3.5 shrink-0 text-destructive" />
           <div className="flex min-w-0 flex-col gap-0.5">
             <span className="text-xs font-medium">
@@ -229,7 +256,7 @@ export function PluginDetail({
       )}
 
       {plugin.status === "server" && (
-        <div className="flex items-start gap-2 border border-border bg-muted/30 px-3 py-2.5">
+        <div className="flex items-start gap-2 bg-muted/30 px-3 py-2.5">
           <Server className="mt-px size-3.5 shrink-0 text-muted-foreground" />
           <span className="text-[11px] leading-snug text-muted-foreground">
             {t("plugins.manager.runsOnServerHint")}
@@ -237,13 +264,13 @@ export function PluginDetail({
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-2 lg:grid-cols-3">
-        <div className="flex flex-col gap-2 lg:col-span-2">
+      <div className="grid grid-cols-1 lg:grid-cols-3">
+        <TileStack className="-mb-px border-border lg:col-span-2 lg:border-r">
           <PluginVideo videoId={plugin.videoId} name={plugin.name} />
 
           {plugin.features.length > 0 && (
             <SectionCard title={t("plugins.manager.features")} icon={null}>
-              <ul className="grid grid-cols-1 gap-x-4 gap-y-1.5 px-4 py-3 sm:grid-cols-2">
+              <ul className="grid grid-cols-1 gap-x-4 gap-y-1.5 py-3 sm:grid-cols-2">
                 {plugin.features.map((feature) => (
                   <li
                     key={feature}
@@ -264,11 +291,11 @@ export function PluginDetail({
                   key={capability}
                   capability={capability}
                   showId
-                  className="px-4 py-2.5"
+                  className="py-2.5"
                 />
               ))}
               {plugin.capabilities.length === 0 && (
-                <div className="px-4 py-2.5 text-[11px] text-muted-foreground">
+                <div className="py-2.5 text-[11px] text-muted-foreground">
                   {t("plugins.manager.consent.none")}
                 </div>
               )}
@@ -279,10 +306,7 @@ export function PluginDetail({
             <SectionCard title={t("plugins.manager.envVars")} icon={null}>
               <div className="divide-y divide-border">
                 {plugin.env.map((v) => (
-                  <div
-                    key={v.name}
-                    className="flex flex-col gap-0.5 px-4 py-2.5"
-                  >
+                  <div key={v.name} className="flex flex-col gap-0.5 py-2.5">
                     <div className="flex flex-wrap items-center gap-2">
                       <code className="font-mono text-xs font-semibold">
                         {v.name}
@@ -318,12 +342,12 @@ export function PluginDetail({
               onDelete={() => manager.removeData(plugin)}
             />
           )}
-        </div>
+        </TileStack>
 
-        <div className="flex flex-col gap-2">
+        <TileStack className="-mb-px">
           {contributions.length > 0 && (
             <SectionCard title={t("plugins.manager.addsToTermix")} icon={null}>
-              <div className="flex flex-col gap-2 px-4 py-3">
+              <div className="flex flex-col gap-2 py-3">
                 <div className="flex flex-wrap gap-1">
                   {contributions.map((c) => (
                     <span
@@ -345,7 +369,7 @@ export function PluginDetail({
 
           {plugin.inRegistry && compatible.length > 0 && (
             <SectionCard title={t("plugins.manager.version")} icon={null}>
-              <div className="flex flex-col gap-2 px-4 py-3">
+              <div className="flex flex-col gap-2 py-3">
                 <span className="text-[11px] leading-snug text-muted-foreground">
                   {plugin.installed
                     ? t("plugins.manager.versionPickHintInstalled")
@@ -401,7 +425,7 @@ export function PluginDetail({
           {plugin.installed && (
             <SectionCard title={t("plugins.manager.updates")} icon={null}>
               <div className="divide-y divide-border">
-                <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <div className="flex items-center justify-between gap-3 py-3">
                   <div className="flex min-w-0 flex-col gap-0.5">
                     <span className="text-xs font-medium">
                       {t("plugins.manager.autoUpdate")}
@@ -418,7 +442,7 @@ export function PluginDetail({
                     }
                   />
                 </div>
-                <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <div className="flex items-center justify-between gap-3 py-3">
                   <div className="flex min-w-0 flex-col gap-0.5">
                     <span className="flex items-center gap-1.5 text-xs font-medium">
                       <FlaskConical className="size-3 text-muted-foreground" />
@@ -442,7 +466,7 @@ export function PluginDetail({
                     }
                   />
                 </div>
-                <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <div className="flex items-center justify-between gap-3 py-3">
                   <div className="flex min-w-0 flex-col gap-0.5">
                     <span className="flex items-center gap-1.5 text-xs font-medium">
                       <Pin className="size-3 text-muted-foreground" />
@@ -490,6 +514,17 @@ export function PluginDetail({
               <span className="truncate">
                 {t("plugins.manager.openSettings")}
               </span>
+            </button>
+          )}
+
+          {plugin.installed && (
+            <button
+              type="button"
+              onClick={() => openDiagnostics({ pluginId: plugin.id })}
+              className={LINK_ROW}
+            >
+              <Stethoscope className="size-3.5 shrink-0" />
+              <span className="truncate">{t("diagnostics.makeReport")}</span>
             </button>
           )}
 
@@ -552,9 +587,9 @@ export function PluginDetail({
               </span>
             </a>
           )}
-        </div>
+        </TileStack>
       </div>
-    </div>
+    </TileStack>
   );
 }
 
@@ -612,16 +647,16 @@ function DataCard({
       }
     >
       {error ? (
-        <div className="px-4 py-3 text-[11px] text-muted-foreground">
+        <div className="py-3 text-[11px] text-muted-foreground">
           {t("plugins.manager.data.loadFailed")}
         </div>
       ) : !data ? (
-        <div className="px-4 py-3 text-[11px] text-muted-foreground">
+        <div className="py-3 text-[11px] text-muted-foreground">
           {t("plugins.manager.loading")}
         </div>
       ) : (
-        <div className="-mx-3 -my-1 flex flex-col md:-mx-4">
-          <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-4">
+        <div className="-mx-3 -my-1 flex flex-col">
+          <TileWall gridClassName="grid-cols-2 sm:grid-cols-4">
             <Stat
               label={t("plugins.manager.data.tables")}
               value={`${data.tables.length}`}
@@ -642,13 +677,13 @@ function DataCard({
               label={t("plugins.manager.data.files")}
               value={formatBytes(data.filesBytes)}
             />
-          </div>
+          </TileWall>
           {data.tables.length > 0 && (
             <div className="divide-y divide-border border-t border-border">
               {data.tables.map((table) => (
                 <div
                   key={table.name}
-                  className="flex items-center gap-2 px-4 py-1.5"
+                  className="flex items-center gap-2 px-3 py-1.5"
                 >
                   <span className="min-w-0 flex-1 truncate font-mono text-[11px]">
                     {table.name}
@@ -662,7 +697,7 @@ function DataCard({
               ))}
             </div>
           )}
-          <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
+          <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
             <span>
               {t("plugins.manager.data.migrations", {
                 count: data.migrations.length,
@@ -688,7 +723,7 @@ function Stat({
   hint?: string;
 }) {
   return (
-    <div className="flex flex-col gap-0.5 bg-card px-4 py-2.5">
+    <div className="flex flex-col gap-0.5 px-3 py-2.5">
       <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
         {label}
       </span>
@@ -697,5 +732,29 @@ function Stat({
         <span className="text-[10px] text-muted-foreground">{hint}</span>
       )}
     </div>
+  );
+}
+
+/** Which workflow run built the installed file, as checked at download. */
+function ProvenanceFact({ provenance }: { provenance: PluginProvenance }) {
+  const { t } = useTranslation();
+  if (provenance.status !== "verified") {
+    return (
+      <span title={t("plugins.manager.provenance.uncheckedHint")}>
+        {t("plugins.manager.provenance.unchecked")}
+      </span>
+    );
+  }
+  const href = provenance.runUrl ?? provenance.bundleUrl;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={t("plugins.manager.provenance.verifiedHint")}
+      className="hover:text-foreground hover:underline"
+    >
+      {t("plugins.manager.provenance.verified")}
+    </a>
   );
 }

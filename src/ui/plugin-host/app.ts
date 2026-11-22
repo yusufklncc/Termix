@@ -1,4 +1,9 @@
-import type { ComponentType } from "react";
+import { useEffect, type ComponentType } from "react";
+import { openDiagnostics } from "@/diagnostics/open-diagnostics";
+import { onDeepLink, startDeepLinks } from "@/lib/deep-links";
+import { dataReporter } from "@/components/data-view/data-reporter";
+import type { DataShape } from "@/components/data-view/data-value";
+import type { Tab } from "@/types/ui-types";
 import type {
   Disposer,
   PluginManifest,
@@ -10,6 +15,13 @@ import {
 } from "@/api/plugins-api";
 import { registerRailItem } from "@/sidebar/rail-items";
 import { registerTabType, type TabRenderProps } from "@/shell/tab-registry";
+import {
+  registerCompanionDef,
+  registerCompanionLayoutDef,
+  toggleCompanion,
+  type CompanionDefaults,
+  type CompanionRenderProps,
+} from "@/shell/companions";
 import { registerPanel, type PanelRenderProps } from "@/shell/panel-registry";
 import {
   registerHostEditorSection,
@@ -18,6 +30,9 @@ import {
 import {
   registerHostAction,
   registerHostBadge,
+  hostDotReporter,
+  registerHostEditorToolbarItem,
+  registerHostStatusIndicator,
   registerHostContextMenuItem,
 } from "@/sidebar/host-contributions";
 import {
@@ -31,6 +46,14 @@ import {
   type KeybindingEditorProps,
 } from "@/shell/keybinding-registry";
 import { registerHostProtocol } from "@/sidebar/host-protocols";
+import {
+  registerHostSection,
+  type HostSectionRenderProps,
+} from "@/shell/host-sections";
+import {
+  hostTreeChildrenReporter,
+  registerHostTreeChildren,
+} from "@/shell/host-tree-children";
 import {
   registerDashboardCard,
   type DashboardCardRenderProps,
@@ -64,7 +87,13 @@ import {
 import { shell, shellHost, tabsApi } from "./shell-bridge";
 import { onRemoteServerChange, remoteServerUrl } from "./desktop";
 import { isElectron } from "@/lib/electron";
-import { withPluginScope, withIconBoundary, guardCallback } from "./scope";
+import {
+  withPluginContext,
+  withPluginScope,
+  withIconBoundary,
+  guardCallback,
+} from "./scope";
+import { registerLayout as registerLayoutComponent } from "@/look/layout-registry";
 import {
   scopeHostArgs,
   scopeHostCallback,
@@ -75,6 +104,24 @@ import { pluginKey } from "@/lib/plugin-i18n";
 import { pluginDocsPage, pluginDocsUrl } from "@termix-ssh/plugin-sdk/docs";
 import { hasPermission } from "@/hooks/use-permissions";
 import i18n from "@/i18n/i18n";
+import { requestStepUp } from "@/auth/StepUpPrompt";
+import {
+  closeSerial,
+  parseSerialOptions,
+  requestSerialPort,
+  webSerialAvailable,
+  writeSerial,
+} from "./frames/serial-bridge";
+import {
+  readCeremonyExtra,
+  readCeremonyId,
+  runPluginCeremony,
+} from "./frames/webauthn-bridge";
+import {
+  mayControlSession,
+  reloadShell,
+  signOutShell,
+} from "./session-control";
 
 const ONBOARDING_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -139,6 +186,23 @@ export function createPluginApp(
 
   const key = (value: string) => pluginKey(pluginId, value);
 
+  // A host value hook gets the row's host, scoped like every host it sees.
+  const hostValue = (
+    useValue: ((host: never) => unknown) | undefined,
+    shapes: DataShape[],
+  ) =>
+    useValue
+      ? (scoped(
+          dataReporter(
+            (context) =>
+              (useValue as (host: unknown) => unknown)(
+                scopeHostFields(context, pluginId).host,
+              ),
+            shapes,
+          ),
+        ) as never)
+      : undefined;
+
   // Every host a plugin callback receives carries only this plugin's settings.
   const hostCallback = <F extends (...args: never[]) => unknown>(
     fn: F | undefined,
@@ -157,7 +221,9 @@ export function createPluginApp(
           ? "contributes.tabs"
           : kind === "panel"
             ? "contributes.panels or contributes.tabs"
-            : "contributes.dashboardCards";
+            : kind === "layout"
+              ? "contributes.layouts"
+              : "contributes.dashboardCards";
       throw new Error(
         `${pluginId}: ${what} "${id}" is not declared in manifest ${field}`,
       );
@@ -215,6 +281,56 @@ export function createPluginApp(
       );
     },
 
+    registerCompanion(id, component, options = {}) {
+      const useDefaults = options.useDefaults;
+      const Defaults = useDefaults
+        ? scoped(function CompanionDefaultsReader({
+            onValue,
+          }: {
+            onValue: (value: CompanionDefaults) => void;
+          }) {
+            const value = useDefaults();
+            const { open, side, size, edgeButton } = value;
+            useEffect(() => {
+              onValue({ open, side, size, edgeButton });
+            }, [onValue, open, side, size, edgeButton]);
+            return null;
+          })
+        : undefined;
+      return track(
+        registerCompanionDef({
+          id: `${pluginId}.${id}`,
+          pluginId,
+          component: scoped(
+            component as unknown as ComponentType<CompanionRenderProps>,
+          ),
+          icon: withIconBoundary(pluginId, options.icon as never) as never,
+          titleKey: options.titleKey ? key(options.titleKey) : undefined,
+          order: options.order,
+          tabTypes: options.tabTypes,
+          when: options.when as never,
+          Defaults,
+        }),
+      );
+    },
+
+    registerCompanionLayout(tabType, resolve) {
+      return track(
+        registerCompanionLayoutDef({
+          id: `${pluginId}.${tabType}`,
+          tabTypes: [tabType],
+          resolve: resolve as never,
+        }),
+      );
+    },
+
+    toggleCompanion(tab, id) {
+      toggleCompanion(
+        tab as unknown as Tab,
+        id ? `${pluginId}.${id}` : undefined,
+      );
+    },
+
     registerTab(type, component, options = {}) {
       requireDeclared("tab", type, "tab type");
       return track(
@@ -261,6 +377,7 @@ export function createPluginApp(
           order: section.order,
           visible: section.visible,
           defaults: section.defaults,
+          simple: section.simple === true,
           component: scoped(
             section.component as unknown as ComponentType<HostEditorSectionRenderProps>,
           ),
@@ -326,7 +443,78 @@ export function createPluginApp(
           id: badge.id,
           pluginId,
           when: hostCallback(badge.when) as never,
-          component: scoped(badge.component) as never,
+          component: badge.component
+            ? (scoped(badge.component) as never)
+            : undefined,
+          dot: badge.useDot
+            ? (scoped(hostDotReporter(badge.useDot)) as never)
+            : undefined,
+          value: hostValue(badge.useValue, ["badge", "dot", "text"]),
+          order: badge.order,
+        }),
+      );
+    },
+
+    registerHostStatusIndicator(indicator) {
+      return track(
+        registerHostStatusIndicator({
+          id: indicator.id,
+          pluginId,
+          when: hostCallback(indicator.when) as never,
+          component: indicator.component
+            ? (scoped(indicator.component) as never)
+            : undefined,
+          value: hostValue(indicator.useValue, ["dot", "badge", "text"]),
+          order: indicator.order,
+        }),
+      );
+    },
+
+    registerHostEditorToolbarItem(item) {
+      return track(
+        registerHostEditorToolbarItem({
+          id: item.id,
+          pluginId,
+          when: hostCallback(item.when) as never,
+          component: item.component
+            ? (scoped(item.component) as never)
+            : undefined,
+          value: hostValue(item.useValue, ["badge", "text"]),
+          order: item.order,
+        }),
+      );
+    },
+
+    registerHostSection(section) {
+      return track(
+        registerHostSection({
+          id: section.id,
+          pluginId,
+          titleKey: key(section.titleKey),
+          order: section.order,
+          when: hostCallback(section.when ?? (() => true)) as never,
+          component: scoped(
+            section.component as unknown as ComponentType<HostSectionRenderProps>,
+          ),
+        }),
+      );
+    },
+
+    registerHostTreeChildren(provider) {
+      const useChildren = provider.useChildren as (host: unknown) => unknown;
+      return track(
+        registerHostTreeChildren({
+          id: provider.id,
+          pluginId,
+          titleKey: provider.titleKey ? key(provider.titleKey) : undefined,
+          order: provider.order,
+          when: hostCallback(provider.when) as never,
+          reporter: scoped(
+            hostTreeChildrenReporter(
+              (host) =>
+                useChildren(scopeHostFields({ host }, pluginId).host) as never,
+            ),
+          ) as never,
         }),
       );
     },
@@ -422,6 +610,8 @@ export function createPluginApp(
           defaultHeight: card.defaultHeight,
           defaultPanel: card.defaultPanel,
           frame: card.frame,
+          defaultSize: card.defaultSize,
+          entries: card.entries,
           component: scoped(
             card.component as unknown as ComponentType<DashboardCardRenderProps>,
           ),
@@ -463,12 +653,13 @@ export function createPluginApp(
             ? resolvePluginPermission(pluginId, options.permission)
             : undefined,
           pluginId,
+          private: options.private === true,
         }),
       );
     },
 
     declareActionSlot(slot) {
-      return track(declareActionSlot(slot));
+      return track(declareActionSlot({ ...slot, pluginId }));
     },
 
     registerSlotContribution(slotId, contribution) {
@@ -481,6 +672,16 @@ export function createPluginApp(
             : undefined,
           component: contribution.component
             ? scoped(contribution.component)
+            : undefined,
+          value: contribution.useValue
+            ? (scoped(
+                dataReporter((context, rowKey) =>
+                  contribution.useValue!(
+                    scopeHostFields(context, pluginId),
+                    rowKey,
+                  ),
+                ),
+              ) as never)
             : undefined,
           when: contribution.when
             ? (context: Record<string, unknown>) =>
@@ -517,7 +718,8 @@ export function createPluginApp(
           permission: step.permission
             ? resolvePluginPermission(pluginId, step.permission)
             : undefined,
-          position: sectionPosition(step.section, step.order),
+          position: sectionPosition(step.section, step.order, step.position),
+          replaces: step.replaces,
           isRelevant: when
             ? (ctx) =>
                 when({
@@ -556,7 +758,9 @@ export function createPluginApp(
           ...method,
           titleKey: key(method.titleKey),
           pluginId,
-          component: scoped(method.component) as never,
+          component: method.component
+            ? (scoped(method.component) as never)
+            : undefined,
           enrollment: method.enrollment
             ? (scoped(method.enrollment) as never)
             : undefined,
@@ -570,10 +774,27 @@ export function createPluginApp(
           ...factor,
           titleKey: key(factor.titleKey),
           pluginId,
-          component: scoped(factor.component) as never,
+          component: factor.component
+            ? (scoped(factor.component) as never)
+            : undefined,
           enrollment: factor.enrollment
             ? (scoped(factor.enrollment) as never)
             : undefined,
+        }),
+      );
+    },
+
+    registerLayout(layout) {
+      requireDeclared("layout", layout.id, "layout");
+      return track(
+        registerLayoutComponent({
+          id: layout.id,
+          pluginId,
+          component: withPluginContext(pluginId, layout.component),
+          mobileComponent: layout.mobileComponent
+            ? withPluginContext(pluginId, layout.mobileComponent)
+            : undefined,
+          defaultTheme: layout.defaultTheme,
         }),
       );
     },
@@ -616,6 +837,79 @@ export function createPluginApp(
     },
 
     confirm: (options) => shell.confirm!(options),
+
+    stepUp: () => requestStepUp(),
+
+    openDiagnostics: (options) =>
+      openDiagnostics({
+        pluginId:
+          options && "pluginId" in options
+            ? (options.pluginId ?? undefined)
+            : pluginId,
+      }),
+
+    deepLinks: {
+      onOpen: (listener) => {
+        startDeepLinks();
+        return track(onDeepLink(listener));
+      },
+    },
+
+    session: {
+      signOut: async () => {
+        if (!mayControlSession(manifest?.capabilities ?? [])) {
+          throw new Error("This plugin may not end the session");
+        }
+        await signOutShell();
+      },
+      reload: async () => {
+        if (!mayControlSession(manifest?.capabilities ?? [])) {
+          throw new Error("This plugin may not end the session");
+        }
+        return reloadShell();
+      },
+    },
+
+    auth: {
+      webauthn: async (ceremonyId, extra) => {
+        if (!(manifest?.capabilities ?? []).includes("auth:provide")) {
+          throw new Error("This plugin may not run security key steps");
+        }
+        const id = readCeremonyId(ceremonyId);
+        if (!id) throw new Error("Bad security key step");
+        return runPluginCeremony(
+          `page:${pluginId}`,
+          pluginId,
+          id,
+          readCeremonyExtra(extra),
+        );
+      },
+    },
+
+    serial: {
+      get available() {
+        return webSerialAvailable();
+      },
+      async request(options, events) {
+        if (!(manifest?.capabilities ?? []).includes("device:serial")) {
+          throw new Error("This plugin may not use serial ports");
+        }
+        const parsed = parseSerialOptions(options);
+        if (!parsed) throw new Error("Bad serial port options");
+        const owner = `page:${pluginId}`;
+        const handle = await requestSerialPort(
+          owner,
+          parsed,
+          events.onData,
+          events.onClose,
+        );
+        if (!handle) return null;
+        return {
+          write: (data) => writeSerial(owner, handle, data),
+          close: () => closeSerial(owner, handle),
+        };
+      },
+    },
 
     docs: createDocsApi(manifest),
 

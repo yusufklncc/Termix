@@ -31,8 +31,19 @@ export const users = pgTable(
     registeredAt: text("registered_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    displayName: text("display_name"),
+    email: varchar("email", { length: 255 }),
+    // Set while the account is turned off or waiting for approval.
+    disabledAt: text("disabled_at"),
+    disabledReason: text("disabled_reason"),
+    lastLoginAt: text("last_login_at"),
+    // Plugin that created the account, like a SCIM provisioner.
+    managedBy: text("managed_by"),
   },
-  (table) => [uniqueIndex("idx_users_username").on(table.username)],
+  (table) => [
+    uniqueIndex("idx_users_username").on(table.username),
+    uniqueIndex("idx_users_email").on(table.email),
+  ],
 );
 
 export const settings = pgTable("settings", {
@@ -59,6 +70,10 @@ export const sessions = pgTable(
     lastActiveAt: text("last_active_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+    // Set while the session may only set up a second factor.
+    restriction: text("restriction"),
+    // Seconds without a request before the session ends, from the login policy.
+    idleTimeout: integer("idle_timeout"),
   },
   // Listing a user's devices, and the startup sweep of expired rows.
   (table) => [
@@ -189,6 +204,9 @@ export const hosts = pgTable(
     // legacy algorithms, agent, environment). JSON.
     sshOptions: text("ssh_options"),
     notes: text("notes"),
+    // Hex color and Lucide icon name a layout may show next to the host.
+    color: text("color"),
+    icon: text("icon"),
     enableSsh: boolean("enable_ssh").notNull().default(true),
 
     sshPort: integer("ssh_port").default(22),
@@ -283,6 +301,7 @@ export const sshCredentials = pgTable(
   lastUsed: text("last_used"),
   syncId: varchar("sync_id", { length: 255 }).unique(),
   sharedSource: text("shared_source"),
+  localOnly: boolean("local_only").notNull().default(false),
   createdAt: text("created_at")
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),
@@ -415,28 +434,6 @@ export const hostDefaults = pgTable(
   ],
 );
 
-export const recentActivity = pgTable(
-  "recent_activity",
-  {
-    id: serial("id").primaryKey(),
-    userId: varchar("user_id", { length: 255 })
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    type: text("type").notNull(),
-    hostId: integer("host_id")
-      .notNull()
-      .references(() => hosts.id, { onDelete: "cascade" }),
-    hostName: text("host_name"),
-    timestamp: varchar("timestamp", { length: 255 })
-      .notNull()
-      .default(sql`CURRENT_TIMESTAMP`),
-  },
-  // Always read newest-first for one user, so timestamp follows user_id.
-  (table) => [
-    index("idx_recent_activity_user_ts").on(table.userId, table.timestamp),
-  ],
-);
-
 export const hostAccess = pgTable(
   "host_access",
   {
@@ -501,6 +498,38 @@ export const sharedHostAuthOverrides = pgTable(
     uniqueIndex("shared_host_auth_overrides_host_user_protocol_unique").on(
       table.hostId,
       table.userId,
+      table.protocol,
+    ),
+  ],
+);
+
+/**
+ * A recipient's own login for the shared hosts in a folder ("Parent / Child")
+ * and its subfolders. A host's own override still wins.
+ */
+export const sharedFolderAuthOverrides = pgTable(
+  "shared_folder_auth_overrides",
+  {
+    id: serial("id").primaryKey(),
+    userId: varchar("user_id", { length: 255 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    folder: varchar("folder", { length: 255 }).notNull(),
+    protocol: varchar("protocol", { length: 255 }).notNull().default("ssh"),
+    credentialId: integer("credential_id")
+      .notNull()
+      .references(() => sshCredentials.id, { onDelete: "cascade" }),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("shared_folder_auth_overrides_user_folder_protocol_unique").on(
+      table.userId,
+      table.folder,
       table.protocol,
     ),
   ],
@@ -631,6 +660,11 @@ export const auditLogs = pgTable(
     timestamp: varchar("timestamp", { length: 255 })
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
+
+    // Each row's hash covers the one before, so an edit or a removed row shows.
+    // Null on rows written before the chain existed.
+    prevHash: text("prev_hash"),
+    hash: text("hash"),
   },
   // This table only grows, and is always read newest-first with an optional
   // filter. Each composite leads with the filtered column so the same index
@@ -641,6 +675,29 @@ export const auditLogs = pgTable(
     index("idx_audit_logs_action_ts").on(table.action, table.timestamp),
     index("idx_audit_logs_resource_ts").on(table.resourceType, table.timestamp),
   ],
+);
+
+// Dangerous admin changes waiting out the cooling-off time.
+export const adminHolds = pgTable(
+  "admin_holds",
+  {
+    id: varchar("id", { length: 255 }).primaryKey(),
+    kind: text("kind").notNull(),
+    // Ids and flags only, never secrets.
+    payload: text("payload").notNull(),
+    summary: text("summary").notNull(),
+    requestedBy: varchar("requested_by", { length: 255 }).references(() => users.id, {
+      onDelete: "set null",
+    }),
+    requestedByName: text("requested_by_name").notNull(),
+    requestedAt: text("requested_at").notNull(),
+    runsAt: varchar("runs_at", { length: 255 }).notNull(),
+    status: varchar("status", { length: 255 }).notNull().default("pending"),
+    decidedBy: text("decided_by"),
+    decidedAt: text("decided_at"),
+    error: text("error"),
+  },
+  (table) => [index("idx_admin_holds_status_runs").on(table.status, table.runsAt)],
 );
 
 export const apiKeys = pgTable(
@@ -657,8 +714,124 @@ export const apiKeys = pgTable(
     expiresAt: text("expires_at"),
     lastUsedAt: text("last_used_at"),
     isActive: boolean("is_active").notNull().default(true),
+    // JSON list. Null means full access, which every older key has.
+    scopes: text("scopes"),
   },
   (table) => [index("idx_api_keys_user_id").on(table.userId)],
+);
+
+// A link an admin hands out so someone can make an account.
+export const userInvites = pgTable(
+  "user_invites",
+  {
+    id: varchar("id", { length: 255 }).primaryKey(),
+    tokenHash: varchar("token_hash", { length: 255 }).notNull(),
+    note: text("note"),
+    // JSON list of role ids given on sign up.
+    roleIds: text("role_ids"),
+    makeAdmin: boolean("make_admin").notNull().default(false),
+    maxUses: integer("max_uses").notNull().default(1),
+    uses: integer("uses").notNull().default(0),
+    createdBy: varchar("created_by", { length: 255 }).references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    expiresAt: text("expires_at").notNull(),
+    revokedAt: text("revoked_at"),
+  },
+  (table) => [uniqueIndex("idx_user_invites_token_hash").on(table.tokenHash)],
+);
+
+export const operationRuns = pgTable(
+  "operation_runs",
+  {
+    id: varchar("id", { length: 255 }).primaryKey(),
+    actionId: text("action_id").notNull(),
+    actionVersion: integer("action_version").notNull().default(1),
+    pluginId: text("plugin_id").notNull(),
+    pluginVersion: text("plugin_version").notNull(),
+
+    // Nullable on purpose: history outlives the account, like audit_logs.
+    userId: varchar("user_id", { length: 255 }).references(() => users.id, { onDelete: "set null" }),
+    username: text("username").notNull(),
+
+    origin: text("origin").notNull(),
+    hostId: integer("host_id"),
+    hostName: text("host_name"),
+    batchId: varchar("batch_id", { length: 255 }),
+    dryRun: boolean("dry_run").notNull().default(false),
+    risk: text("risk").notNull(),
+    status: varchar("status", { length: 255 }).notNull(),
+    summary: text("summary"),
+    changed: boolean("changed"),
+    input: text("input"),
+    // Only until the run ends, then wiped.
+    sealedInput: text("sealed_input"),
+    output: text("output"),
+    undoInput: text("undo_input"),
+    error: text("error"),
+    errorCode: text("error_code"),
+    undoOf: text("undo_of"),
+    idempotencyKey: text("idempotency_key"),
+    createdAt: varchar("created_at", { length: 255 }).notNull(),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+  },
+  (table) => [
+    index("idx_operation_runs_created").on(table.createdAt),
+    index("idx_operation_runs_user_created").on(table.userId, table.createdAt),
+    index("idx_operation_runs_host_created").on(table.hostId, table.createdAt),
+    index("idx_operation_runs_status").on(table.status),
+    index("idx_operation_runs_batch").on(table.batchId),
+  ],
+);
+
+export const operationApprovals = pgTable(
+  "operation_approvals",
+  {
+    id: varchar("id", { length: 255 }).primaryKey(),
+    runId: varchar("run_id", { length: 255 })
+      .notNull()
+      .references(() => operationRuns.id, { onDelete: "cascade" }),
+    requestedBy: text("requested_by"),
+    reason: text("reason"),
+    allowSelf: boolean("allow_self")
+      .notNull()
+      .default(false),
+    status: varchar("status", { length: 255 }).notNull(),
+    decidedBy: text("decided_by"),
+    comment: text("comment"),
+    createdAt: text("created_at").notNull(),
+    expiresAt: varchar("expires_at", { length: 255 }).notNull(),
+    decidedAt: text("decided_at"),
+  },
+  (table) => [
+    index("idx_operation_approvals_status").on(table.status, table.expiresAt),
+    index("idx_operation_approvals_run").on(table.runId),
+  ],
+);
+
+export const operationEvents = pgTable(
+  "operation_events",
+  {
+    id: varchar("id", { length: 255 }).primaryKey(),
+    eventId: text("event_id").notNull(),
+    pluginId: text("plugin_id").notNull(),
+    hostId: integer("host_id"),
+    severity: text("severity"),
+    payload: text("payload"),
+    runId: text("run_id"),
+    createdAt: varchar("created_at", { length: 255 }).notNull(),
+  },
+  (table) => [
+    index("idx_operation_events_created").on(table.createdAt),
+    index("idx_operation_events_host_created").on(
+      table.hostId,
+      table.createdAt,
+    ),
+  ],
 );
 
 export const userOpenTabs = pgTable(
@@ -710,6 +883,8 @@ export const userPreferences = pgTable("user_preferences", {
   compactHostView: boolean("compact_host_view"),
   statusColorScheme: text("status_color_scheme"),
   customKeybindings: text("custom_keybindings"),
+  layoutId: text("layout_id"),
+  themeId: text("theme_id"),
   updatedAt: text("updated_at")
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),
@@ -754,6 +929,33 @@ export const uiPreferences = pgTable("ui_preferences", {
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),
 });
+
+/**
+ * What a framed plugin registers, per user, client kind and plugin, so a new
+ * browser or device skips booting every plugin's frame. No answers or values.
+ */
+export const frameRegistrations = pgTable(
+  "frame_registrations",
+  {
+    id: serial("id").primaryKey(),
+    userId: varchar("user_id", { length: 255 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    client: varchar("client", { length: 255 }).notNull(),
+    pluginId: varchar("plugin_id", { length: 255 }).notNull(),
+    data: text("data").notNull(),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    uniqueIndex("idx_frame_registrations_user_client_plugin").on(
+      table.userId,
+      table.client,
+      table.pluginId,
+    ),
+  ],
+);
 
 // --- sync begin ---
 /**
@@ -1013,6 +1215,13 @@ export const plugins = pgTable(
     pinnedVersion: text("pinned_version"),
     /** stable | beta: which registry releases updates offer. */
     channel: text("channel").notNull().default("stable"),
+    /**
+     * An admin let this API 1 plugin run inside the server process. Only
+     * official plugins can have it; API 2 plugins ignore it.
+     */
+    runUnisolated: boolean("run_unisolated")
+      .notNull()
+      .default(false),
     manifestJson: text("manifest_json").notNull(),
   },
   (table) => [index("idx_plugins_registry_id").on(table.registryId)],

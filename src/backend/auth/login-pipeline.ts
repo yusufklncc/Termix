@@ -9,7 +9,9 @@
  * second factors, the same cookie and the same audit line.
  */
 
+import { DISABLED_REASON_PENDING } from "./user-access-settings.js";
 import crypto from "crypto";
+import type { PluginSecondFactorPrompt } from "@termix-ssh/plugin-sdk/backend";
 import type { Request, Response } from "express";
 import { AuthManager } from "../utils/auth-manager.js";
 import { loginRateLimiter } from "../utils/login-rate-limiter.js";
@@ -27,6 +29,12 @@ import {
 } from "./core-auth.js";
 import { findOrProvisionExternalUser } from "./provisioning.js";
 import {
+  SECOND_FACTOR_SETUP,
+  evaluateAuthPolicy,
+  hasAuthPolicies,
+  rememberDeviceAllowed,
+} from "./policy.js";
+import {
   getLoginMethod,
   getSecondFactor,
   listSecondFactors,
@@ -43,15 +51,21 @@ import {
   type PendingLogin,
   type VerifiedIdentity,
 } from "./types.js";
+import { setAuthCookie, clearAuthCookie } from "./session-cookie.js";
 
 const PENDING_TTL_MS = 10 * 60 * 1000;
 const PENDING_LOGIN_COOKIE = "termix_pending_login";
 
 const pendingLogins = new Map<string, PendingLogin>();
+// Tokens that already finished a login, kept until they expire on their own.
+const usedPending = new Map<string, number>();
 
 function prunePending(now = Date.now()): void {
   for (const [key, pending] of pendingLogins) {
     if (now - pending.createdAt > PENDING_TTL_MS) pendingLogins.delete(key);
+  }
+  for (const [key, usedAt] of usedPending) {
+    if (now - usedAt > PENDING_TTL_MS) usedPending.delete(key);
   }
 }
 
@@ -62,6 +76,7 @@ function pendingKey(token: string): string {
 /** Test helper. */
 export function resetPendingLoginsForTests(): void {
   pendingLogins.clear();
+  usedPending.clear();
 }
 
 export interface SecondFactorState {
@@ -122,10 +137,13 @@ export async function evaluateSecondFactors(
  * governs external methods (SSO, LDAP) alone.
  */
 function shouldRunSecondFactors(methodId: string): boolean {
-  ensureCoreLoginProviders();
-  const method = getLoginMethod(methodId);
-  if (!method?.external) return true;
+  if (!isExternalMethod(methodId)) return true;
   return isSecondFactorAfterExternalLoginEnabled();
+}
+
+function isExternalMethod(methodId: string): boolean {
+  ensureCoreLoginProviders();
+  return !!getLoginMethod(methodId)?.external;
 }
 
 export const TRUST_DEVICE_COOKIE = "termix_trust_device";
@@ -189,6 +207,26 @@ export function assertMethodAllowedFor(
     "This account signs in through its identity provider",
     403,
     "external_login_required",
+  );
+}
+
+/** Refuses an account that is turned off or still waiting for approval. */
+export function assertAccountEnabled(user: {
+  disabledAt?: string | null;
+  disabledReason?: string | null;
+}): void {
+  if (!user.disabledAt) return;
+  if (user.disabledReason === DISABLED_REASON_PENDING) {
+    throw new LoginMethodError(
+      "Your account is waiting for an admin to approve it",
+      403,
+      "account_pending",
+    );
+  }
+  throw new LoginMethodError(
+    "This account is turned off. Ask an admin to turn it back on.",
+    403,
+    "account_disabled",
   );
 }
 
@@ -259,7 +297,12 @@ export type LoginResult =
   | {
       kind: "second-factor";
       tempToken: string;
-      factors: Array<{ id: string; pluginId: string; labelKey: string }>;
+      factors: Array<{
+        id: string;
+        pluginId: string;
+        labelKey: string;
+        prompt?: PluginSecondFactorPrompt;
+      }>;
       rememberMe: boolean;
     };
 
@@ -274,6 +317,7 @@ export async function runLogin(
 ): Promise<LoginResult> {
   const deviceType = parseUserAgent(req).type;
   const user = await resolveUser(identity, deviceType);
+  assertAccountEnabled(user);
   assertMethodAllowedFor(user, identity, context.methodId);
 
   await unlockUser(user, identity, deviceType);
@@ -294,9 +338,40 @@ export async function runLogin(
     `${context.methodId}_role_shared_credentials`,
   );
 
-  const factors = shouldRunSecondFactors(context.methodId)
-    ? await evaluateSecondFactors(user.id)
-    : { required: [], blocked: [] };
+  // A login policy may want a factor where core would skip it, so it always
+  // sees the full picture.
+  const runFactors = shouldRunSecondFactors(context.methodId);
+  const factors =
+    runFactors || hasAuthPolicies()
+      ? await evaluateSecondFactors(user.id)
+      : { required: [], blocked: [] };
+  const trusted =
+    factors.required.length > 0 || hasAuthPolicies()
+      ? await isTrustedDevice(req, user.id)
+      : false;
+  const policy = await evaluateAuthPolicy({
+    userId: user.id,
+    methodId: context.methodId,
+    external: isExternalMethod(context.methodId),
+    deviceType,
+    trustedDevice: trusted,
+    mfaSatisfied: !!identity.mfaSatisfied,
+    secondFactors: listSecondFactors().map((factor) => ({
+      id: factor.id,
+      pluginId: factor.pluginId,
+      enrolled: factors.required.some(
+        (required) =>
+          required.id === factor.id && required.pluginId === factor.pluginId,
+      ),
+    })),
+  });
+  if (!runFactors && !policy.secondFactor) {
+    factors.required = [];
+    factors.blocked = [];
+  }
+  const rememberMe = context.rememberMe && policy.allowRememberDevice;
+  const skipByDevice =
+    trusted && policy.allowRememberDevice && policy.secondFactor !== "always";
   if (factors.blocked.length > 0) {
     authLogger.warn("Login refused: an enrolled second factor is unavailable", {
       operation: "second_factor_unavailable",
@@ -324,11 +399,7 @@ export async function runLogin(
 
   const ssoClaims = { externalSession: identity.externalSession ?? null };
 
-  if (
-    factors.required.length > 0 &&
-    !identity.mfaSatisfied &&
-    !(await isTrustedDevice(req, user.id))
-  ) {
+  if (factors.required.length > 0 && !identity.mfaSatisfied && !skipByDevice) {
     const tempToken = await AuthManager.getInstance().generateJWTToken(
       user.id,
       { pendingTOTP: true, expiresIn: "10m" },
@@ -337,27 +408,42 @@ export async function runLogin(
     pendingLogins.set(pendingKey(tempToken), {
       userId: user.id,
       methodId: context.methodId,
-      rememberMe: context.rememberMe,
+      rememberMe,
+      allowRememberDevice: policy.allowRememberDevice,
+      maxSessionSeconds: policy.maxSessionSeconds,
+      idleTimeoutSeconds: policy.idleTimeoutSeconds,
       ...ssoClaims,
       createdAt: Date.now(),
     });
     return {
       kind: "second-factor",
       tempToken,
-      rememberMe: context.rememberMe,
+      rememberMe,
       factors: factors.required.map((factor) => ({
         id: factor.id,
         pluginId: factor.pluginId,
         labelKey: factor.labelKey,
+        ...(factor.prompt ? { prompt: factor.prompt } : {}),
       })),
     };
   }
 
+  // Required but nothing set up yet: a session that can only set one up.
+  const needsSetup =
+    !!policy.secondFactor &&
+    factors.required.length === 0 &&
+    !identity.mfaSatisfied &&
+    !skipByDevice;
+
   const session = await issueSession(req, user, {
     methodId: context.methodId,
-    rememberMe: context.rememberMe,
+    rememberMe,
     rateLimitUsername: context.rateLimitUsername ?? identity.rateLimitUsername,
-    longLivedForApps: identity.kind === "external",
+    longLivedForApps:
+      identity.kind === "external" && policy.allowRememberDevice,
+    maxAgeSeconds: policy.maxSessionSeconds,
+    idleTimeoutSeconds: policy.idleTimeoutSeconds,
+    restriction: needsSetup ? SECOND_FACTOR_SETUP : null,
     ...ssoClaims,
   });
   return { kind: "session", ...session };
@@ -421,12 +507,14 @@ export async function readPendingLogin(
   const decoded = await AuthManager.getInstance().verifyJWTToken(token);
   if (!decoded || !decoded.pendingTOTP) return null;
   prunePending();
+  if (usedPending.has(pendingKey(token))) return null;
   const pending = pendingLogins.get(pendingKey(token)) ?? null;
   return { userId: decoded.userId, token, pending };
 }
 
 function consumePendingLogin(token: string): void {
   pendingLogins.delete(pendingKey(token));
+  usedPending.set(pendingKey(token), Date.now());
 }
 
 /**
@@ -446,6 +534,11 @@ export async function verifySecondFactorAndRespond(
 
   const user = await createCurrentUserRepository().findById(lookup.userId);
   if (!user) return res.status(404).json({ error: "User not found" });
+  try {
+    assertAccountEnabled(user);
+  } catch (error) {
+    return sendLoginError(res, error);
+  }
 
   const lockStatus = loginRateLimiter.isTOTPLocked(user.id);
   if (lockStatus.locked) {
@@ -510,10 +603,15 @@ export async function verifySecondFactorAndRespond(
   }
   loginRateLimiter.resetTOTPAttempts(user.id);
 
+  // A pending entry lost to a restart falls back to the current policy.
+  const allowRemember = lookup.pending
+    ? lookup.pending.allowRememberDevice !== false
+    : await rememberDeviceAllowed();
   const rememberMe =
-    typeof req.body?.rememberMe === "boolean"
+    allowRemember &&
+    (typeof req.body?.rememberMe === "boolean"
       ? req.body.rememberMe
-      : (lookup.pending?.rememberMe ?? false);
+      : (lookup.pending?.rememberMe ?? false));
 
   let trustToken: string | null = null;
   if (rememberMe) {
@@ -525,7 +623,9 @@ export async function verifySecondFactorAndRespond(
       deviceInfo.type,
       deviceInfo.deviceInfo,
     );
-    res.cookie(
+    setAuthCookie(
+      req,
+      res,
       TRUST_DEVICE_COOKIE,
       trustToken,
       AuthManager.getInstance().getSecureCookieOptions(
@@ -545,6 +645,8 @@ export async function verifySecondFactorAndRespond(
     methodId: pending?.methodId ?? "password",
     rememberMe,
     externalSession: pending?.externalSession ?? null,
+    maxAgeSeconds: pending?.maxSessionSeconds ?? null,
+    idleTimeoutSeconds: pending?.idleTimeoutSeconds ?? null,
   });
 
   if (trustToken && isNativeAppRequest(req)) {
@@ -552,7 +654,9 @@ export async function verifySecondFactorAndRespond(
   }
 
   consumePendingLogin(lookup.token);
-  res.clearCookie(
+  clearAuthCookie(
+    req,
+    res,
     PENDING_LOGIN_COOKIE,
     AuthManager.getInstance().getClearCookieOptions(req),
   );
@@ -588,7 +692,7 @@ export async function respondWithRedirectLogin(
 
   const url = new URL(returnTo);
   const tokenCallback = isTokenCallback(returnTo);
-  res.clearCookie("jwt", authManager.getClearCookieOptions(req));
+  clearAuthCookie(req, res, "jwt", authManager.getClearCookieOptions(req));
 
   if (result.kind === "second-factor") {
     url.searchParams.set("second_factor", "1");
@@ -601,13 +705,13 @@ export async function respondWithRedirectLogin(
       res.redirect(url.toString());
       return;
     }
-    res
-      .cookie(
-        PENDING_LOGIN_COOKIE,
-        result.tempToken,
-        authManager.getSecureCookieOptions(req, PENDING_TTL_MS),
-      )
-      .redirect(url.toString());
+    setAuthCookie(
+      req,
+      res,
+      PENDING_LOGIN_COOKIE,
+      result.tempToken,
+      authManager.getSecureCookieOptions(req, PENDING_TTL_MS),
+    ).redirect(url.toString());
     return;
   }
 
@@ -617,13 +721,13 @@ export async function respondWithRedirectLogin(
     res.redirect(url.toString());
     return;
   }
-  res
-    .cookie(
-      "jwt",
-      result.token,
-      authManager.getSecureCookieOptions(req, result.maxAge),
-    )
-    .redirect(url.toString());
+  setAuthCookie(
+    req,
+    res,
+    "jwt",
+    result.token,
+    authManager.getSecureCookieOptions(req, result.maxAge),
+  ).redirect(url.toString());
 }
 
 export function redirectWithLoginError(

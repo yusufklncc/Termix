@@ -52,12 +52,10 @@ describe("useAreaPreferences", () => {
       wrapper,
     });
 
-    await waitFor(() =>
-      expect(result.current.trayTrigger).toBe(
-        PRESETS.simple.hostList.trayTrigger,
-      ),
+    await waitFor(() => expect(result.current.showResourceBars).toBe(false));
+    expect(result.current.trayTrigger).toBe(
+      PRESETS.simple.hostList.trayTrigger,
     );
-    expect(result.current.showResourceBars).toBe(false);
   });
 
   it("layers overrides over the preset", async () => {
@@ -183,6 +181,30 @@ describe("UiPreferencesProvider", () => {
       overrides: { hostList: null },
     });
     expect(result.current?.preferences.overrides).toEqual({});
+  });
+
+  it("sends every key set in one area within a burst", async () => {
+    vi.useFakeTimers();
+    api.getUserPreferences.mockResolvedValue({ storageMode: "cloud" });
+    api.getUiPreferences.mockResolvedValue({
+      ...defaultUiPreferences(),
+      overrides: { "plugin:x": { grid: ["a"], slots: ["b"] } },
+    });
+
+    const { result } = renderHook(() => useUiPreferencesContext(), { wrapper });
+    await vi.waitFor(() => expect(result.current?.loaded).toBe(true));
+
+    act(() => {
+      result.current?.setPluginOverride("x", "grid", null);
+      result.current?.setPluginOverride("x", "slots", null);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    expect(api.saveUiPreferences).toHaveBeenCalledWith({
+      overrides: { "plugin:x": { grid: null, slots: null } },
+    });
   });
 
   it("prunes an area once its last override is cleared", async () => {

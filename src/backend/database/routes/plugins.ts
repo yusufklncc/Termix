@@ -13,7 +13,19 @@ import {
   createCurrentPluginRepository,
 } from "../repositories/factory.js";
 import { getPluginRuntime } from "../../plugins/index.js";
+import {
+  isLegacyPluginApi,
+  resolvePluginDesktopMode,
+} from "@termix-ssh/plugin-sdk/manifest";
 import { describePluginFrontend } from "../../plugins/assets.js";
+import { readViewGrant } from "../../plugins/web-view-grants.js";
+import {
+  CeremonyError,
+  finishCeremony,
+  startCeremony,
+} from "../../auth/webauthn-ceremonies.js";
+import { isDefaultLookPlugin } from "../../plugins/bundled-index.js";
+import { mayRunInSafeMode } from "../../plugins/safe-mode.js";
 import { invalidatePluginPermissionCache } from "../../plugins/permissions.js";
 import { getPluginPublicHttpRoutes } from "../../plugins/http.js";
 import { getPluginPublicWsRoutes } from "../../plugins/ws.js";
@@ -22,7 +34,10 @@ import {
   MAX_UPLOAD_BYTES,
   PluginManageError,
 } from "../../plugins/manage.js";
-import { parsePluginChannel } from "../../plugins/registry-index.js";
+import {
+  parsePluginChannel,
+  readInstalledProvenance,
+} from "../../plugins/registry-index.js";
 import { RegistryError } from "../../plugins/registries.js";
 import {
   pluginDocsUrl,
@@ -42,6 +57,13 @@ import {
   validateSettingsSave,
   type PluginSettingsScope,
 } from "../../plugins/settings.js";
+import { assertHostsUnlocked, sendHostLocked } from "../../hosts/locks.js";
+import {
+  getHoldSettings,
+  holdIfNeeded,
+  needsHold,
+  registerHoldKind,
+} from "../../auth/admin-holds.js";
 import {
   getAuditUsername,
   getRequestMeta,
@@ -93,6 +115,8 @@ router.get("/public", async (_req: Request, res: Response) => {
         guestViews?: string[];
         tabs?: unknown[];
         panels?: unknown[];
+        actionSlots?: unknown[];
+        uses?: unknown[];
       };
       dependencies?: Record<string, string>;
       optionalDependencies?: Record<string, string>;
@@ -124,13 +148,16 @@ router.get("/public", async (_req: Request, res: Response) => {
         version: "",
         enabled: true,
         state: loaded?.state ?? record.state,
-        // The tab and panel ids a guest page may register, which the
-        // browser checks against the manifest.
+        // The tab, panel and slot ids a guest page may register, which the
+        // browser checks against the manifest. A guest view draws another
+        // plugin's part through a slot, like a shared terminal or desktop.
         contributes: {
           guest: true,
           guestViews: manifest.contributes?.guestViews ?? [],
           tabs: manifest.contributes?.tabs ?? [],
           panels: manifest.contributes?.panels ?? [],
+          actionSlots: manifest.contributes?.actionSlots ?? [],
+          uses: manifest.contributes?.uses ?? [],
         },
         dependencies: onlyGuests(manifest.dependencies),
         optionalDependencies: onlyGuests(manifest.optionalDependencies),
@@ -240,18 +267,451 @@ export async function listPreLoginPlugins(): Promise<
  *       `assetVersion` is its cache key, `css` says a stylesheet sits beside
  *       it, and `locales` lists the languages it ships ("en" and xx_YY).
  *       `dependencies` and `optionalDependencies` let the loader activate
- *       frontends in the same order the server does.
+ *       frontends in the same order the server does. `engine` holds the
+ *       manifest's `api` and `termix` ranges, so other clients (the mobile
+ *       app) can tell whether they understand the plugin.
  *
  *       On a desktop linked to a server, `runsOnServer` marks plugins that
  *       only run on that server and stay off here on purpose, and, for
  *       admins, `managedByServer` marks plugins whose on/off state the server
  *       decides.
+ *
+ *       While TERMIX_SAFE_MODE is on, an enabled plugin that safe mode keeps
+ *       off reports `state: "safe-mode"`.
  *     tags:
  *       - Plugins
  *     responses:
  *       200:
  *         description: List of plugins.
  */
+/**
+ * @openapi
+ * /plugins/{id}/frame-token:
+ *   post:
+ *     summary: Get a short token for a plugin's sandboxed frames
+ *     description: >
+ *       The shell asks for one on behalf of a plugin whose UI runs in sandboxed
+ *       frames. The token opens only that plugin's own /plugin-api and
+ *       /plugin-ws routes, ends with the session and lasts a few minutes.
+ *     tags:
+ *       - Plugins
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: The token and how many seconds it lasts.
+ *       401:
+ *         description: Not signed in with a session.
+ *       404:
+ *         description: No such running plugin with framed views.
+ */
+router.post(
+  "/:id/frame-token",
+  authenticateJWT,
+  async (req: Request, res: Response) => {
+    const authReq = req as AuthenticatedRequest & { apiKeyId?: string };
+    const pluginId = String(req.params.id);
+    // Frames belong to a signed-in page, never to an API key.
+    if (!authReq.sessionId || authReq.apiKeyId) {
+      res.status(401).json({ error: "A login session is required" });
+      return;
+    }
+    const plugin = getPluginRuntime().loader.get(pluginId);
+    if (
+      !plugin ||
+      plugin.state !== "active" ||
+      describePluginFrontend(plugin).frontendIsolation !== "frame"
+    ) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    try {
+      const { token, expiresIn } = await authManager.issuePluginFrameToken(
+        authReq.userId as string,
+        authReq.sessionId,
+        pluginId,
+      );
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ token, expiresIn });
+    } catch (error) {
+      databaseLogger.error("Failed to issue a plugin frame token", error, {
+        operation: "plugin_frame_token",
+        pluginId,
+      });
+      res.status(500).json({ error: "Could not issue a token" });
+    }
+  },
+);
+
+/**
+ * @openapi
+ * /plugins/{id}/image:
+ *   get:
+ *     summary: Load a picture from another site for a plugin view
+ *     description: >
+ *       Plugin views may only show pictures from the plugin's own assets, so
+ *       a picture from elsewhere comes through here. Only for a running
+ *       plugin with network:outbound or network:sockets granted. The answer is the picture
+ *       itself; anything that is not an image, over 5 MB, on this machine or
+ *       at a cloud metadata address is refused.
+ *     tags:
+ *       - Plugins
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: url
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: The picture.
+ *       400:
+ *         description: Not an http or https address.
+ *       403:
+ *         description: The plugin may not load pictures, or the address is not allowed.
+ *       404:
+ *         description: No such running plugin.
+ *       413:
+ *         description: The picture is over 5 MB.
+ *       415:
+ *         description: The address is not a picture.
+ *       502:
+ *         description: The picture could not be loaded.
+ */
+router.get(
+  "/:id/image",
+  authenticateJWT,
+  async (req: Request, res: Response) => {
+    const pluginId = String(req.params.id);
+    const plugin = getPluginRuntime().loader.get(pluginId);
+    if (!plugin || plugin.state !== "active") {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const { hasCapability } = await import("../../plugins/permissions.js");
+    const declared = plugin.manifest.capabilities;
+    // Either one already lets the plugin reach other sites.
+    if (
+      !(await hasCapability(pluginId, "network:outbound", declared)) &&
+      !(await hasCapability(pluginId, "network:sockets", declared))
+    ) {
+      res.status(403).json({ error: "This plugin may not load pictures" });
+      return;
+    }
+    const { fetchImage, ImageProxyError } =
+      await import("../../plugins/image-proxy.js");
+    try {
+      const { type, body } = await fetchImage(req.query.url);
+      res.setHeader("Content-Type", type);
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+      res.send(body);
+    } catch (error) {
+      const status = error instanceof ImageProxyError ? error.status : 502;
+      res.status(status).json({
+        error:
+          error instanceof ImageProxyError
+            ? error.message
+            : "The picture could not be loaded",
+      });
+    }
+  },
+);
+
+const MAX_FRAME_TOKEN_IDS = 200;
+
+/**
+ * @openapi
+ * /plugins/frame-tokens:
+ *   post:
+ *     summary: Get short tokens for several plugins' sandboxed frames at once
+ *     description: >
+ *       The same as /plugins/{id}/frame-token for a list of plugins, so a page
+ *       load asks once instead of once per plugin. Plugins that are not running
+ *       with framed views are left out of the answer.
+ *     tags:
+ *       - Plugins
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ids]
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *     responses:
+ *       200:
+ *         description: A token and how many seconds it lasts, per plugin id.
+ *       400:
+ *         description: ids is not a list of plugin ids.
+ *       401:
+ *         description: Not signed in with a session.
+ */
+router.post(
+  "/frame-tokens",
+  authenticateJWT,
+  async (req: Request, res: Response) => {
+    const authReq = req as AuthenticatedRequest & { apiKeyId?: string };
+    // Frames belong to a signed-in page, never to an API key.
+    if (!authReq.sessionId || authReq.apiKeyId) {
+      res.status(401).json({ error: "A login session is required" });
+      return;
+    }
+    const ids = (req.body as { ids?: unknown } | undefined)?.ids;
+    if (
+      !Array.isArray(ids) ||
+      ids.length > MAX_FRAME_TOKEN_IDS ||
+      !ids.every((id) => typeof id === "string" && /^[a-z][a-z0-9-]*$/.test(id))
+    ) {
+      res.status(400).json({ error: "ids must be a list of plugin ids" });
+      return;
+    }
+    const { loader } = getPluginRuntime();
+    const tokens: Record<string, { token: string; expiresIn: number }> = {};
+    try {
+      for (const pluginId of new Set(ids as string[])) {
+        const plugin = loader.get(pluginId);
+        if (
+          !plugin ||
+          plugin.state !== "active" ||
+          describePluginFrontend(plugin).frontendIsolation !== "frame"
+        ) {
+          continue;
+        }
+        tokens[pluginId] = await authManager.issuePluginFrameToken(
+          authReq.userId as string,
+          authReq.sessionId,
+          pluginId,
+        );
+      }
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ tokens });
+    } catch (error) {
+      databaseLogger.error("Failed to issue plugin frame tokens", error, {
+        operation: "plugin_frame_tokens",
+      });
+      res.status(500).json({ error: "Could not issue a token" });
+    }
+  },
+);
+
+/**
+ * @openapi
+ * /plugins/{id}/web-views/{grant}:
+ *   get:
+ *     summary: Read a page a plugin let its frames show
+ *     description: >
+ *       The shell reads the address behind a grant the plugin's backend made
+ *       with ctx.desktop.grantView, to draw that page for one of the plugin's
+ *       frames. Only the person (and session) the grant was made for gets it,
+ *       never a frame token or an API key.
+ *     tags:
+ *       - Plugins
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: grant
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: The page address.
+ *       401:
+ *         description: Not signed in with a session.
+ *       404:
+ *         description: No such grant for this plugin and person.
+ */
+router.get(
+  "/:id/web-views/:grant",
+  authenticateJWT,
+  async (req: Request, res: Response) => {
+    const authReq = req as AuthenticatedRequest & { apiKeyId?: string };
+    if (!authReq.sessionId || authReq.apiKeyId) {
+      res.status(401).json({ error: "A login session is required" });
+      return;
+    }
+    const entry = readViewGrant(
+      String(req.params.id),
+      req.params.grant,
+      authReq.userId as string,
+      authReq.sessionId,
+    );
+    if (!entry) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ url: entry.url });
+  },
+);
+
+/** A ceremony call from the shell for one of a plugin's frames. */
+async function runCeremonyStep(
+  req: Request,
+  res: Response,
+  step: "options" | "finish",
+): Promise<void> {
+  const authReq = req as AuthenticatedRequest & { apiKeyId?: string };
+  // The shell asks for a signed-in page, never a frame token or an API key.
+  if (!authReq.sessionId || authReq.apiKeyId) {
+    res.status(401).json({ error: "A login session is required" });
+    return;
+  }
+  const pluginId = String(req.params.id);
+  const ceremonyId = String(req.params.ceremonyId);
+  const userId = authReq.userId as string;
+  const origin = req.headers.origin;
+  if (typeof origin !== "string" || !/^[a-z][a-z0-9+.-]*:\/\//i.test(origin)) {
+    res.status(400).json({ error: "An origin is required" });
+    return;
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  try {
+    const result =
+      step === "options"
+        ? await startCeremony({
+            pluginId,
+            ceremonyId,
+            userId,
+            sessionId: authReq.sessionId,
+            origin,
+            extra: body.extra,
+          })
+        : await finishCeremony({
+            pluginId,
+            ceremonyId,
+            ticket: body.ticket,
+            userId,
+            sessionId: authReq.sessionId,
+            response: body.response,
+          });
+    if (step === "finish") {
+      await logAudit({
+        userId,
+        username: await getAuditUsername(userId),
+        action: "plugin_webauthn_ceremony",
+        resourceType: "plugin",
+        resourceId: pluginId,
+        resourceName: pluginId,
+        details: JSON.stringify({ ceremonyId }),
+        success: true,
+      }).catch(() => undefined);
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.json(result);
+  } catch (error) {
+    if (error instanceof CeremonyError) {
+      res.status(error.status).json({ error: error.message });
+      return;
+    }
+    const status = (error as { status?: unknown })?.status;
+    if (typeof status === "number" && status >= 400 && status < 500) {
+      res.status(status).json({
+        error: error instanceof Error ? error.message.slice(0, 300) : "Refused",
+      });
+      return;
+    }
+    databaseLogger.error("A plugin WebAuthn step failed", error, {
+      operation: "plugin_webauthn_ceremony",
+      pluginId,
+    });
+    res.status(500).json({ error: "The step failed" });
+  }
+}
+
+/**
+ * @openapi
+ * /plugins/{id}/passkey-steps/{ceremonyId}/options:
+ *   post:
+ *     summary: Start a plugin's WebAuthn step
+ *     description: >
+ *       The shell asks for the browser prompt options of a WebAuthn step
+ *       (adding a passkey, proving a key) one of the plugin's screens wants.
+ *       The plugin's backend makes them. Only for a signed-in session.
+ *     tags:
+ *       - Plugins
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: ceremonyId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: A one use ticket, the step type and publicKey options.
+ *       401:
+ *         description: Not signed in with a session.
+ *       404:
+ *         description: The plugin has no such step.
+ */
+router.post(
+  "/:id/passkey-steps/:ceremonyId/options",
+  authenticateJWT,
+  (req: Request, res: Response) => runCeremonyStep(req, res, "options"),
+);
+
+/**
+ * @openapi
+ * /plugins/{id}/passkey-steps/{ceremonyId}/finish:
+ *   post:
+ *     summary: Finish a plugin's WebAuthn step
+ *     description: >
+ *       The shell sends the browser's answer with the ticket from the options
+ *       call. The plugin's backend checks it and its answer goes back to the
+ *       plugin's screen.
+ *     tags:
+ *       - Plugins
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: ceremonyId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: What the plugin's check returned.
+ *       400:
+ *         description: Bad browser answer.
+ *       401:
+ *         description: Not signed in with a session.
+ *       410:
+ *         description: The ticket expired, was used or belongs to someone else.
+ */
+router.post(
+  "/:id/passkey-steps/:ceremonyId/finish",
+  authenticateJWT,
+  (req: Request, res: Response) => runCeremonyStep(req, res, "finish"),
+);
+
 router.get("/", authenticateJWT, async (req: Request, res: Response) => {
   try {
     const userId = (req as AuthenticatedRequest).userId as string;
@@ -268,16 +728,13 @@ router.get("/", authenticateJWT, async (req: Request, res: Response) => {
     // One query for every plugin rather than one per plugin.
     const grantsByPlugin = new Map<string, string[]>();
     if (canManage) {
-      const grantRepository = createCurrentPluginPermissionGrantRepository();
-      await Promise.all(
-        records.map(async (record) => {
-          const grants = await grantRepository.listByPlugin(record.id);
-          grantsByPlugin.set(
-            record.id,
-            grants.map((grant) => grant.capability),
-          );
-        }),
-      );
+      const grants =
+        await createCurrentPluginPermissionGrantRepository().listAll();
+      for (const grant of grants) {
+        const list = grantsByPlugin.get(grant.pluginId) ?? [];
+        list.push(grant.capability);
+        grantsByPlugin.set(grant.pluginId, list);
+      }
     }
 
     const plugins = await Promise.all(
@@ -296,7 +753,10 @@ router.get("/", authenticateJWT, async (req: Request, res: Response) => {
         let features: string[] = [];
         let docs: string | undefined;
         let env: PluginEnvVar[] = [];
-        let desktopMode: unknown = loaded?.manifest.desktop;
+        const engine: { api?: string; termix?: string } = {};
+        let desktopMode: unknown = loaded
+          ? resolvePluginDesktopMode(loaded.manifest)
+          : undefined;
         try {
           const manifest = JSON.parse(record.manifestJson) as {
             contributes?: unknown;
@@ -312,8 +772,19 @@ router.get("/", authenticateJWT, async (req: Request, res: Response) => {
             dependencies?: Record<string, string>;
             optionalDependencies?: Record<string, string>;
             desktop?: unknown;
+            runtime?: unknown;
+            engine?: { api?: unknown; termix?: unknown };
           };
-          desktopMode = loaded?.manifest.desktop ?? manifest?.desktop;
+          if (typeof manifest?.engine?.api === "string") {
+            engine.api = manifest.engine.api;
+          }
+          if (typeof manifest?.engine?.termix === "string") {
+            engine.termix = manifest.engine.termix;
+          }
+          desktopMode = loaded
+            ? resolvePluginDesktopMode(loaded.manifest)
+            : (manifest?.desktop ??
+              (manifest?.runtime === "desktop" ? "local" : undefined));
           contributes = manifest?.contributes ?? null;
           capabilities = Array.isArray(manifest?.capabilities)
             ? (manifest.capabilities as string[])
@@ -345,20 +816,33 @@ router.get("/", authenticateJWT, async (req: Request, res: Response) => {
           name: record.name,
           version: record.version,
           enabled: record.state === "enabled",
-          state: loaded?.state ?? record.state,
+          state:
+            record.state === "enabled" &&
+            loaded?.state !== "active" &&
+            !mayRunInSafeMode(record.id, loader.list())
+              ? "safe-mode"
+              : (loaded?.state ?? record.state),
           runsOnServer: linked && desktopMode === "server",
+          engine,
           contributes,
           icon,
           dependencies,
           optionalDependencies,
           docs,
+          videoId,
+          repository,
+          defaultLook: isDefaultLookPlugin(record.id),
           ...describePluginFrontend(loaded),
         };
 
         if (!canManage) return summary;
 
+        const legacyApi = isLegacyPluginApi(engine.api ?? "");
         return {
           ...summary,
+          // process: its own process. legacy: made for plugin API 1, which
+          // no longer runs.
+          isolation: legacyApi ? "legacy" : "process",
           tier: record.tier,
           source: record.source,
           registryId: record.registryId ?? null,
@@ -367,11 +851,10 @@ router.get("/", authenticateJWT, async (req: Request, res: Response) => {
           channel: record.channel ?? "stable",
           description,
           author,
-          repository,
-          videoId,
           features,
           env,
           signedBy: loaded?.signedBy ?? null,
+          provenance: readInstalledProvenance(loaded?.artifact),
           managedByServer: linked && (await isManagedByLinkedServer(record.id)),
           capabilities,
           grantedCapabilities: grantsByPlugin.get(record.id) ?? [],
@@ -400,6 +883,101 @@ async function isManagedByLinkedServer(pluginId: string): Promise<boolean> {
   const { isServerManaged } = await import("../../sync/client/plugins.js");
   return isServerManaged(pluginId);
 }
+
+const SIGN_IN_CAPABILITIES = ["auth:provide", "auth:policy"];
+
+function declaredCapabilities(manifestJson: string): string[] {
+  try {
+    const manifest = JSON.parse(manifestJson) as { capabilities?: unknown };
+    return Array.isArray(manifest?.capabilities)
+      ? (manifest.capabilities as unknown[]).filter(
+          (item): item is string => typeof item === "string",
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function pluginName(manifestJson: string, fallback: string): string {
+  try {
+    const name = (JSON.parse(manifestJson) as { name?: unknown }).name;
+    return typeof name === "string" && name ? name : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Audit line for a change a held request applied after its wait. */
+async function auditAppliedPluginChange(
+  userId: string,
+  action: string,
+  pluginId: string,
+  details: Record<string, unknown>,
+): Promise<void> {
+  await logAudit({
+    userId,
+    username: await getAuditUsername(userId),
+    action,
+    resourceType: "plugin",
+    resourceId: pluginId,
+    resourceName: pluginId,
+    details: JSON.stringify({ ...details, afterWait: true }),
+    success: true,
+  }).catch(() => undefined);
+}
+
+for (const enabled of [true, false]) {
+  registerHoldKind(enabled ? "plugin_enable" : "plugin_disable", {
+    apply: async (payload, requesterId) => {
+      const pluginId = String(payload.pluginId);
+      const { setPluginState } = await import("../../plugins/manage.js");
+      const result = await setPluginState(pluginId, enabled);
+      await auditAppliedPluginChange(
+        requesterId,
+        enabled ? "enable_plugin" : "disable_plugin",
+        pluginId,
+        { enable: result.enable, disable: result.disable },
+      );
+    },
+  });
+}
+
+registerHoldKind("plugin_grant", {
+  apply: async (payload, requesterId) => {
+    const pluginId = String(payload.pluginId);
+    const record = await createCurrentPluginRepository().findById(pluginId);
+    if (!record) throw new Error("The plugin is no longer installed");
+    const declared = declaredCapabilities(record.manifestJson);
+    const wanted = Array.isArray(payload.capabilities)
+      ? (payload.capabilities as unknown[]).map(String)
+      : [];
+    const grantRepository = createCurrentPluginPermissionGrantRepository();
+    for (const capability of wanted) {
+      if (!declared.includes(capability)) continue;
+      if (await grantRepository.findGrant(pluginId, capability)) continue;
+      await grantRepository.grant({
+        pluginId,
+        capability,
+        grantedBy: requesterId,
+      });
+      await auditAppliedPluginChange(
+        requesterId,
+        "grant_plugin_capability",
+        pluginId,
+        { capability },
+      );
+    }
+    invalidatePluginPermissionCache(pluginId);
+    // Restart it so anything it set up at start sees the new access.
+    if (record.state === "enabled") {
+      const { deactivatePlugin, activatePlugin } =
+        await import("../../plugins/index.js");
+      await deactivatePlugin(pluginId).catch(() => undefined);
+      await activatePlugin(pluginId);
+    }
+  },
+});
 
 async function auditPluginAction(
   req: Request,
@@ -491,6 +1069,110 @@ router.get(
         error,
         "Failed to list plugins for onboarding",
         "plugin_onboarding_list",
+      );
+    }
+  },
+);
+
+/**
+ * @openapi
+ * /plugins/processes:
+ *   get:
+ *     summary: Memory used by Termix and each plugin process
+ *     description: Every plugin process with its state, why it stays up (null when it stops when idle), what keeps an idle capable one up for now (busy) and its resident memory while it runs, plus Termix's own memory, the total, and the memory limit of the container or machine. low is true when the total is past 80% of the limit.
+ *     tags:
+ *       - Plugins
+ *     responses:
+ *       200:
+ *         description: The memory report.
+ *       403:
+ *         description: The caller lacks admin.plugins.manage.
+ *       500:
+ *         description: The report could not be built.
+ */
+router.get(
+  "/processes",
+  authenticateJWT,
+  requireManagePlugins,
+  async (_req: Request, res: Response) => {
+    try {
+      const { currentMemoryReport } =
+        await import("../../plugins/sandbox/memory.js");
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await currentMemoryReport());
+    } catch (error) {
+      sendManageError(
+        res,
+        error,
+        "Failed to read plugin memory",
+        "plugin_processes",
+      );
+    }
+  },
+);
+
+/**
+ * @openapi
+ * /plugins/update-check:
+ *   get:
+ *     summary: Plugins the next Termix release would turn off
+ *     description: Looks up the newest Termix release on this instance's channel and lists the installed plugins that would not load on it, so an admin can update them first. reason api means the plugin was made for plugin API 1, reason termix means its engine.termix range leaves that version out (needs says which range it asks for). version is null when no newer release is known.
+ *     tags:
+ *       - Plugins
+ *     responses:
+ *       200:
+ *         description: The newest version and the plugins it would turn off.
+ *       403:
+ *         description: The caller lacks admin.plugins.manage.
+ *       500:
+ *         description: The check could not run.
+ */
+router.get(
+  "/update-check",
+  authenticateJWT,
+  requireManagePlugins,
+  async (_req: Request, res: Response) => {
+    try {
+      const { getLocalVersion } = await import("../../utils/app-version.js");
+      const { fetchLatestRelease, updateStatus } =
+        await import("../../utils/latest-release.js");
+      const { getCoreChannel } =
+        await import("../../updates/update-channel.js");
+      const { pluginsBlockedOn } =
+        await import("../../plugins/update-impact.js");
+      const local = getLocalVersion();
+      const latest = local
+        ? await fetchLatestRelease(await getCoreChannel(local))
+        : null;
+      if (
+        !local ||
+        !latest ||
+        updateStatus(local, latest.version) !== "requires_update"
+      ) {
+        return res.json({ version: null, blocked: [] });
+      }
+      const installed = [];
+      for (const record of await createCurrentPluginRepository().listAll()) {
+        try {
+          installed.push({
+            id: record.id,
+            enabled: record.state === "enabled",
+            manifest: JSON.parse(record.manifestJson),
+          });
+        } catch {
+          // A record without a readable manifest can't load anyway.
+        }
+      }
+      res.json({
+        version: latest.version,
+        blocked: pluginsBlockedOn(latest.version, installed),
+      });
+    } catch (error) {
+      sendManageError(
+        res,
+        error,
+        "Failed to check plugins against the next release",
+        "plugin_update_check",
       );
     }
   },
@@ -926,7 +1608,7 @@ router.delete(
  *       404:
  *         description: No such plugin.
  *       409:
- *         description: This desktop is linked to a server, which decides whether the plugin runs.
+ *         description: This desktop is linked to a server, which decides whether the plugin runs, or safe mode is on and the plugin is not a layout or theme.
  */
 router.patch(
   "/:id/state",
@@ -960,7 +1642,27 @@ router.patch(
       const { planStateChange, setPluginState } =
         await import("../../plugins/manage.js");
 
-      if (req.query.dryRun === "1" || req.query.dryRun === "true") {
+      const isDryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
+      const declared = declaredCapabilities(record.manifestJson);
+      const heldReason = enabled
+        ? needsHold(declared).length > 0
+        : declared.some((capability) =>
+            SIGN_IN_CAPABILITIES.includes(capability),
+          );
+      if (
+        !isDryRun &&
+        heldReason &&
+        (await holdIfNeeded(req, res, {
+          kind: enabled ? "plugin_enable" : "plugin_disable",
+          payload: { pluginId },
+          summary: `${enabled ? "turn on" : "turn off"} the plugin ${pluginName(record.manifestJson, pluginId)}`,
+          requesterId: (req as AuthenticatedRequest).userId as string,
+        }))
+      ) {
+        return;
+      }
+
+      if (isDryRun) {
         res.json({
           id: pluginId,
           enabled,
@@ -1040,6 +1742,8 @@ router.patch(
  *         description: The caller lacks admin.plugins.manage.
  *       404:
  *         description: No such plugin, or it is not on disk.
+ *       409:
+ *         description: Safe mode is on and the plugin is not a layout or theme.
  *       500:
  *         description: The plugin failed to start again.
  */
@@ -1061,6 +1765,13 @@ router.post(
       const { loader } = getPluginRuntime();
       if (!loader.get(pluginId)) {
         res.status(404).json({ error: "Plugin is not present on disk" });
+        return;
+      }
+      if (!mayRunInSafeMode(pluginId, loader.list())) {
+        res.status(409).json({
+          error: "Safe mode is on, so only layout and theme plugins can start",
+          code: "SAFE_MODE",
+        });
         return;
       }
 
@@ -1179,6 +1890,18 @@ router.post(
 
       const grantRepository = createCurrentPluginPermissionGrantRepository();
       const existing = await grantRepository.findGrant(pluginId, capability);
+      if (
+        !existing &&
+        needsHold([capability]).length > 0 &&
+        (await holdIfNeeded(req, res, {
+          kind: "plugin_grant",
+          payload: { pluginId, capabilities: [capability] },
+          summary: `give the plugin ${pluginName(record.manifestJson, pluginId)} ${capability}`,
+          requesterId: userId,
+        }))
+      ) {
+        return;
+      }
       if (!existing) {
         await grantRepository.grant({
           pluginId,
@@ -1186,6 +1909,9 @@ router.post(
           grantedBy: userId,
         });
         invalidatePluginPermissionCache(pluginId);
+        await auditPluginAction(req, "grant_plugin_capability", pluginId, {
+          capability,
+        });
       }
 
       databaseLogger.info(`Granted ${capability} to plugin ${pluginId}`, {
@@ -1250,6 +1976,9 @@ router.delete(
         return;
       }
       invalidatePluginPermissionCache(pluginId);
+      await auditPluginAction(req, "revoke_plugin_capability", pluginId, {
+        capability,
+      });
 
       databaseLogger.info(`Revoked ${capability} from plugin ${pluginId}`, {
         operation: "plugin_grant_revoke",
@@ -1364,39 +2093,16 @@ async function loadManifestForSettings(
   }
 }
 
-/**
- * Whether the caller may write a given field.
- *
- * Admin fields fall back to admin.plugins.manage, so a plugin that declares no
- * permission of its own still cannot have its install-wide settings changed by
- * an ordinary user. A field naming its own permission uses that instead.
- */
+/** Whether the caller may write a given field. See settings-access.ts. */
 async function canWriteField(
   userId: string,
   manifest: PluginManifest,
   scope: PluginSettingsScope,
   field: PluginSettingsField,
 ): Promise<boolean> {
-  // Admin scope always needs admin.plugins.manage. A field-level permission
-  // narrows who may write it; it never widens the scope's own gate, so a
-  // plugin cannot hand an ordinary user install-wide configuration by naming
-  // a permission that user happens to hold.
-  if (
-    scope === "admin" &&
-    !(await permissionManager.hasPermission(userId, "admin.plugins.manage"))
-  ) {
-    return false;
-  }
-
-  if (field.permission) {
-    const { resolvePermission } = await import("../../plugins/rbac.js");
-    return permissionManager.hasPermission(
-      userId,
-      resolvePermission(manifest, field.permission),
-    );
-  }
-
-  return true;
+  const { canWriteSettingField } =
+    await import("../../plugins/settings-access.js");
+  return canWriteSettingField(userId, manifest, scope, field);
 }
 
 /** Applies a body of values to one scope, collecting per-field errors. */
@@ -1869,6 +2575,18 @@ router.put(
       const inherit = Array.isArray(inheritRaw)
         ? inheritRaw.filter((key): key is string => typeof key === "string")
         : [];
+      // A managed host keeps its settings; only personal ones stay per user.
+      const changesShared = [...Object.keys(written), ...inherit].some(
+        (key) => !findField(manifest, "host", key)?.personal,
+      );
+      if (changesShared) {
+        try {
+          assertHostsUnlocked([hostId]);
+        } catch (error) {
+          if (sendHostLocked(res, error)) return;
+          throw error;
+        }
+      }
       const errors = await applySettings(
         userId,
         manifest,
@@ -2281,6 +2999,63 @@ router.post(
 
 /**
  * @openapi
+ * /plugins/{id}/restore-bundled:
+ *   post:
+ *     summary: Restore the bundled copy of a plugin
+ *     description: >
+ *       Drops any update downloaded over a plugin that ships with Termix and
+ *       loads the copy from the image again, so a broken release can be rolled
+ *       back from the layout repair view. The shipped version is pinned so
+ *       auto update does not bring the release back. Dependents restart.
+ *     tags:
+ *       - Plugins
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: The restored version and the plugin's state.
+ *       400:
+ *         description: Invalid plugin id.
+ *       403:
+ *         description: The caller lacks admin.plugins.manage.
+ *       409:
+ *         description: The plugin has no bundled copy, or a linked server manages it.
+ */
+router.post(
+  "/:id/restore-bundled",
+  authenticateJWT,
+  requireManagePlugins,
+  async (req: Request, res: Response) => {
+    const pluginId = String(req.params.id);
+    if (!ID_PATTERN.test(pluginId)) {
+      res.status(400).json({ error: "Invalid plugin id" });
+      return;
+    }
+    if (await refuseOnLinkedDesktop(res)) return;
+    try {
+      const { restoreBundledPlugin } = await import("../../plugins/manage.js");
+      const result = await restoreBundledPlugin(pluginId);
+      await auditPluginAction(req, "restore_bundled_plugin", pluginId, {
+        version: result.version,
+      });
+      res.json(result);
+    } catch (error) {
+      sendManageError(
+        res,
+        error,
+        "Failed to restore the bundled copy",
+        "plugin_restore_bundled",
+      );
+    }
+  },
+);
+
+/**
+ * @openapi
  * /plugins/{id}:
  *   delete:
  *     summary: Uninstall a plugin
@@ -2306,7 +3081,7 @@ router.post(
  *       404:
  *         description: No such plugin.
  *       409:
- *         description: Other running plugins depend on it, or managed by a linked server.
+ *         description: Other running plugins depend on it, it is the default look, or a linked server manages it.
  */
 router.delete(
   "/:id",
@@ -2320,6 +3095,22 @@ router.delete(
     }
     if (await refuseOnLinkedDesktop(res)) return;
     try {
+      const record = await createCurrentPluginRepository().findById(pluginId);
+      if (
+        record &&
+        record.state === "enabled" &&
+        declaredCapabilities(record.manifestJson).some((capability) =>
+          SIGN_IN_CAPABILITIES.includes(capability),
+        ) &&
+        (await getHoldSettings()).active
+      ) {
+        res.status(409).json({
+          error:
+            "Turn this sign-in plugin off first. That change waits for the other admins.",
+          code: "TURN_OFF_FIRST",
+        });
+        return;
+      }
       const { uninstallPlugin } = await import("../../plugins/manage.js");
       const result = await uninstallPlugin(pluginId);
       await auditPluginAction(req, "uninstall_plugin", pluginId, {
@@ -2593,11 +3384,93 @@ router.put(
 
 /**
  * @openapi
+ * /plugins/community-looks:
+ *   get:
+ *     summary: Read whether community layouts and themes may run in the page
+ *     tags:
+ *       - Plugins
+ *     responses:
+ *       200:
+ *         description: Whether the admin allowed it.
+ *       403:
+ *         description: The caller lacks admin.plugins.manage.
+ */
+router.get(
+  "/community-looks",
+  authenticateJWT,
+  requireManagePlugins,
+  async (_req: Request, res: Response) => {
+    const { communityLooksAllowed } =
+      await import("../../plugins/community-looks.js");
+    res.json({ enabled: communityLooksAllowed() });
+  },
+);
+
+/**
+ * @openapi
+ * /plugins/community-looks:
+ *   put:
+ *     summary: Let community layouts and themes run in the page
+ *     description: A layout draws the whole app, so in the page it can read and do anything the signed in user can. Only for plugins you trust. Takes effect when the page reloads.
+ *     tags:
+ *       - Plugins
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - enabled
+ *             properties:
+ *               enabled:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: The saved value.
+ *       400:
+ *         description: enabled is not a boolean.
+ *       403:
+ *         description: The caller lacks admin.plugins.manage.
+ */
+router.put(
+  "/community-looks",
+  authenticateJWT,
+  requireManagePlugins,
+  async (req: Request, res: Response) => {
+    const enabled = req.body?.enabled;
+    if (typeof enabled !== "boolean") {
+      res.status(400).json({ error: "enabled must be a boolean" });
+      return;
+    }
+    try {
+      const { setCommunityLooks } =
+        await import("../../plugins/community-looks.js");
+      await setCommunityLooks(enabled);
+      await auditPluginAction(req, "plugin_community_looks", "*", { enabled });
+      res.json({ enabled });
+    } catch (error) {
+      sendManageError(
+        res,
+        error,
+        "Failed to save the community looks setting",
+        "plugin_community_looks",
+      );
+    }
+  },
+);
+
+/**
+ * @openapi
  * /plugins/upload:
  *   post:
  *     summary: Upload a .tmxplug to install from a file
  *     description: >
  *       Developer mode only. The body is the raw .tmxplug (at most 50 MB).
+       The release's .sig may come base64 encoded in the
+       X-Termix-Plugin-Signature header; an official one makes the file
+       install as an official plugin, and it may then fill in a plugin
+       whose download failed.
  *       The file is checked (archive, manifest, plugin API) and held for 30
  *       minutes, but nothing is loaded. The answer lists what it asks for so
  *       the admin can agree, then POST /plugins/upload/{token}/install
@@ -2643,7 +3516,13 @@ router.post(
     }
     try {
       const { stageUpload } = await import("../../plugins/manage.js");
-      res.json(await stageUpload(req.body));
+      // The release's .sig, base64 encoded, so an official file installs as
+      // official (and may write the tables its 2.8 version left).
+      const header = req.get("x-termix-plugin-signature");
+      const signature = header
+        ? Buffer.from(header, "base64").toString("utf8")
+        : null;
+      res.json(await stageUpload(req.body, signature));
     } catch (error) {
       sendManageError(
         res,

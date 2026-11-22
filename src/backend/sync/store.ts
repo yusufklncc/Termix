@@ -14,8 +14,11 @@ import { DataCrypto } from "../utils/data-crypto.js";
 import { SystemCrypto } from "../utils/system-crypto.js";
 import { DatabaseSaveTrigger } from "../utils/database-save-trigger.js";
 import { syncLogger } from "../utils/logger.js";
+import { stripSecrets } from "../hosts/credential-storage.js";
+import { getRecord } from "./records.js";
 import {
   getEntity,
+  rowSyncs,
   type RegisteredSyncEntity,
 } from "../plugins/sync-registry.js";
 import {
@@ -110,6 +113,93 @@ export async function findStoredRow(
     .where(locate(entity, userId, syncId))
     .limit(1)) as SyncRow[];
   return row ?? null;
+}
+
+/** A desktop keeps syncing while this server refuses to save passwords and keys. */
+function withoutRefusedSecrets(
+  entity: RegisteredSyncEntity,
+  row: SyncRow,
+): SyncRow {
+  if (entity.owner !== "core") return row;
+  if (entity.type === "hosts") return stripSecrets("ssh_data", row) as SyncRow;
+  if (entity.type === "sshCredentials") {
+    return stripSecrets("ssh_credentials", row) as SyncRow;
+  }
+  return row;
+}
+
+/** The user's rows whose `fields` equal the inbound row's. */
+async function findRowsMatching(
+  entity: RegisteredSyncEntity,
+  userId: string,
+  resolved: SyncRow,
+  fields: readonly string[],
+  limit?: number,
+): Promise<SyncRow[]> {
+  const table = tableOf(entity);
+  const conditions: SQL[] = [eq(ownerColumn(entity), userId)];
+  for (const field of fields) {
+    const value = resolved[field];
+    if (value === null || value === undefined || !table[field]) return [];
+    conditions.push(eq(table[field], value));
+  }
+  const query = db()
+    .select()
+    .from(table)
+    .where(and(...conditions));
+  return (await (limit ? query.limit(limit) : query)) as SyncRow[];
+}
+
+/**
+ * The row a write should take over instead of adding one: a matchOn match,
+ * or a row that never synced and has the same matchUnsynced fields. That
+ * second kind is data a device had before it linked, so the server's copy
+ * of the same thing replaces it rather than landing beside it.
+ */
+async function findAdoptableRow(
+  entity: RegisteredSyncEntity,
+  userId: string,
+  resolved: SyncRow,
+): Promise<SyncRow | null> {
+  if (entity.singleton) return null;
+  if (entity.matchOn?.length) {
+    const [row] = await findRowsMatching(
+      entity,
+      userId,
+      resolved,
+      entity.matchOn,
+      1,
+    );
+    if (row) return row;
+  }
+  if (!entity.matchUnsynced?.length) return null;
+  const rows = await findRowsMatching(
+    entity,
+    userId,
+    resolved,
+    entity.matchUnsynced,
+  );
+  for (const row of rows) {
+    if (!(await rowSyncs(entity, row))) continue;
+    if (typeof row.syncId !== "string") return row;
+    if (!(await getRecord(userId, entity.type, row.syncId))) return row;
+  }
+  return null;
+}
+
+/** The local ids of the user's own rows, by sync id. Unknown ones are left out. */
+export async function findStoredIds(
+  entity: RegisteredSyncEntity,
+  userId: string,
+  syncIds: string[],
+): Promise<Record<string, number>> {
+  const ids: Record<string, number> = {};
+  if (entity.singleton || !entity.table) return ids;
+  for (const syncId of new Set(syncIds)) {
+    const row = await findStoredRow(entity, userId, syncId);
+    if (row && typeof row.id === "number") ids[syncId] = row.id;
+  }
+  return ids;
 }
 
 /** Gives an old row with no syncId one, so it can take part. */
@@ -218,7 +308,7 @@ export async function loadWireRows(
 
   const dataKey = DataCrypto.getUserDataKey(userId);
   for (const stored of await listStoredRows(entity, userId)) {
-    if (entity.shouldSync && entity.shouldSync(stored) === false) continue;
+    if (!(await rowSyncs(entity, stored))) continue;
     if (options.filter && !options.filter(stored)) continue;
     const syncId = await ensureSyncId(entity, stored);
     try {
@@ -231,7 +321,7 @@ export async function loadWireRows(
       const wire = toWire(entity, serialized, syncId);
       rows.set(syncId, { syncId, wire, hash: hashWire(entity, wire, key) });
     } catch (error) {
-      syncLogger.warn("Could not serialize a sync row", {
+      syncLogger.warn(`Could not serialize a ${entity.type} sync row`, {
         operation: "sync_serialize",
         entityType: entity.type,
         syncId,
@@ -256,7 +346,7 @@ export async function loadWireRow(
   }
   const stored = await findStoredRow(entity, userId, syncId);
   if (!stored) return null;
-  if (entity.shouldSync && entity.shouldSync(stored) === false) return null;
+  if (!(await rowSyncs(entity, stored))) return null;
   const plain = decryptFields(
     entity,
     stored,
@@ -307,26 +397,61 @@ export async function writeWireRow(
     current,
   );
   const columns = columnsOf(entity);
-  const writable = Object.fromEntries(
-    Object.entries({ ...toWritable(entity, resolved), ...extra }).filter(
-      ([field]) => columns.has(field),
+  const writable = withoutRefusedSecrets(
+    entity,
+    Object.fromEntries(
+      Object.entries({ ...toWritable(entity, resolved), ...extra }).filter(
+        ([field]) => columns.has(field),
+      ),
     ),
   );
-  const encrypted = encryptFields(
-    entity,
-    writable,
-    DataCrypto.getUserDataKey(userId),
-    current ? String(current.id) : `sync-${syncId}`,
-  );
-  if (columns.has("updatedAt")) encrypted.updatedAt = new Date().toISOString();
-
-  const where = locate(entity, userId, syncId);
-  if (current) {
+  let where = locate(entity, userId, syncId);
+  let target = current;
+  let adopted = false;
+  if (!target) {
+    target = await findAdoptableRow(entity, userId, resolved);
+    if (target) {
+      // Same row made on both sides: keep it and take the inbound syncId.
+      where = eq(table.id, target.id);
+      adopted = true;
+    }
+  }
+  const dataKey = DataCrypto.getUserDataKey(userId);
+  if (target) {
+    const encrypted = encryptFields(
+      entity,
+      writable,
+      dataKey,
+      String(target.id),
+    );
+    if (adopted) encrypted.syncId = syncId;
+    if (columns.has("updatedAt")) {
+      encrypted.updatedAt = new Date().toISOString();
+    }
     await db().update(table).set(encrypted).where(where);
   } else {
-    const insert: SyncRow = { ...encrypted, [entity.userColumn]: userId };
+    // Secrets are sealed with the row id, so they go in once it has one.
+    const secrets: SyncRow = {};
+    const insert: SyncRow = { ...writable, [entity.userColumn]: userId };
+    for (const field of entity.encryptedFields) {
+      if (insert[field] === undefined || insert[field] === null) continue;
+      secrets[field] = insert[field];
+      insert[field] = "";
+    }
+    if (columns.has("updatedAt")) insert.updatedAt = new Date().toISOString();
     if (!entity.singleton) insert.syncId = syncId;
     await db().insert(table).values(insert);
+    if (Object.keys(secrets).length) {
+      const created = await findStoredRow(entity, userId, syncId);
+      if (!created) throw new Error("Synced row went missing after insert");
+      const sealed = encryptFields(
+        entity,
+        secrets,
+        dataKey,
+        String(created.id),
+      );
+      await db().update(table).set(sealed).where(eq(table.id, created.id));
+    }
   }
 
   const written = await findStoredRow(entity, userId, syncId);
@@ -336,12 +461,12 @@ export async function writeWireRow(
       id,
       userId,
       wire,
-      created: !current,
+      created: !target,
       resolveId: resolvers.resolveId,
     });
   }
   DatabaseSaveTrigger.triggerSave("sync_write");
-  return { id, created: !current };
+  return { id, created: !target };
 }
 
 /** Deletes the user's row, through the entity's own remove when it has one. */

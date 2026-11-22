@@ -47,6 +47,10 @@ vi.mock("../../../utils/data-crypto.js", () => ({
     decryptRecord: (_table: string, record: unknown) => record,
     decryptRecords: (_table: string, records: unknown) => records,
   },
+  splitSecrets: (_table: string, record: Record<string, unknown>) => ({
+    plain: record,
+    secrets: {},
+  }),
 }));
 vi.mock("../../../utils/auth-manager.js", () => ({
   AuthManager: {
@@ -212,5 +216,45 @@ describe("host.created", () => {
     } finally {
       off();
     }
+  });
+});
+
+describe("host color and icon", () => {
+  async function stored(id: number) {
+    const [row] = await ctx.drizzle
+      .select({ color: hosts.color, icon: hosts.icon })
+      .from(hosts)
+      .where(eq(hosts.id, id));
+    return row;
+  }
+
+  it("saves them on create and keeps them when an update leaves them out", async () => {
+    const created = await request(app)
+      .post("/host/db/host")
+      .send({
+        ...base,
+        authType: "password",
+        password: "pw",
+        color: "#22C55E",
+        icon: "database",
+      });
+    expect(created.status).toBe(200);
+    expect(await stored(created.body.id)).toEqual({
+      color: "#22c55e",
+      icon: "database",
+    });
+
+    await request(app)
+      .put(`/host/db/host/${created.body.id}`)
+      .send({ ...base, name: "renamed" });
+    expect(await stored(created.body.id)).toEqual({
+      color: "#22c55e",
+      icon: "database",
+    });
+
+    await request(app)
+      .put(`/host/db/host/${created.body.id}`)
+      .send({ ...base, color: null, icon: null });
+    expect(await stored(created.body.id)).toEqual({ color: null, icon: null });
   });
 });

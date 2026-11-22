@@ -1,14 +1,19 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import vm from "node:vm";
+import { createRequire } from "node:module";
 import { describe, expect, it, vi } from "vitest";
+
+const { closeAction, showTrayNotice } = createRequire(import.meta.url)(
+  "../../../../electron/app-quit.cjs",
+);
 
 const main = fs.readFileSync(
   new URL("../../../../electron/main.cjs", import.meta.url),
   "utf8",
 );
 const shell = fs.readFileSync(
-  new URL("../../../ui/AppShell.tsx", import.meta.url),
+  new URL("../../../ui/shell/controller/use-tabs.ts", import.meta.url),
   "utf8",
 );
 
@@ -19,8 +24,9 @@ function harness(
     platform: "win32",
     env: {},
   },
+  settings: { closeToTray?: boolean } = {},
 ) {
-  const app = new EventEmitter();
+  const app = Object.assign(new EventEmitter(), { quit: vi.fn() });
   const window = Object.assign(new EventEmitter(), {
     webContents: new EventEmitter(),
     hide: vi.fn(),
@@ -34,6 +40,9 @@ function harness(
     process: platform,
     tray: hasTray ? { isDestroyed: () => false } : null,
     hasActiveConnection: () => active,
+    closeAction,
+    desktopSettings: { getDesktopSettings: () => settings },
+    showTrayNoticeOnce: vi.fn(),
   });
   // Run the production registrations together, sharing the actual quit flag.
   vm.runInContext(
@@ -74,7 +83,7 @@ function harness(
     window.webContents.emit("will-prevent-unload", prevented);
     return prevented.preventDefault.mock.calls.length > 0;
   }
-  return { window, rendererUnload, attemptQuit };
+  return { app, window, rendererUnload, attemptQuit, context };
 }
 
 describe("desktop quit with active connections", () => {
@@ -100,18 +109,192 @@ describe("desktop quit with active connections", () => {
     expect(event.preventDefault).toHaveBeenCalledOnce();
     expect(app.window.hide).toHaveBeenCalledOnce();
   });
-  it("minimizes instead of hiding on GNOME, which has no tray by default", () => {
+  it("quits on close on GNOME, which has no tray to come back from", () => {
     const app = harness(true, true, {
       platform: "linux",
       env: { XDG_CURRENT_DESKTOP: "ubuntu:GNOME" },
     });
     const event = { preventDefault: vi.fn() };
     app.window.emit("close", event);
-    expect(event.preventDefault).toHaveBeenCalledOnce();
-    expect(app.window.minimize).toHaveBeenCalledOnce();
+    expect(event.preventDefault).not.toHaveBeenCalled();
     expect(app.window.hide).not.toHaveBeenCalled();
+    expect(app.app.quit).toHaveBeenCalledOnce();
+    // The renderer's connection guard must not block this quit.
+    const unload = { preventDefault: vi.fn() };
+    app.window.webContents.emit("will-prevent-unload", unload);
+    expect(unload.preventDefault).toHaveBeenCalledOnce();
   });
   it("quits normally when no connection blocks unloading", () => {
     expect(harness(false).attemptQuit()).toBe(true);
+  });
+  it("shows the tray notice when closing hides the window", () => {
+    const app = harness();
+    app.window.emit("close", { preventDefault: vi.fn() });
+    expect(app.context.showTrayNoticeOnce).toHaveBeenCalledOnce();
+  });
+  it("quits on close when Close to tray is off", () => {
+    const app = harness(true, true, undefined, { closeToTray: false });
+    const event = { preventDefault: vi.fn() };
+    app.window.emit("close", event);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(app.window.hide).not.toHaveBeenCalled();
+    expect(app.app.quit).toHaveBeenCalledOnce();
+    expect(app.context.showTrayNoticeOnce).not.toHaveBeenCalled();
+  });
+});
+
+describe("closeAction", () => {
+  const base = {
+    isQuitting: false,
+    hasTray: true,
+    platform: "win32",
+    env: {},
+    closeToTray: undefined as boolean | undefined,
+  };
+  it("hides to the tray by default", () => {
+    expect(closeAction(base)).toBe("hide");
+    expect(closeAction({ ...base, closeToTray: true })).toBe("hide");
+  });
+  it("quits when Close to tray is off", () => {
+    expect(closeAction({ ...base, closeToTray: false })).toBe("quit");
+  });
+  it("lets the window close while quitting or without a tray", () => {
+    expect(closeAction({ ...base, isQuitting: true })).toBe("close");
+    expect(closeAction({ ...base, hasTray: false })).toBe("close");
+  });
+});
+
+describe("showTrayNotice", () => {
+  const text = { title: "Still running", body: "Quit from the tray" };
+  function fakeTray() {
+    return Object.assign(new EventEmitter(), {
+      isDestroyed: () => false,
+      displayBalloon: vi.fn(),
+    });
+  }
+  class FakeNotification extends EventEmitter {
+    static isSupported = () => true;
+    static made: FakeNotification[] = [];
+    constructor(readonly options: unknown) {
+      super();
+      FakeNotification.made.push(this);
+    }
+    show = vi.fn();
+  }
+
+  it("uses the tray balloon on Windows and counts it once it shows", () => {
+    const tray = fakeTray();
+    const onShown = vi.fn();
+    showTrayNotice({
+      platform: "win32",
+      tray,
+      Notification: FakeNotification,
+      text,
+      onShown,
+    });
+    expect(tray.displayBalloon).toHaveBeenCalledWith(
+      expect.objectContaining({ title: text.title, content: text.body }),
+    );
+    expect(onShown).not.toHaveBeenCalled();
+    tray.emit("balloon-show");
+    expect(onShown).toHaveBeenCalledOnce();
+  });
+
+  it("does not stack listeners when the balloon never showed", () => {
+    const tray = fakeTray();
+    const onShown = vi.fn();
+    const args = {
+      platform: "win32",
+      tray,
+      Notification: FakeNotification,
+      text,
+      onShown,
+    };
+    showTrayNotice(args);
+    showTrayNotice(args);
+    expect(tray.displayBalloon).toHaveBeenCalledTimes(2);
+    tray.emit("balloon-show");
+    expect(onShown).toHaveBeenCalledOnce();
+  });
+
+  it("uses a notification elsewhere and counts it only when it shows", () => {
+    FakeNotification.made = [];
+    const onShown = vi.fn();
+    showTrayNotice({
+      platform: "darwin",
+      tray: fakeTray(),
+      Notification: FakeNotification,
+      text,
+      onShown,
+    });
+    const [notice] = FakeNotification.made;
+    expect(notice.show).toHaveBeenCalledOnce();
+    expect(onShown).not.toHaveBeenCalled();
+    notice.emit("show");
+    expect(onShown).toHaveBeenCalledOnce();
+  });
+
+  it("waits for the text from the window", () => {
+    const tray = fakeTray();
+    expect(
+      showTrayNotice({
+        platform: "win32",
+        tray,
+        Notification: FakeNotification,
+        text: null,
+        onShown: vi.fn(),
+      }),
+    ).toBe(false);
+    expect(tray.displayBalloon).not.toHaveBeenCalled();
+  });
+});
+
+describe("will-quit waits for the backend", () => {
+  function quitHarness(stop: () => Promise<void>) {
+    const app = Object.assign(new EventEmitter(), { quit: vi.fn() });
+    const context = vm.createContext({
+      app,
+      tempFiles: new Map(),
+      cleanupManagedTempFile: vi.fn(),
+      backendProcess: { pid: 1 },
+      backendStopping: null,
+      stopBackendServer: vi.fn(stop),
+    });
+    vm.runInContext(
+      main.slice(
+        main.indexOf("let backendStoppedForQuit"),
+        main.indexOf('process.on("uncaughtException"'),
+      ),
+      context,
+    );
+    return { app, context };
+  }
+
+  it("holds the quit until the backend is gone, then quits", async () => {
+    let finish = () => {};
+    const { app, context } = quitHarness(
+      () => new Promise<void>((resolve) => (finish = resolve)),
+    );
+    const first = { preventDefault: vi.fn() };
+    app.emit("will-quit", first);
+    expect(first.preventDefault).toHaveBeenCalledOnce();
+    expect(context.stopBackendServer).toHaveBeenCalledOnce();
+    expect(app.quit).not.toHaveBeenCalled();
+
+    finish();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(app.quit).toHaveBeenCalledOnce();
+
+    const second = { preventDefault: vi.fn() };
+    app.emit("will-quit", second);
+    expect(second.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("lets the app go when there is no backend", () => {
+    const { app, context } = quitHarness(() => Promise.resolve());
+    context.backendProcess = null;
+    const event = { preventDefault: vi.fn() };
+    app.emit("will-quit", event);
+    expect(event.preventDefault).not.toHaveBeenCalled();
   });
 });

@@ -1,0 +1,42 @@
+import { isElectron } from "@/lib/electron";
+import { ServerStatusProvider } from "@/lib/ServerStatusContext";
+import { ComponentSlot } from "@/shell/ActionSlot";
+import { OnboardingHost } from "@/onboarding/OnboardingHost";
+import { DesktopUpdateToasts } from "@/shell/DesktopUpdateToasts";
+import { DesktopTrayNotice } from "@/shell/DesktopTrayNotice";
+import { SafeModeNotice } from "@/shell/SafeModeNotice";
+import { ColdBootStage } from "@/shell/ColdBootStage";
+import { TabPortals } from "@/shell/stage/TabPortals";
+import { LayoutHost } from "@/shell/layout/LayoutHost";
+import { ShellControllerProvider } from "@/shell/controller/ShellControllerProvider";
+import { FrameStateSync } from "@/plugin-host/frames/FrameStateSync";
+import { StepUpPromptHost } from "@/auth/StepUpPrompt";
+
+/**
+ * The signed-in app: the shell's state, the chosen layout, every tab's
+ * content and the pieces core always owns (overlays, onboarding).
+ */
+export function ShellRoot({
+  username,
+  onLogout,
+}: {
+  username: string;
+  onLogout: (options?: { manual?: boolean }) => void;
+}) {
+  return (
+    <ServerStatusProvider isAuthenticated={!!username}>
+      <ShellControllerProvider username={username} onLogout={onLogout}>
+        <FrameStateSync />
+        <LayoutHost />
+        <TabPortals />
+        <ComponentSlot slotId="shell.overlay" />
+        <OnboardingHost />
+        <ColdBootStage />
+        <SafeModeNotice />
+        <StepUpPromptHost />
+        {isElectron() && <DesktopUpdateToasts />}
+        {isElectron() && <DesktopTrayNotice />}
+      </ShellControllerProvider>
+    </ServerStatusProvider>
+  );
+}

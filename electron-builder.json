@@ -1,5 +1,11 @@
 {
   "appId": "com.karmaa.termix",
+  "protocols": [
+    {
+      "name": "Termix link",
+      "schemes": ["termix"]
+    }
+  ],
   "productName": "Termix",
   "publish": {
     "provider": "generic",
@@ -12,6 +18,8 @@
   "asarUnpack": [
     "dist/backend/**/*",
     "dist/plugins/**/*",
+    "dist/frame/**/*",
+    "dist/fonts/**/*",
     "node_modules/**/*",
     "public/icons/**/*",
     "public/icon.*"
@@ -35,6 +43,13 @@
     "!dist/icon.icns",
     "!public/icon.icns"
   ],
+  "extraResources": [
+    {
+      "from": ".plugin-runtime/${platform}-${arch}",
+      "to": "plugin-runtime",
+      "filter": ["**/*", "!.cache"]
+    }
+  ],
   "extraMetadata": {
     "main": "electron/main.cjs",
     "type": "commonjs"
@@ -46,11 +61,11 @@
     "target": [
       {
         "target": "nsis",
-        "arch": ["x64", "ia32", "arm64"]
+        "arch": ["x64", "arm64"]
       },
       {
         "target": "msi",
-        "arch": ["x64", "ia32", "arm64"]
+        "arch": ["x64", "arm64"]
       }
     ],
     "icon": "public/icon.ico",
@@ -78,19 +93,19 @@
     "target": [
       {
         "target": "AppImage",
-        "arch": ["x64", "arm64", "armv7l"]
+        "arch": ["x64", "arm64"]
       },
       {
         "target": "deb",
-        "arch": ["x64", "arm64", "armv7l"]
+        "arch": ["x64", "arm64"]
       },
       {
         "target": "tar.gz",
-        "arch": ["x64", "arm64", "armv7l"]
+        "arch": ["x64", "arm64"]
       }
     ],
     "icon": "public/icons",
-    "category": "Development",
+    "category": "Development;Network;System;TerminalEmulator",
     "executableName": "termix",
     "maintainer": "Termix <mail@termix.site>",
     "desktop": {
@@ -128,6 +143,10 @@
     "category": "public.app-category.developer-tools",
     "hardenedRuntime": true,
     "gatekeeperAssess": false,
+    "extendInfo": {
+      "NSLocalNetworkUsageDescription": "Termix connects to servers and hosts on your local network.",
+      "NSBonjourServices": ["_http._tcp", "_https._tcp", "_ssh._tcp"]
+    },
     "entitlements": "packaging/build/entitlements.mac.plist",
     "entitlementsInherit": "packaging/build/entitlements.mac.inherit.plist",
     "type": "distribution",
@@ -141,6 +160,17 @@
     "sign": true
   },
   "afterPack": "packaging/build/after-pack.cjs",
+  "electronFuses": {
+    "runAsNode": false,
+    "enableCookieEncryption": true,
+    "enableNodeOptionsEnvironmentVariable": false,
+    "enableNodeCliInspectArguments": false,
+    "enableEmbeddedAsarIntegrityValidation": true,
+    "onlyLoadAppFromAsar": true,
+    "loadBrowserProcessSpecificV8Snapshot": false,
+    "grantFileProtocolExtraPrivileges": false,
+    "resetAdHocDarwinSignature": true
+  },
   "afterSign": "packaging/build/notarize.cjs",
   "mas": {
     "provisioningProfile": "packaging/build/Termix_Mac_App_Store.provisionprofile",
@@ -153,6 +183,8 @@
     "artifactName": "termix_macos_${arch}_mas.${ext}",
     "extendInfo": {
       "ITSAppUsesNonExemptEncryption": false,
+      "NSLocalNetworkUsageDescription": "Termix connects to servers and hosts on your local network.",
+      "NSBonjourServices": ["_http._tcp", "_https._tcp", "_ssh._tcp"],
       "NSAppleEventsUsageDescription": "Termix needs access to control other applications for terminal operations."
     }
   },

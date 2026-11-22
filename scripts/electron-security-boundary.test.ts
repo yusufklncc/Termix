@@ -39,10 +39,22 @@ describe("Electron security boundary", () => {
     }
   });
 
-  it("launches only the editor saved from a file dialog", () => {
-    expect(main).not.toContain("fileData?.editorPath");
-    expect(main).toContain("readSetting(EXTERNAL_EDITOR_SETTING)");
+  it("saves an external editor only if it was chosen in a file dialog", () => {
     expect(main).toContain("dialogChosenPaths.has(value)");
+  });
+
+  it("keeps local files, the local terminal and the external editor out of Electron", () => {
+    for (const channel of [
+      "open-external-editor",
+      "close-external-editor",
+      "local-terminal-start",
+      "local-fs:",
+      "local-transfer:",
+      "list-local-directory",
+    ]) {
+      expect(main).not.toContain(channel);
+      expect(preload).not.toContain(channel);
+    }
   });
 
   it("scopes proxy headers and basic auth to the linked origin", () => {
@@ -59,11 +71,11 @@ it("rejects setting keys that coerce to the protected editor key", async () => {
   let handler: (event: unknown, key: unknown, value: unknown) => unknown;
   runInNewContext(
     main.slice(
-      main.indexOf('ipcMain.handle("set-setting"'),
-      main.indexOf('ipcMain.handle("clear-session-cookies"'),
+      main.indexOf('ipc.handle("set-setting"'),
+      main.indexOf('ipc.handle("clear-session-cookies"'),
     ),
     {
-      ipcMain: {
+      ipc: {
         handle: (_: string, callback: typeof handler) => {
           handler = callback;
         },
@@ -76,11 +88,13 @@ it("rejects setting keys that coerce to the protected editor key", async () => {
       console,
     },
   );
+  // The IPC guard checks the key before the handler ever runs.
+  const { createRequire } = await import("node:module");
+  const { IPC_ARGS } = createRequire(import.meta.url)(
+    "../electron/ipc-args.cjs",
+  );
   for (const key of [["fileManager.externalEditorPath"], null, {}, 42]) {
-    expect(handler!({}, key, "/unapproved/editor")).toEqual({
-      success: false,
-      error: "Invalid setting key",
-    });
+    expect(() => IPC_ARGS["set-setting"](key, "/unapproved/editor")).toThrow();
   }
   expect(writeFileSync).not.toHaveBeenCalled();
   expect(

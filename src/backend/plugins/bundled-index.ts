@@ -1,5 +1,5 @@
 /**
- * The onboarding defaults of the bundled plugins, from
+ * The onboarding defaults and the default look of the bundled plugins, from
  * dist/plugins/bundled-index.json (written by scripts/build-plugins.cjs from
  * docker/bundled-plugins.json). Core never names plugins, so which ones a
  * fresh install keeps lives in that file and not here.
@@ -18,7 +18,14 @@ export interface OnboardingDefaults {
 
 type Recommended = boolean | "desktop";
 
+export interface BundledCatalogEntry {
+  tier: string;
+  version?: string;
+}
+
 interface BundledIndex {
+  profile?: string;
+  catalog?: Record<string, BundledCatalogEntry>;
   plugins: Record<
     string,
     {
@@ -27,6 +34,7 @@ interface BundledIndex {
         consent?: boolean;
         enabledByEnv?: string[];
       };
+      defaultLook?: boolean;
     }
   >;
 }
@@ -44,12 +52,36 @@ export function readBundledIndex(): BundledIndex | null {
     );
     cached =
       raw && typeof raw.plugins === "object" && raw.plugins
-        ? { plugins: raw.plugins }
+        ? {
+            plugins: raw.plugins,
+            profile: typeof raw.profile === "string" ? raw.profile : undefined,
+            catalog:
+              raw.catalog && typeof raw.catalog === "object"
+                ? raw.catalog
+                : undefined,
+          }
         : null;
   } catch {
     cached = null;
   }
   return cached;
+}
+
+/**
+ * Bundled plugins whose layout and theme a fresh install shows. Core reads
+ * the default look from here so it never has to name a plugin.
+ */
+export function defaultLookPluginIds(): string[] {
+  const index = readBundledIndex();
+  if (!index) return [];
+  return Object.entries(index.plugins)
+    .filter(([, entry]) => entry?.defaultLook === true)
+    .map(([id]) => id)
+    .sort();
+}
+
+export function isDefaultLookPlugin(pluginId: string): boolean {
+  return defaultLookPluginIds().includes(pluginId);
 }
 
 export function resetBundledIndexCache(): void {
@@ -83,19 +115,45 @@ export function onboardingDefaults(pluginId: string): OnboardingDefaults {
   };
 }
 
+const PROFILES = ["minimal", "standard", "full"];
+
 /**
- * The state a newly seen plugin's row starts in. Bundled plugins start
- * enabled, except on a fresh install, where only recommended ones do and
- * consent plugins wait for the admin. A plugin dropped into the data
- * directory always starts disabled.
+ * Plugins the image's profile ships (its tier and every smaller one), with
+ * the version it pins. Read from the bundled index, so core never names them.
+ */
+export function shippedCatalog(): Map<string, BundledCatalogEntry> {
+  const index = readBundledIndex();
+  const out = new Map<string, BundledCatalogEntry>();
+  if (!index?.catalog) return out;
+  const rank = PROFILES.indexOf(index.profile ?? "standard");
+  for (const [id, entry] of Object.entries(index.catalog)) {
+    if (!entry || typeof entry !== "object") continue;
+    const tier = PROFILES.indexOf(entry.tier);
+    if (tier === -1 || rank === -1 || tier > rank) continue;
+    out.set(id, entry);
+  }
+  return out;
+}
+
+/** Whether a shipped plugin should be on when an install first sees it. */
+export function startsEnabled(pluginId: string): boolean {
+  // The default look is what the app is drawn with.
+  if (isDefaultLookPlugin(pluginId)) return true;
+  const { recommended, consent } = onboardingDefaults(pluginId);
+  return recommended && !consent;
+}
+
+/**
+ * The state a newly seen plugin's row starts in. A bundled plugin starts on
+ * only when it is recommended, so a plugin a later release adds to the image
+ * does not switch itself on everywhere. Consent plugins wait for the admin.
+ * A plugin dropped into the data directory always starts disabled.
  */
 export function initialPluginState(
   pluginId: string,
   source: "bundled" | "user",
-  freshInstall: boolean,
+  _freshInstall: boolean,
 ): "enabled" | "disabled" {
   if (source !== "bundled") return "disabled";
-  if (!freshInstall) return "enabled";
-  const { recommended, consent } = onboardingDefaults(pluginId);
-  return recommended && !consent ? "enabled" : "disabled";
+  return startsEnabled(pluginId) ? "enabled" : "disabled";
 }

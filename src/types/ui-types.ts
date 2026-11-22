@@ -1,4 +1,5 @@
 import type {
+  HostLock,
   HostProtocolAuthSummary,
   HostSshOptions,
   HostTerminalConfig,
@@ -104,6 +105,8 @@ export type Host = {
    * linked to. It arrives through sync and is managed on the server.
    */
   sharedCopy?: boolean;
+  /** Set when a plugin manages this host: read only, pins and order still work. */
+  lock?: HostLock;
   /** Desktop only: kept on this device, never synced to the server. */
   localOnly?: boolean;
 };
@@ -202,15 +205,16 @@ export type Tab = {
   split?: SplitState;
   /** Hides this session from the top-level tab bar while it belongs to a split tab. */
   parentSplitTabId?: string;
+  /** A tab drawn in a frame answers every call through a promise. */
   terminalRef?: import("react").RefObject<{
     disconnect?: () => void;
-    isConnected?: () => boolean;
+    isConnected?: () => boolean | Promise<boolean>;
     sendInput?: (data: string) => void;
     subscribeOutput?: (listener: (data: string) => void) => () => void;
     paste?: (text: string) => void;
     reconnect?: () => void;
     /** Start a manual reconnect only when disconnected and idle; return whether it started. */
-    reconnectIfDisconnected?: () => boolean;
+    reconnectIfDisconnected?: () => boolean | Promise<boolean>;
     fit?: () => void;
     notifyResize?: () => void;
     refresh?: () => void;
@@ -247,8 +251,10 @@ export type AdminSection =
   | "database"
   | "api-keys"
   | "audit-log"
-  | "ssl";
-export type ThemeId =
+  | "ssl"
+  | "access";
+export type ThemeId = string;
+export type LegacyThemeId =
   | "dark"
   | "light"
   | "system"

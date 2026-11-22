@@ -14,7 +14,10 @@ import type {
   PluginSshHost,
 } from "@termix-ssh/plugin-sdk/backend";
 import type { PluginManifest } from "@termix-ssh/plugin-sdk/manifest";
-import { PluginSshInteractionError } from "@termix-ssh/plugin-sdk/backend";
+import {
+  LoginMethodError,
+  PluginSshInteractionError,
+} from "@termix-ssh/plugin-sdk/backend";
 import {
   assertCapability,
   capabilityRefused,
@@ -22,24 +25,39 @@ import {
   hasCapability,
   warmPluginGrants,
 } from "./permissions.js";
+import { randomBytes } from "node:crypto";
 import { getActor, getActorSessionId } from "./actor.js";
 import type { DisposableBag } from "./disposables.js";
 import { redactHostSecrets } from "./ctx-hosts.js";
 import { issueUserToken } from "./ctx-users.js";
+import { hostStatus } from "./host-status-provider.js";
+import { probeHost } from "./ctx-probe.js";
 import {
   getSshAuthProvider,
   listSshAuthProviders,
   registerKeyboardInteractiveInterceptor,
   registerSshAuthProvider,
 } from "../hosts/connect/auth-provider-registry.js";
-import { classifyKeyboardInteractive } from "../hosts/connect/keyboard-interactive.js";
+import {
+  classifyKeyboardInteractive,
+  classifyKeyboardInteractiveNow,
+} from "../hosts/connect/keyboard-interactive.js";
 import { ensureCoreSshAuthProviders } from "../hosts/connect/core-providers.js";
 import {
   getLoginMethod,
+  listSecondFactors,
   registerLoginMethod,
   registerSecondFactor,
+  registerWebAuthnCeremony,
 } from "../auth/registry.js";
+import {
+  checkLoginFields,
+  checkSecondFactorPrompt,
+} from "../auth/login-descriptors.js";
+import { provideAuthPolicy } from "../auth/policy.js";
+import { provideSshTransport } from "../hosts/connect/transport-providers.js";
 import type { VerifiedIdentity } from "../auth/types.js";
+import { safeRedirect } from "../auth/logout-redirect.js";
 import type {
   MutableConnectConfig,
   SshAuthProvider,
@@ -47,6 +65,12 @@ import type {
   SshConnectProfile,
   SshConnectPurpose,
 } from "../hosts/connect/types.js";
+import { answeredSync } from "./api1-sync.js";
+
+/** Set by core's plugin process bridge on hooks that answer with Promises. */
+function isRemote(hooks: object): boolean {
+  return (hooks as { remote?: unknown }).remote === true;
+}
 
 type AuditFn = (
   action: string,
@@ -91,6 +115,13 @@ function actingUser(resolvedFor?: string): string {
     "ctx.ssh needs an acting user: call it inside a request or ctx.asUser",
   );
 }
+
+/**
+ * A host core handed out carries this opaque ref, so a copy that crossed a
+ * process boundary (a sandboxed plugin) still maps back to its stored login.
+ */
+export const HOST_REF_FIELD = "hostRef";
+const MAX_HOST_REFS = 10_000;
 
 function describeHost(host: number | PluginSshHost): string {
   return typeof host === "number" ? `host ${host}` : `host ${host.id}`;
@@ -168,16 +199,31 @@ export function createPluginSsh({ manifest, bag, audit }: Deps): PluginSsh {
     { host: SshConnectHost; userId: string }
   >();
 
+  // The same mapping by a random string, which survives being copied into
+  // and out of a plugin process. Only good for the user it was resolved for.
+  const refs = new Map<string, { host: SshConnectHost; userId: string }>();
+
   const remember = (key: object, host: SshConnectHost, userId: string) => {
     const entry = { host, userId };
     resolvedHosts.set(key, entry);
     const token = Object.freeze({});
     tokens.set(token, entry);
+    const ref = randomBytes(16).toString("base64url");
+    refs.set(ref, entry);
+    while (refs.size > MAX_HOST_REFS) {
+      refs.delete(refs.keys().next().value as string);
+    }
     if (Object.isExtensible(key)) {
       Object.defineProperty(key, tag, {
         value: token,
         enumerable: true,
         configurable: true,
+      });
+      Object.defineProperty(key, HOST_REF_FIELD, {
+        value: ref,
+        enumerable: true,
+        configurable: true,
+        writable: true,
       });
     }
   };
@@ -186,9 +232,13 @@ export function createPluginSsh({ manifest, bag, audit }: Deps): PluginSsh {
     const known = resolvedHosts.get(host);
     if (known) return known;
     const token = (host as Record<symbol, unknown>)[tag];
-    return token && typeof token === "object"
-      ? tokens.get(token as object)
-      : undefined;
+    if (token && typeof token === "object") return tokens.get(token as object);
+    const ref = (host as Record<string, unknown>)[HOST_REF_FIELD];
+    if (typeof ref !== "string") return undefined;
+    const entry = refs.get(ref);
+    if (!entry) return undefined;
+    const actor = getActor();
+    return !actor || actor === entry.userId ? entry : undefined;
   };
 
   const handOut = (host: SshConnectHost, userId: string): PluginSshHost => {
@@ -224,11 +274,7 @@ export function createPluginSsh({ manifest, bag, audit }: Deps): PluginSsh {
   const reportLogin = (host: number | PluginSshHost) => {
     const hostId = typeof host === "number" ? host : lookup(host)?.host.id;
     if (!Number.isInteger(hostId) || hostId <= 0) return;
-    void import("../hosts/status/host-status-service.js")
-      .then(({ hostStatusService }) =>
-        hostStatusService.reportLogin(hostId, { ok: true }),
-      )
-      .catch(() => {});
+    hostStatus.reportLogin(hostId, { ok: true });
   };
 
   /** Checks, connects and audits one new connection. */
@@ -262,6 +308,7 @@ export function createPluginSsh({ manifest, bag, audit }: Deps): PluginSsh {
         userId,
         purpose: purposeOf(options),
         profile: profileOf(options),
+        origin: pluginId,
         timeoutMs: options?.timeoutMs,
         prompt: options?.prompt,
         overrides: options?.overrides as Partial<MutableConnectConfig>,
@@ -290,12 +337,48 @@ export function createPluginSsh({ manifest, bag, audit }: Deps): PluginSsh {
     }
   };
 
-  const poolKey = (pool: string, host: PluginSshHost) =>
-    `${pool}:${host.userId}:${host.ip}:${host.port}:${host.username}${
+  // Per plugin and acting user: a pooled connection skips auth, so a shared
+  // host's recipient must never reuse the owner's or another user's.
+  const keyFor = (pool: string, host: PluginSshHost, actor: string) =>
+    `${pool}:${pluginId}:${actor}:${host.userId}:${host.ip}:${host.port}:${host.username}${
       host.useSocks5 ? `:socks5:${host.socks5Host}:${host.socks5Port}` : ""
     }`;
+  const poolKey = (pool: string, host: PluginSshHost) => {
+    let actor = "";
+    try {
+      actor = userFor(host);
+    } catch {
+      // no acting user, the key still names the plugin and host
+    }
+    return keyFor(pool, host, actor);
+  };
 
   return {
+    transports: {
+      provide: (provider) => {
+        if (!declared.includes("ssh:transport")) {
+          throw capabilityRefused(pluginId, "ssh:transport");
+        }
+        const remove = provideSshTransport(pluginId, provider);
+        void audit(
+          "ssh_transport_provide",
+          `${pluginId} carries host connections`,
+          {
+            success: true,
+          },
+        );
+        const drop = bag.add(remove, "ssh transport");
+        return () => {
+          drop();
+          remove();
+        };
+      },
+    },
+    probe: async (hostId, probeOptions) => {
+      await assertCapability(pluginId, "ssh:connect", declared);
+      if (!Number.isInteger(hostId) || hostId <= 0) return false;
+      return probeHost(hostId, probeOptions);
+    },
     connect: async (host, options) => {
       const connection = await connectOnce(host, options);
       return {
@@ -304,6 +387,33 @@ export function createPluginSsh({ manifest, bag, audit }: Deps): PluginSsh {
         host: connection.host,
         dispose: connection.dispose,
       };
+    },
+
+    exec: async (host, command, execOptions) => {
+      const connection = await connectOnce(host, {
+        ...execOptions,
+        purpose: execOptions?.purpose ?? "exec",
+        timeoutMs: undefined,
+      });
+      const details = `${describeHost(host)}: command run`;
+      try {
+        const { runExec } = await import("./ctx-ssh-exec.js");
+        const result = await runExec(
+          connection.client as never,
+          command,
+          execOptions,
+        );
+        await audit("ssh_exec", details, { success: true });
+        return result;
+      } catch (error) {
+        await audit("ssh_exec", details, {
+          success: false,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      } finally {
+        connection.dispose();
+      }
     },
 
     withConnection: async (host, options, fn) => {
@@ -316,7 +426,37 @@ export function createPluginSsh({ manifest, bag, audit }: Deps): PluginSsh {
         userId,
       );
       remember(resolved, resolved, userId);
-      const key = poolKey(options.pool, resolved as PluginSshHost);
+      // A reused connection skips the connect pipeline, so ask the connect
+      // policy on every use or an expired grant would keep working.
+      const { assertConnectAllowed, ConnectPolicyError } =
+        await import("../hosts/connect-policy.js");
+      try {
+        await assertConnectAllowed({
+          userId,
+          hostId: resolved.id,
+          protocol: "ssh",
+          purpose: String(purposeOf(options)),
+          profile: profileOf(options),
+          interactive: false,
+          origin: pluginId,
+        });
+      } catch (error) {
+        if (!(error instanceof ConnectPolicyError)) throw error;
+        const { SshConnectError } =
+          await import("../hosts/connect/connect-host.js");
+        throw new SshConnectError({
+          status: "error",
+          code: error.code,
+          message: error.message,
+          ...(error.result.requestTab
+            ? { requestTab: error.result.requestTab }
+            : {}),
+          ...(error.result.requestKind
+            ? { requestKind: error.result.requestKind }
+            : {}),
+        });
+      }
+      const key = keyFor(options.pool, resolved as PluginSshHost, userId);
       poolKeys.set(key, resolved.id);
       const { withConnection } =
         await import("../hosts/ssh-connection-pool.js");
@@ -368,7 +508,7 @@ export function createPluginSsh({ manifest, bag, audit }: Deps): PluginSsh {
       return { client: client as never, jumpClient: null, host, dispose };
     },
 
-    poolKey,
+    poolKey: answeredSync<PluginSsh["poolKey"]>(poolKey),
 
     dropPooled: (pool, hostId) => {
       const keys = [...poolKeys.entries()]
@@ -388,9 +528,15 @@ export function createPluginSsh({ manifest, bag, audit }: Deps): PluginSsh {
       const userId = actingUser();
       const { resolveHostById, resolveHostBySyncId } =
         await import("../hosts/host-resolver.js");
+      // Not in the SDK types yet; plugins pass it through a cast.
+      const allowMissingLogin =
+        (options as { allowMissingLogin?: unknown } | undefined)
+          ?.allowMissingLogin === true;
       const resolved = options?.syncId
-        ? await resolveHostBySyncId(options.syncId, userId)
-        : await resolveHostById(hostId, userId);
+        ? await resolveHostBySyncId(options.syncId, userId, {
+            allowMissingLogin,
+          })
+        : await resolveHostById(hostId, userId, { allowMissingLogin });
       await audit("ssh_resolve_host", describeHost(hostId), {
         success: !!resolved,
         errorMessage: resolved ? undefined : "Host not found",
@@ -425,6 +571,7 @@ export function createPluginSsh({ manifest, bag, audit }: Deps): PluginSsh {
         serverHostId: options.serverHostId,
         log: options.log,
         interactive: options.interactive,
+        origin: pluginId,
         hostKeySocket: (options.hostKeySocket ?? null) as never,
       });
       await audit("ssh_prepare", describeHost(host), {
@@ -547,27 +694,61 @@ export function createPluginSsh({ manifest, bag, audit }: Deps): PluginSsh {
       }
     },
 
-    classifyKeyboardInteractive: (round, host) => {
-      ensureCoreSshAuthProviders();
-      return classifyKeyboardInteractive(round, host as SshConnectHost);
-    },
+    classifyKeyboardInteractive: answeredSync<
+      PluginSsh["classifyKeyboardInteractive"]
+    >(
+      (
+        round: Parameters<typeof classifyKeyboardInteractive>[0],
+        host: unknown,
+      ) => {
+        ensureCoreSshAuthProviders();
+        const result = classifyKeyboardInteractive(
+          round,
+          host as SshConnectHost,
+        );
+        if (!(result instanceof Promise)) return result;
+        // API 1 callers read the answer without awaiting it: they get the
+        // answer without plugin processes, awaiting gives the full one.
+        return Object.assign(
+          result,
+          classifyKeyboardInteractiveNow(round, host as SshConnectHost),
+        );
+      },
+    ),
 
     autoResponses: (prompts, password) =>
       prompts.map((p) =>
         /password/i.test(p.prompt) && password ? password : "",
       ),
 
-    requiresSecret: (authType) => {
-      ensureCoreSshAuthProviders();
-      return !!getSshAuthProvider(authType)?.requiresSecret;
-    },
+    requiresSecret: answeredSync<PluginSsh["requiresSecret"]>(
+      (authType: string) => {
+        ensureCoreSshAuthProviders();
+        return !!getSshAuthProvider(authType)?.requiresSecret;
+      },
+    ),
 
-    supportsBackground: (authType) => {
-      ensureCoreSshAuthProviders();
-      const provider = getSshAuthProvider(authType);
-      return !!provider && provider.supportsBackground !== false;
-    },
+    supportsBackground: answeredSync<PluginSsh["supportsBackground"]>(
+      (authType: string) => {
+        ensureCoreSshAuthProviders();
+        const provider = getSshAuthProvider(authType);
+        return !!provider && provider.supportsBackground !== false;
+      },
+    ),
   };
+}
+
+/** Marks a login's session with the method that made it, for its sign out. */
+export function withMethod(
+  identity: VerifiedIdentity,
+  methodId: string,
+): VerifiedIdentity {
+  return identity.externalSession
+    ? {
+        ...identity,
+        externalSession: { ...identity.externalSession, methodId },
+      }
+    : identity;
 }
 
 /**
@@ -699,6 +880,7 @@ export function createPluginAuth({ manifest, bag, audit }: Deps): PluginAuth {
           registerKeyboardInteractiveInterceptor({
             id: `${pluginId}:${provider.type}`,
             pluginId,
+            remote: isRemote(provider),
             detect: (round, host) =>
               host.authType === provider.type && grantedNow()
                 ? (detect(round, host as PluginSshHost) as never)
@@ -719,15 +901,25 @@ export function createPluginAuth({ manifest, bag, audit }: Deps): PluginAuth {
         handler.id,
         "keyboardInteractive",
       );
-      // Synchronous hooks inside ssh2's callback, so they answer from the
-      // grant cache. Deactivate removes the handler.
+      // Asked inside ssh2's callback, so the grant check reads the cache.
+      // A handler in a plugin process answers with Promises. Deactivate
+      // removes the handler.
       warmPluginGrants(pluginId);
       const settingsFor = (host: SshConnectHost): Record<string, unknown> =>
         host.pluginSettings?.[pluginId] ?? {};
+      type Detected = ReturnType<typeof handler.detect>;
+      const named = (detected: Awaited<Detected>) => {
+        if (!detected) return null;
+        if (detected.kind === "browser") {
+          return { ...detected, id: handler.id, label: handler.label };
+        }
+        return detected;
+      };
       ensureCoreSshAuthProviders();
       const dispose = registerKeyboardInteractiveInterceptor({
         id: handler.id,
         pluginId,
+        remote: isRemote(handler),
         detect: (round, host) => {
           if (!grantedNow()) return null;
           const detected = handler.detect(
@@ -735,19 +927,23 @@ export function createPluginAuth({ manifest, bag, audit }: Deps): PluginAuth {
             host as PluginSshHost,
             settingsFor(host),
           );
-          if (!detected) return null;
-          if (detected.kind === "browser") {
-            return { ...detected, id: handler.id, label: handler.label };
-          }
-          return detected;
+          return (
+            detected instanceof Promise
+              ? detected.then(named)
+              : named(detected as Awaited<Detected>)
+          ) as never;
         },
         autoAnswerPasswords: handler.autoAnswerPasswords
-          ? (host) =>
-              grantedNow() &&
-              handler.autoAnswerPasswords!(
+          ? (host) => {
+              if (!grantedNow()) return false;
+              const answer = handler.autoAnswerPasswords!(
                 host as PluginSshHost,
                 settingsFor(host),
-              ) === true
+              );
+              return answer instanceof Promise
+                ? answer.then((yes) => yes === true)
+                : answer === true;
+            }
           : undefined,
       });
       bag.add(dispose, `keyboard-interactive handler "${handler.id}"`);
@@ -756,10 +952,22 @@ export function createPluginAuth({ manifest, bag, audit }: Deps): PluginAuth {
 
     registerLoginMethod: (method) => {
       requireDeclared(contributes.loginMethods, method.id, "loginMethods");
+      if (method.kind === "webauthn" && (!method.options || !method.verify)) {
+        throw new Error(
+          `Plugin ${pluginId} login method "${method.id}" needs options and verify`,
+        );
+      }
       {
         const dispose = registerLoginMethod({
           ...method,
           pluginId,
+          fields: checkLoginFields(method.fields),
+          options: method.options
+            ? async (...args) => {
+                await granted();
+                return method.options!(...args);
+              }
+            : undefined,
           start: method.start
             ? async (...args) => {
                 await granted();
@@ -769,16 +977,25 @@ export function createPluginAuth({ manifest, bag, audit }: Deps): PluginAuth {
           callback: method.callback
             ? async (...args) => {
                 await granted();
-                return toCoreIdentity(
-                  pluginId,
-                  await method.callback!(...args),
+                return withMethod(
+                  toCoreIdentity(pluginId, await method.callback!(...args)),
+                  method.id,
                 );
               }
             : undefined,
           verify: method.verify
             ? async (...args) => {
                 await granted();
-                return toCoreIdentity(pluginId, await method.verify!(...args));
+                return withMethod(
+                  toCoreIdentity(pluginId, await method.verify!(...args)),
+                  method.id,
+                );
+              }
+            : undefined,
+          logoutRedirect: method.logoutRedirect
+            ? async (session) => {
+                await granted();
+                return safeRedirect(await method.logoutRedirect!(session));
               }
             : undefined,
         });
@@ -793,6 +1010,7 @@ export function createPluginAuth({ manifest, bag, audit }: Deps): PluginAuth {
         const dispose = registerSecondFactor({
           ...factor,
           pluginId,
+          prompt: checkSecondFactorPrompt(factor.prompt),
           verify: async (userId, body) => {
             await granted();
             return factor.verify(userId, body);
@@ -801,6 +1019,38 @@ export function createPluginAuth({ manifest, bag, audit }: Deps): PluginAuth {
         bag.add(dispose, `second factor "${factor.id}"`);
       }
       record("auth_register_factor", factor.id);
+    },
+
+    registerWebAuthnCeremony: (ceremony) => {
+      if (!declared.includes("auth:provide")) {
+        throw capabilityRefused(pluginId, "auth:provide");
+      }
+      if (
+        typeof ceremony?.id !== "string" ||
+        !/^[a-z][a-z0-9-]{0,63}$/.test(ceremony.id) ||
+        (ceremony.type !== "create" && ceremony.type !== "get") ||
+        typeof ceremony.options !== "function" ||
+        typeof ceremony.finish !== "function"
+      ) {
+        throw new Error(
+          `Plugin ${pluginId} WebAuthn ceremony needs an id, a type and both steps`,
+        );
+      }
+      const dispose = registerWebAuthnCeremony({
+        id: ceremony.id,
+        type: ceremony.type,
+        pluginId,
+        options: async (input) => {
+          await granted();
+          return ceremony.options(input);
+        },
+        finish: async (input) => {
+          await granted();
+          return ceremony.finish(input);
+        },
+      });
+      bag.add(dispose, `WebAuthn ceremony "${ceremony.id}"`);
+      record("auth_register_ceremony", ceremony.id);
     },
 
     recordEnrollment: async (userId, factorId) => {
@@ -826,6 +1076,8 @@ export function createPluginAuth({ manifest, bag, audit }: Deps): PluginAuth {
         getActor() === userId ? getActorSessionId() : undefined,
       );
       await createCurrentTrustedDeviceRepository().deleteByUserId(userId);
+      // The session that set it up may have been a setup only one.
+      await createCurrentSessionRepository().clearRestrictionForUser(userId);
       await audit("auth_factor_enrolled", `${factorId} for ${userId}`, {
         success: true,
       });
@@ -902,7 +1154,107 @@ export function createPluginAuth({ manifest, bag, audit }: Deps): PluginAuth {
         await import("../database/repositories/factory.js");
       return createCurrentUserAuthRepository().countUsersForProvider(provider);
     },
+    identities: {
+      list: async (userId) => {
+        await granted();
+        const { createCurrentUserAuthRepository } =
+          await import("../database/repositories/factory.js");
+        const rows =
+          await createCurrentUserAuthRepository().listIdentitiesForUser(userId);
+        return rows.map((row) => ({
+          provider: row.providerId,
+          subject: row.subject,
+          email: row.email,
+        }));
+      },
+      link: async (userId, identity) => {
+        await granted();
+        const { createCurrentUserAuthRepository } =
+          await import("../database/repositories/factory.js");
+        const repository = createCurrentUserAuthRepository();
+        const held = await repository.findIdentity(
+          identity.provider,
+          identity.subject,
+        );
+        if (held?.userId === userId) return;
+        if (held) {
+          throw new LoginMethodError(
+            "This sign in is linked to another account",
+            409,
+            "identity_in_use",
+          );
+        }
+        const own = await repository.listIdentitiesForUser(userId);
+        if (own.some((row) => row.providerId === identity.provider)) {
+          throw new LoginMethodError(
+            "This account is already linked to this provider",
+            409,
+            "provider_linked",
+          );
+        }
+        await repository.linkIdentity({
+          userId,
+          providerId: identity.provider,
+          subject: identity.subject,
+          email: identity.email ?? null,
+        });
+        void audit(
+          "auth_identity_linked",
+          `${identity.provider} for ${userId}`,
+          {
+            success: true,
+          },
+        );
+      },
+      unlink: async (userId, provider) => {
+        await granted();
+        const { createCurrentUserAuthRepository, createCurrentUserRepository } =
+          await import("../database/repositories/factory.js");
+        const repository = createCurrentUserAuthRepository();
+        const own = await repository.listIdentitiesForUser(userId);
+        const user = await createCurrentUserRepository().findById(userId);
+        if (
+          !user?.passwordHash &&
+          !own.some((row) => row.providerId !== provider)
+        ) {
+          throw new LoginMethodError(
+            "Set a password before unlinking your only sign in",
+            409,
+            "last_login",
+          );
+        }
+        if ((await repository.unlinkProviderForUser(userId, provider)) > 0) {
+          void audit("auth_identity_unlinked", `${provider} for ${userId}`, {
+            success: true,
+          });
+        }
+      },
+    },
     issueUserToken: (userId, options) =>
       issueUserToken(manifest, userId, options),
+
+    policy: {
+      provide: (provider) => {
+        if (!declared.includes("auth:policy")) {
+          throw capabilityRefused(pluginId, "auth:policy");
+        }
+        const remove = provideAuthPolicy(pluginId, provider);
+        void audit("auth_policy_provide", `${pluginId} sets login rules`, {
+          success: true,
+        });
+        const drop = bag.add(remove, "login policy");
+        return () => {
+          drop();
+          remove();
+        };
+      },
+    },
+
+    listSecondFactors: answeredSync<PluginAuth["listSecondFactors"]>(() =>
+      listSecondFactors().map((factor) => ({
+        id: factor.id,
+        pluginId: factor.pluginId,
+      })),
+    ),
   };
 }

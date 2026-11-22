@@ -101,19 +101,6 @@ export async function getCredentialFolders(): Promise<Record<string, unknown>> {
   }
 }
 
-export async function getSSHHostWithCredentials(
-  hostId: number,
-): Promise<Record<string, unknown>> {
-  try {
-    const response = await sshHostApi.get(
-      `/db/host/${hostId}/with-credentials`,
-    );
-    return response.data;
-  } catch (error) {
-    handleApiError(error, "fetch SSH host with credentials");
-  }
-}
-
 export async function getHostPassword(
   hostId: number,
   field: "password" | "sudoPassword" | "key" | "keyPassword" = "password",
@@ -125,56 +112,6 @@ export async function getHostPassword(
     return response.data?.value || null;
   } catch {
     return null;
-  }
-}
-
-export async function applyCredentialToHost(
-  hostId: number,
-  credentialId: number,
-): Promise<Record<string, unknown>> {
-  try {
-    const response = await sshHostApi.post(
-      `/db/host/${hostId}/apply-credential`,
-      { credentialId },
-    );
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error, "apply credential to host");
-  }
-}
-
-export async function removeCredentialFromHost(
-  hostId: number,
-): Promise<Record<string, unknown>> {
-  try {
-    const response = await sshHostApi.delete(`/db/host/${hostId}/credential`);
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error, "remove credential from host");
-  }
-}
-
-export async function migrateHostToCredential(
-  hostId: number,
-  credentialName: string,
-): Promise<Record<string, unknown>> {
-  try {
-    const response = await sshHostApi.post(
-      `/db/host/${hostId}/migrate-to-credential`,
-      { credentialName },
-    );
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error, "migrate host to credential");
-  }
-}
-
-export async function getFoldersWithStats(): Promise<Record<string, unknown>> {
-  try {
-    const response = await authApi.get("/host/db/folders/with-stats");
-    return response.data;
-  } catch (error) {
-    handleApiError(error, "fetch folders with statistics");
   }
 }
 
@@ -334,115 +271,5 @@ export async function reorderCredentials(
   } catch (error) {
     handleApiError(error, "reorder credentials");
     throw error;
-  }
-}
-
-export async function detectKeyType(
-  privateKey: string,
-  keyPassword?: string,
-): Promise<Record<string, unknown>> {
-  try {
-    const response = await authApi.post("/credentials/detect-key-type", {
-      privateKey,
-      keyPassword,
-    });
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error, "detect key type");
-  }
-}
-
-export async function detectPublicKeyType(
-  publicKey: string,
-): Promise<Record<string, unknown>> {
-  try {
-    const response = await authApi.post("/credentials/detect-public-key-type", {
-      publicKey,
-    });
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error, "detect public key type");
-  }
-}
-
-export async function validateKeyPair(
-  privateKey: string,
-  publicKey: string,
-  keyPassword?: string,
-): Promise<Record<string, unknown>> {
-  try {
-    const response = await authApi.post("/credentials/validate-key-pair", {
-      privateKey,
-      publicKey,
-      keyPassword,
-    });
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error, "validate key pair");
-  }
-}
-
-export interface GeneratedPublicKey {
-  success?: boolean;
-  publicKey?: string;
-  error?: string;
-}
-
-export async function generatePublicKeyFromPrivate(
-  privateKey: string,
-  keyPassword?: string,
-): Promise<GeneratedPublicKey> {
-  try {
-    const response = await authApi.post("/credentials/generate-public-key", {
-      privateKey,
-      keyPassword,
-    });
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error, "generate public key from private key");
-  }
-}
-
-export interface GeneratedKeyPair {
-  success: boolean;
-  privateKey?: string;
-  publicKey?: string;
-  keyType?: string;
-  format?: string;
-  algorithm?: string;
-  keySize?: number;
-  curve?: string;
-  error?: string;
-}
-
-export async function generateKeyPair(
-  keyType: "ssh-ed25519" | "ssh-rsa" | "ecdsa-sha2-nistp256",
-  keySize?: number,
-  passphrase?: string,
-): Promise<GeneratedKeyPair> {
-  try {
-    const response = await authApi.post("/credentials/generate-key-pair", {
-      keyType,
-      keySize,
-      passphrase,
-    });
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error, "generate SSH key pair");
-  }
-}
-
-export async function deployCredentialToHost(
-  credentialId: number,
-  targetHostId: number,
-): Promise<Record<string, unknown>> {
-  try {
-    const response = await authApi.post(
-      `/credentials/${credentialId}/deploy-to-host`,
-      { targetHostId },
-    );
-    return response.data;
-  } catch (error) {
-    throw handleApiError(error, "deploy credential to host");
   }
 }

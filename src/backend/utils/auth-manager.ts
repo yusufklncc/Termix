@@ -1,4 +1,5 @@
 import { getErrorMessage } from "./error-message.js";
+import { adminHostBypassEnabled } from "../auth/user-access-settings.js";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { UserKeyManager } from "./user-keys.js";
@@ -12,10 +13,13 @@ import { databaseLogger, authLogger } from "./logger.js";
 import { logAudit, getRequestMeta } from "./audit-logger.js";
 import type { Request, Response, NextFunction } from "express";
 import bcrypt from "bcryptjs";
+import { cachedApiKeyMatch, rememberApiKeyMatch } from "./api-key-cache.js";
 import { nanoid } from "nanoid";
 import { inArray, isNotNull } from "drizzle-orm";
 import type { ExternalSessionRef } from "../auth/types.js";
-import { listSecondFactors } from "../auth/registry.js";
+import { sessionAccessRefusal } from "../auth/session-access.js";
+import { endSocketSession, idleExpired } from "../auth/socket-sessions.js";
+import { keyScopeAllows, parseKeyScopes } from "../operations/key-scopes.js";
 import type { DeviceType } from "./user-agent-parser.js";
 import { getDb } from "../database/db/index.js";
 import { sessions } from "../database/db/schema.js";
@@ -43,13 +47,23 @@ interface JWTPayload {
   userId: string;
   sessionId?: string;
   pendingTOTP?: boolean;
-  /** Set on a short-lived socket ticket, which only a socket upgrade takes. */
-  purpose?: "ws";
+  /**
+   * Set on a short-lived token with one use: "ws" is a socket ticket, which
+   * only a socket upgrade takes, and "plugin-frame" works only on the routes
+   * and sockets of the plugin named in pluginId.
+   */
+  purpose?: "ws" | "plugin-frame";
+  /** The plugin a "plugin-frame" token is for. */
+  pluginId?: string;
   /**
    * A plugin minted the session. Read from the session row on verify, never
    * from the token, so a refreshed token stays marked.
    */
   pluginSession?: boolean;
+  /** sessions.restriction, read from the row on verify. */
+  restriction?: string | null;
+  /** On a socket ticket an API key asked for: the socket lives as long as the key. */
+  apiKeyId?: string;
   dataKeyWrap?: WrappedDataKey;
   iat?: number;
   exp?: number;
@@ -66,9 +80,13 @@ interface AuthenticatedRequest extends Request {
   userId?: string;
   sessionId?: string;
   apiKeyId?: string;
+  apiKeyScopes?: string[] | null;
   pendingTOTP?: boolean;
   dataKey?: Buffer;
   actingAdminUserId?: string;
+  sessionRestriction?: string | null;
+  /** Authenticated with a plugin frame token. */
+  frameToken?: boolean;
 }
 
 interface RequestWithHeaders extends Request {
@@ -85,6 +103,7 @@ function serializeExternalSession(
     providerId: ref.providerId ?? null,
     sub: ref.sub ?? null,
     sid: ref.sid ?? null,
+    ...(ref.methodId ? { methodId: ref.methodId } : {}),
   });
 }
 
@@ -107,26 +126,52 @@ const ADMIN_TARGET_USER_HEADER = "x-admin-target-user";
 // plugin route unless its manifest sets contributes.http.adminImpersonation.
 const IMPERSONATION_PATH_ALLOWLIST = [/^\/host\/db\//, /^\/credentials(\/|$)/];
 
+/** How long a plugin frame token lives. Frames ask for a new one before. */
+export const PLUGIN_FRAME_TOKEN_SECONDS = 300;
+
 const PLUGIN_API_PATH = /^\/plugin-api\/([a-z][a-z0-9-]*)(\/|$)/;
 
 /** sessions.device_type of a session a plugin minted with ctx.auth.issueUserToken. */
 export const PLUGIN_SESSION_DEVICE_TYPE = "plugin";
 
-// Routes that change how a user signs in or mint a credential that outlives
-// the session. A plugin-minted session is refused on them, and on every
-// route of a plugin that provides a second factor.
-const PLUGIN_SESSION_BLOCKLIST = [
-  /^\/users\/(change-password|api-keys|link-external-to-password|unlink-external-from-password|admin\/reset-password)(\/|$)/,
-  /^\/users\/admin\/[^/]+\/second-factors(\/|$)/,
-];
+export {
+  allowsPluginSession,
+  allowsSetupSession,
+} from "../auth/session-access.js";
+import { clearAuthCookie } from "../auth/session-cookie.js";
+import {
+  apiKeyFailureWait,
+  recordApiKeyFailure,
+  sendRateLimited,
+} from "./rate-limit.js";
+import { getClientIp } from "./request-origin.js";
+import { isCookieOriginAllowed } from "./ws-auth.js";
 
-/** Whether a session a plugin minted may call this path. */
-export function allowsPluginSession(path: string): boolean {
-  if (PLUGIN_SESSION_BLOCKLIST.some((pattern) => pattern.test(path))) {
-    return false;
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * The browser sends the login cookie from sibling subdomains and other ports
+ * of the same host too, so a change made with the cookie must come from a
+ * page on this server. A Bearer token sent along still counts.
+ */
+export function requestToken(req: Request): {
+  token?: string;
+  refused: boolean;
+} {
+  const authHeader = req.headers["authorization"];
+  const bearer = authHeader?.startsWith("Bearer ")
+    ? authHeader.split(" ")[1]
+    : undefined;
+  const cookie = req.cookies?.jwt as string | undefined;
+  if (
+    cookie &&
+    UNSAFE_METHODS.has(req.method) &&
+    !req.headers["x-electron-app"] &&
+    !isCookieOriginAllowed(req)
+  ) {
+    return bearer ? { token: bearer, refused: false } : { refused: true };
   }
-  const plugin = PLUGIN_API_PATH.exec(path)?.[1];
-  return !listSecondFactors().some((factor) => factor.pluginId === plugin);
+  return { token: cookie || bearer, refused: false };
 }
 
 let pluginAllowsImpersonation: (pluginId: string) => boolean = () => false;
@@ -145,6 +190,14 @@ export function allowsAdminImpersonation(path: string): boolean {
   }
   const plugin = PLUGIN_API_PATH.exec(path);
   return !!plugin && pluginAllowsImpersonation(plugin[1]);
+}
+
+/** Thrown when something tries to sign in an account that is turned off. */
+export class AccountDisabledError extends Error {
+  readonly code = "ACCOUNT_DISABLED";
+  constructor() {
+    super("This account is turned off");
+  }
 }
 
 class AuthManager {
@@ -200,6 +253,7 @@ class AuthManager {
 
   private async ensureUserDEK(userId: string): Promise<boolean> {
     if (this.userKeys.tryGetUserDEK(userId)) {
+      await this.resealOnUnlock();
       await this.performLazyEncryptionMigration(userId);
       return true;
     }
@@ -248,6 +302,19 @@ class AuthManager {
     return this.ensureUserDEK(userId);
   }
 
+  /** A key that only opened now may still have rows on a temporary id. */
+  private async resealOnUnlock(): Promise<void> {
+    try {
+      const { runFieldResealMigration } =
+        await import("../upgrade/field-reseal-migration.js");
+      await runFieldResealMigration();
+    } catch (error) {
+      databaseLogger.error("Moving saved secrets failed", error, {
+        operation: "field_reseal_failed",
+      });
+    }
+  }
+
   private async performLazyEncryptionMigration(userId: string): Promise<void> {
     try {
       const userDataKey = this.getUserDataKey(userId);
@@ -292,6 +359,7 @@ class AuthManager {
       "aes-256-gcm",
       encryptionKey,
       Buffer.from(wrapped.iv, "base64url"),
+      { authTagLength: 16 },
     );
     decipher.setAAD(this.getDataKeyAAD(userId, sessionId));
     decipher.setAuthTag(Buffer.from(wrapped.tag, "base64url"));
@@ -336,8 +404,19 @@ class AuthManager {
       deviceType?: DeviceType;
       deviceInfo?: string;
       externalSession?: ExternalSessionRef | null;
+      /** Caps the lifetime, from the login policy. */
+      maxAgeSeconds?: number | null;
+      /** Stored on the session, see SECOND_FACTOR_SETUP. */
+      restriction?: string | null;
+      idleTimeoutSeconds?: number | null;
     } = {},
   ): Promise<string> {
+    // Last line of defense: no login path may issue a token for an account
+    // that is turned off.
+    const owner = await createCurrentUserRepository().findById(userId);
+    if (owner?.disabledAt) {
+      throw new AccountDisabledError();
+    }
     const jwtSecret = await this.systemCrypto.getJWTSecret();
 
     const timeoutValue = await createCurrentSettingsRepository().get(
@@ -354,6 +433,12 @@ class AuthManager {
       }
     } else if (!expiresIn) {
       expiresIn = defaultExpiry;
+    }
+    if (
+      options.maxAgeSeconds &&
+      options.maxAgeSeconds * 1000 < this.parseExpiresIn(expiresIn)
+    ) {
+      expiresIn = `${Math.floor(options.maxAgeSeconds)}s`;
     }
 
     const payload: JWTPayload = { userId };
@@ -385,6 +470,8 @@ class AuthManager {
           createdAt,
           expiresAt,
           lastActiveAt: createdAt,
+          restriction: options.restriction ?? null,
+          idleTimeout: options.idleTimeoutSeconds ?? null,
         });
       } catch (error) {
         databaseLogger.error("Failed to create session", error, {
@@ -426,11 +513,55 @@ class AuthManager {
    * HttpOnly cookie, and a proxy that rewrites Host makes the cookie look
    * like it came from another site, so the page asks for one of these.
    */
-  async issueSocketTicket(userId: string, sessionId: string): Promise<string> {
+  async issueSocketTicket(
+    userId: string,
+    sessionId: string,
+    apiKeyId?: string,
+  ): Promise<string> {
     const payload: JWTPayload = { userId, sessionId, purpose: "ws" };
+    if (apiKeyId) payload.apiKeyId = apiKeyId;
     return jwt.sign(payload, await this.systemCrypto.getJWTSecret(), {
       expiresIn: 60,
     } as jwt.SignOptions);
+  }
+
+  /**
+   * A short token for one plugin's sandboxed frames. It opens that plugin's
+   * own routes and sockets and nothing else, and dies with the session.
+   */
+  async issuePluginFrameToken(
+    userId: string,
+    sessionId: string,
+    pluginId: string,
+  ): Promise<{ token: string; expiresIn: number }> {
+    const payload: JWTPayload = {
+      userId,
+      sessionId,
+      purpose: "plugin-frame",
+      pluginId,
+    };
+    const token = jwt.sign(payload, await this.systemCrypto.getJWTSecret(), {
+      expiresIn: PLUGIN_FRAME_TOKEN_SECONDS,
+    } as jwt.SignOptions);
+    return { token, expiresIn: PLUGIN_FRAME_TOKEN_SECONDS };
+  }
+
+  /**
+   * A one minute socket ticket for an API key. The key has no login session,
+   * so a two minute session a plugin could have minted carries the ticket. It
+   * can open plugin sockets and call nothing else.
+   */
+  async issueApiKeySocketTicket(
+    userId: string,
+    keyId: string,
+  ): Promise<string> {
+    const { token } = await this.issuePluginSession(userId, {
+      pluginId: "api-key",
+      purpose: `socket ${keyId.slice(0, 8)}`,
+      ttlSeconds: 120,
+    });
+    const sessionId = (jwt.decode(token) as JWTPayload).sessionId!;
+    return this.issueSocketTicket(userId, sessionId, keyId);
   }
 
   /**
@@ -467,7 +598,7 @@ class AuthManager {
 
   async verifyJWTToken(
     token: string,
-    options: { allowSocketTicket?: boolean } = {},
+    options: { allowSocketTicket?: boolean; framePluginId?: string } = {},
   ): Promise<JWTPayload | null> {
     try {
       const jwtSecret = await this.systemCrypto.getJWTSecret();
@@ -475,8 +606,16 @@ class AuthManager {
       const payload = jwt.verify(token, jwtSecret) as JWTPayload;
       if (
         payload.purpose !== undefined &&
-        !(payload.purpose === "ws" && options.allowSocketTicket)
+        !(payload.purpose === "ws" && options.allowSocketTicket) &&
+        !(
+          payload.purpose === "plugin-frame" &&
+          !!options.framePluginId &&
+          payload.pluginId === options.framePluginId
+        )
       ) {
+        return null;
+      }
+      if (payload.purpose === "plugin-frame" && !payload.sessionId) {
         return null;
       }
 
@@ -500,6 +639,19 @@ class AuthManager {
           }
           payload.pluginSession =
             sessionRecord.deviceType === PLUGIN_SESSION_DEVICE_TYPE;
+          payload.restriction = sessionRecord.restriction ?? null;
+
+          if (this.idleExpired(sessionRecord)) {
+            databaseLogger.info("Session ended after idle timeout", {
+              operation: "session_idle_timeout",
+              sessionId: payload.sessionId,
+              userId: payload.userId,
+            });
+            await createCurrentSessionRepository()
+              .revoke(payload.sessionId)
+              .catch(() => {});
+            return null;
+          }
 
           await this.migrateDataKeyFromPayload(payload);
         } catch (dbError) {
@@ -529,6 +681,13 @@ class AuthManager {
       });
       return null;
     }
+  }
+
+  private idleExpired(session: {
+    idleTimeout: number | null;
+    lastActiveAt: string;
+  }): boolean {
+    return idleExpired(session);
   }
 
   async refreshSessionToken(
@@ -643,6 +802,7 @@ class AuthManager {
       if (matchedIds.length === 0) return 0;
 
       await db.delete(sessions).where(inArray(sessions.id, matchedIds));
+      for (const id of matchedIds) endSocketSession(id);
 
       authLogger.info("Sessions revoked via back-channel logout", {
         operation: "external_backchannel_logout",
@@ -671,6 +831,7 @@ class AuthManager {
     try {
       const sessionRepository = createCurrentSessionRepository();
       const now = new Date();
+      await sessionRepository.hashStoredTokens();
       const expiredSessions = await sessionRepository.listExpired(now);
 
       const expiredCount = expiredSessions.length;
@@ -749,6 +910,12 @@ class AuthManager {
       });
       return;
     }
+    const clientIp = getClientIp(req);
+    const wait = apiKeyFailureWait(clientIp);
+    if (wait) {
+      sendRateLimited(res, wait);
+      return;
+    }
     try {
       const tokenPrefix = token.substring(0, 12);
       const apiKeyRepository = createCurrentApiKeyRepository();
@@ -757,19 +924,27 @@ class AuthManager {
         await apiKeyRepository.listActiveByTokenPrefix(tokenPrefix);
 
       if (candidates.length === 0) {
+        recordApiKeyFailure(clientIp);
         res.status(401).json({ error: "Invalid API key" });
         return;
       }
 
-      let matchedKey: (typeof candidates)[0] | null = null;
-      for (const candidate of candidates) {
-        if (await bcrypt.compare(token, candidate.tokenHash)) {
-          matchedKey = candidate;
-          break;
+      let matchedKey: (typeof candidates)[0] | null = cachedApiKeyMatch(
+        token,
+        candidates,
+      );
+      if (!matchedKey) {
+        for (const candidate of candidates) {
+          if (await bcrypt.compare(token, candidate.tokenHash)) {
+            matchedKey = candidate;
+            rememberApiKeyMatch(token, candidate);
+            break;
+          }
         }
       }
 
       if (!matchedKey) {
+        recordApiKeyFailure(clientIp);
         res.status(401).json({ error: "Invalid API key" });
         return;
       }
@@ -779,14 +954,19 @@ class AuthManager {
         return;
       }
 
-      if (requireAdmin) {
-        const user = await createCurrentUserRepository().findById(
-          matchedKey.userId,
-        );
-        if (!user?.isAdmin) {
-          res.status(403).json({ error: "Admin access required" });
-          return;
-        }
+      const keyOwner = await createCurrentUserRepository().findById(
+        matchedKey.userId,
+      );
+      if (!keyOwner || keyOwner.disabledAt) {
+        res.status(403).json({
+          error: "This account is turned off",
+          code: "ACCOUNT_DISABLED",
+        });
+        return;
+      }
+      if (requireAdmin && !keyOwner.isAdmin) {
+        res.status(403).json({ error: "Admin access required" });
+        return;
       }
 
       apiKeyRepository
@@ -800,8 +980,18 @@ class AuthManager {
           });
         });
 
+      const scopes = parseKeyScopes(matchedKey.scopes);
+      if (!keyScopeAllows(scopes, req.method, req.originalUrl ?? "")) {
+        res.status(403).json({
+          error: "This API key may not use this route",
+          code: "API_KEY_SCOPE",
+        });
+        return;
+      }
+
       req.userId = matchedKey.userId;
       req.apiKeyId = matchedKey.id;
+      req.apiKeyScopes = scopes;
       next();
     } catch (error) {
       databaseLogger.error("API key authentication failed", error, {
@@ -811,16 +1001,16 @@ class AuthManager {
     }
   }
 
-  createAuthMiddleware() {
+  /**
+   * framePluginId: the plugin whose routes this guards, so that plugin's
+   * frame tokens are taken. Every other route refuses them.
+   */
+  createAuthMiddleware(options: { framePluginId?: string } = {}) {
     return async (req: Request, res: Response, next: NextFunction) => {
       const authReq = req as AuthenticatedRequest;
-      let token = authReq.cookies?.jwt;
-
-      if (!token) {
-        const authHeader = authReq.headers["authorization"];
-        if (authHeader?.startsWith("Bearer ")) {
-          token = authHeader.split(" ")[1];
-        }
+      const { token, refused } = requestToken(authReq);
+      if (refused) {
+        return res.status(403).json({ error: "Not allowed from this origin" });
       }
 
       if (!token) {
@@ -831,23 +1021,17 @@ class AuthManager {
         return this.handleApiKeyAuth(authReq, res, next, token);
       }
 
-      const payload = await this.verifyJWTToken(token);
+      const payload = await this.verifyJWTToken(token, {
+        framePluginId: options.framePluginId,
+      });
 
       if (!payload) {
-        return res
-          .clearCookie("jwt", this.getClearCookieOptions(req))
+        return clearAuthCookie(req, res, "jwt", this.getClearCookieOptions(req))
           .status(401)
           .json({ error: "Invalid token" });
       }
 
-      if (payload.pendingTOTP) {
-        return res.status(401).json({
-          error: "TOTP verification required",
-          code: "TOTP_REQUIRED",
-        });
-      }
-
-      if (this.refusePluginSession(req, res, payload)) return;
+      if (this.refuseSession(req, res, payload)) return;
 
       if (payload.sessionId) {
         try {
@@ -860,8 +1044,12 @@ class AuthManager {
               sessionId: payload.sessionId,
               userId: payload.userId,
             });
-            return res
-              .clearCookie("jwt", this.getClearCookieOptions(req))
+            return clearAuthCookie(
+              req,
+              res,
+              "jwt",
+              this.getClearCookieOptions(req),
+            )
               .status(401)
               .json({
                 error: "Session not found",
@@ -890,8 +1078,12 @@ class AuthManager {
               });
             });
 
-            return res
-              .clearCookie("jwt", this.getClearCookieOptions(req))
+            return clearAuthCookie(
+              req,
+              res,
+              "jwt",
+              this.getClearCookieOptions(req),
+            )
               .status(401)
               .json({
                 error: "Session has expired",
@@ -921,8 +1113,14 @@ class AuthManager {
       authReq.userId = payload.userId;
       authReq.sessionId = payload.sessionId;
       authReq.pendingTOTP = payload.pendingTOTP;
+      authReq.sessionRestriction = payload.restriction ?? null;
+      authReq.frameToken = payload.purpose === "plugin-frame";
 
       if (authReq.headers[ADMIN_TARGET_USER_HEADER]) {
+        // A frame acts only as the user who opened it.
+        if (authReq.frameToken) {
+          return res.status(403).json({ error: "Not allowed" });
+        }
         const handled = await this.applyAdminImpersonation(
           authReq,
           res,
@@ -965,6 +1163,14 @@ class AuthManager {
       res.status(403).json({
         error: "Admin access required",
         code: "IMPERSONATION_DENIED",
+      });
+      return true;
+    }
+
+    if (!adminHostBypassEnabled()) {
+      res.status(403).json({
+        error: "Admins can't open other users' data on this server",
+        code: "ADMIN_REACH_OFF",
       });
       return true;
     }
@@ -1015,18 +1221,18 @@ class AuthManager {
     return false;
   }
 
-  /** Sends the 403 and returns true when a plugin session may not use this route. */
-  private refusePluginSession(
+  /** Sends the refusal and returns true when this session may not use the route. */
+  private refuseSession(
     req: Request,
     res: Response,
     payload: JWTPayload,
   ): boolean {
     const path = (req.originalUrl || req.url || "").split("?")[0];
-    if (!payload.pluginSession || allowsPluginSession(path)) return false;
-    res.status(403).json({
-      error: "A session a plugin issued cannot use this route",
-      code: "PLUGIN_SESSION_NOT_ALLOWED",
-    });
+    const refusal = sessionAccessRefusal(payload, path, req.method);
+    if (!refusal) return false;
+    res
+      .status(refusal.status)
+      .json({ error: refusal.error, code: refusal.code });
     return true;
   }
 
@@ -1045,13 +1251,9 @@ class AuthManager {
 
   createAdminMiddleware() {
     return async (req: Request, res: Response, next: NextFunction) => {
-      let token = req.cookies?.jwt;
-
-      if (!token) {
-        const authHeader = req.headers["authorization"];
-        if (authHeader?.startsWith("Bearer ")) {
-          token = authHeader.split(" ")[1];
-        }
+      const { token, refused } = requestToken(req);
+      if (refused) {
+        return res.status(403).json({ error: "Not allowed from this origin" });
       }
 
       if (!token) {
@@ -1071,20 +1273,12 @@ class AuthManager {
       const payload = await this.verifyJWTToken(token);
 
       if (!payload) {
-        return res
-          .clearCookie("jwt", this.getClearCookieOptions(req))
+        return clearAuthCookie(req, res, "jwt", this.getClearCookieOptions(req))
           .status(401)
           .json({ error: "Invalid token" });
       }
 
-      if (payload.pendingTOTP) {
-        return res.status(401).json({
-          error: "TOTP verification required",
-          code: "TOTP_REQUIRED",
-        });
-      }
-
-      if (this.refusePluginSession(req, res, payload)) return;
+      if (this.refuseSession(req, res, payload)) return;
 
       try {
         const user = await createCurrentUserRepository().findById(

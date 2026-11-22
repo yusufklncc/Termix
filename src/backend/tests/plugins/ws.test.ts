@@ -15,6 +15,8 @@ import { WebSocket } from "ws";
 const state = vi.hoisted(() => ({
   validToken: "valid-token",
   ticket: "socket-ticket",
+  setupToken: "setup-token",
+  frameToken: "frame-token-sample",
   userId: "user-1",
   granted: new Set<string>(["network:serve"]),
 }));
@@ -34,12 +36,22 @@ vi.mock("../../utils/auth-manager.js", () => ({
     getInstance: () => ({
       verifyJWTToken: async (
         token: string,
-        options: { allowSocketTicket?: boolean } = {},
+        options: { allowSocketTicket?: boolean; framePluginId?: string } = {},
       ) =>
-        token === state.validToken ||
-        (token === state.ticket && options.allowSocketTicket)
-          ? { userId: state.userId }
-          : null,
+        token === state.frameToken
+          ? options.framePluginId === "sample-plugin"
+            ? { userId: state.userId, sessionId: "s-1" }
+            : null
+          : token === state.setupToken
+            ? {
+                userId: state.userId,
+                sessionId: "s-setup",
+                restriction: "second-factor-setup",
+              }
+            : token === state.validToken ||
+                (token === state.ticket && options.allowSocketTicket)
+              ? { userId: state.userId, sessionId: "s-1" }
+              : null,
     }),
   },
 }));
@@ -60,6 +72,7 @@ vi.mock("../../plugins/permissions.js", () => ({
 }));
 
 const ws = await import("../../plugins/ws.js");
+const socketSessions = await import("../../auth/socket-sessions.js");
 
 const DECLARED = ["network:serve"] as const;
 
@@ -119,11 +132,13 @@ function authProtocols(token: string): string[] {
 
 beforeEach(() => {
   ws.resetPluginWebSockets();
+  socketSessions.resetSocketSessions();
   state.granted = new Set(["network:serve"]);
 });
 
 afterEach(async () => {
   ws.resetPluginWebSockets();
+  socketSessions.resetSocketSessions();
   if (server) {
     await new Promise((resolve) => server!.close(() => resolve(undefined)));
     server = null;
@@ -152,6 +167,71 @@ describe("ctx.ws routing", () => {
     expect(result.outcome).toBe("open");
     expect(seen).toEqual([state.userId]);
     if (result.outcome === "open") result.socket.close();
+  });
+
+  it("serves a socket core owns without any plugin grant", async () => {
+    state.granted = new Set();
+    const seen: string[] = [];
+    ws.registerCoreWsRoute("/relay", ({ userId }) => {
+      seen.push(userId);
+    });
+
+    const base = await startServer();
+    const signedIn = await connect(
+      `${base}/plugin-ws/core/relay`,
+      authProtocols(state.validToken),
+    );
+    const anonymous = await connect(`${base}/plugin-ws/core/relay`);
+
+    expect(signedIn.outcome).toBe("open");
+    expect(anonymous.outcome).toBe(401);
+    expect(seen).toEqual([state.userId]);
+    if (signedIn.outcome === "open") signedIn.socket.close();
+  });
+
+  it("opens a plugin's own socket with its frame token and nothing else", async () => {
+    state.granted = new Set(["network:serve"]);
+    const seen: string[] = [];
+    ws.registerPluginWsRoute(
+      "sample-plugin",
+      "/socket",
+      ({ userId }) => {
+        seen.push(`sample:${userId}`);
+      },
+      DECLARED,
+    );
+    ws.registerPluginWsRoute(
+      "other-plugin",
+      "/socket",
+      ({ userId }) => {
+        seen.push(`other:${userId}`);
+      },
+      DECLARED,
+    );
+    ws.registerCoreWsRoute("/relay", ({ userId }) => {
+      seen.push(`core:${userId}`);
+    });
+
+    const base = await startServer();
+    const own = await connectWithHeaders(
+      `${base}/plugin-ws/sample-plugin/socket`,
+      { Origin: "null" },
+      authProtocols(state.frameToken),
+    );
+    const other = await connect(
+      `${base}/plugin-ws/other-plugin/socket`,
+      authProtocols(state.frameToken),
+    );
+    const core = await connect(
+      `${base}/plugin-ws/core/relay`,
+      authProtocols(state.frameToken),
+    );
+
+    expect(own.outcome).toBe("open");
+    expect(other.outcome).toBe(401);
+    expect(core.outcome).toBe(401);
+    expect(seen).toEqual([`sample:${state.userId}`]);
+    if (own.outcome === "open") own.socket.close();
   });
 
   it("404s a path nothing registered", async () => {
@@ -269,6 +349,18 @@ describe("ctx.ws authentication", () => {
     const result = await connect(
       `${base}/plugin-ws/sample-plugin/socket`,
       authProtocols("nope"),
+    );
+
+    expect(result.outcome).toBe(401);
+  });
+
+  it("rejects a session that still has to set up a second factor", async () => {
+    ws.registerPluginWsRoute("sample-plugin", "/socket", () => {}, DECLARED);
+
+    const base = await startServer();
+    const result = await connect(
+      `${base}/plugin-ws/sample-plugin/socket`,
+      authProtocols(state.setupToken),
     );
 
     expect(result.outcome).toBe(401);

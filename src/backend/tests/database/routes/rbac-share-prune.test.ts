@@ -69,8 +69,12 @@ vi.mock("../../../database/repositories/factory.js", () => ({
   }),
 }));
 
-const { pruneHostGrants, pruneCredentialGrants } =
-  await import("../../../database/routes/rbac.js");
+const {
+  pruneHostGrants,
+  pruneCredentialGrants,
+  grantsForFolderRule,
+  clampToGrantorExpiry,
+} = await import("../../../database/routes/rbac.js");
 
 const chain = (): Grant[] => [
   { id: 2, userId: "bob", grantedBy: "alice", permissionLevel: "manage" },
@@ -103,5 +107,45 @@ describe("share pruning", () => {
   it("drops credential shares the same way", async () => {
     expect(await pruneCredentialGrants(5)).toBe(2);
     expect(state.credentialGrants.map((g) => g.userId)).toEqual(["dave"]);
+  });
+});
+
+describe("grantsForFolderRule", () => {
+  const entries = [
+    { id: 1, userId: "bob", roleId: null },
+    { id: 2, userId: null, roleId: 7 },
+    { id: 3, userId: "carol", roleId: null },
+  ];
+
+  it("picks the grants of the rule's user or role", () => {
+    expect(
+      grantsForFolderRule(entries, { userId: "bob", roleId: null }).map(
+        (e) => e.id,
+      ),
+    ).toEqual([1]);
+    expect(
+      grantsForFolderRule(entries, { userId: null, roleId: 7 }).map(
+        (e) => e.id,
+      ),
+    ).toEqual([2]);
+    expect(
+      grantsForFolderRule(entries, { userId: null, roleId: null }),
+    ).toEqual([]);
+  });
+});
+
+describe("clampToGrantorExpiry", () => {
+  const soon = "2030-01-01T00:00:00.000Z";
+  const later = "2031-01-01T00:00:00.000Z";
+
+  it("keeps any expiry when the grantor has none", () => {
+    expect(clampToGrantorExpiry(null, null)).toBeNull();
+    expect(clampToGrantorExpiry(later, null)).toBe(later);
+  });
+
+  it("never outlives the grantor's own grant", () => {
+    expect(clampToGrantorExpiry(null, soon)).toBe(soon);
+    expect(clampToGrantorExpiry(later, soon)).toBe(soon);
+    expect(clampToGrantorExpiry(soon, later)).toBe(soon);
   });
 });

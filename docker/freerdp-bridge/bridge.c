@@ -114,8 +114,8 @@ typedef struct
 	 * pixels, so it is the ceiling on what moving the decode is worth. */
 	UINT64 codecBytes[16];
 	UINT32 codecOther;
-	/* AVC444 updates that carried only chroma, so had no picture to forward. */
-	UINT32 chromaOnlySkipped;
+	/* AVC444 auxiliary (chroma) views sent for decoding only, never painted. */
+	UINT32 auxDecodeOnly;
 
 	/* Input is written from the reader thread; only ever read for logging. */
 	UINT32 keyEvents;
@@ -347,8 +347,8 @@ static void log_codec_mix(termixContext* ctx)
 		used += (size_t)n;
 	}
 
-	fprintf(stderr, "[%s] codec mix: %s (chroma-only skipped=%u)\n", TAG,
-	        used ? line : "(nothing yet)", ctx->chromaOnlySkipped);
+	fprintf(stderr, "[%s] codec mix: %s (aux decode-only=%u)\n", TAG,
+	        used ? line : "(nothing yet)", ctx->auxDecodeOnly);
 	fprintf(stderr, "[%s] input: keys=%u pointer=%u rejected=%u\n", TAG, ctx->keyEvents,
 	        ctx->pointerEvents, ctx->inputRejected);
 	/* What each path costs. The ratio is the whole argument for compressing
@@ -521,9 +521,12 @@ static UINT tx_EndFrame(RdpgfxClientContext* gfx, const RDPGFX_END_FRAME_PDU* pd
  *
  * The metablock is freed the moment the surface command returns, so the rects
  * are copied into the payload here rather than referenced.
+ *
+ * magic is "AVCF" for a picture to paint and "AVCX" for AVC444's auxiliary
+ * view, which the browser decodes and throws away (see tx_SurfaceCommand).
  */
 static UINT send_avc_frame(termixContext* ctx, const RDPGFX_SURFACE_COMMAND* cmd,
-                           const RDPGFX_AVC420_BITMAP_STREAM* avc)
+                           const RDPGFX_AVC420_BITMAP_STREAM* avc, const char* magic)
 {
 	if (!avc || !avc->data || avc->length == 0)
 		return CHANNEL_RC_OK;
@@ -598,9 +601,11 @@ static UINT send_avc_frame(termixContext* ctx, const RDPGFX_SURFACE_COMMAND* cmd
 		}
 	}
 
-	ctx->frameCount++;
+	/* Only pictures count as frames: the fps line is what the viewer sees. */
+	if (magic[3] == 'F')
+		ctx->frameCount++;
 	ctx->avcBytes += total;
-	wire_send(ctx, "AVCF", payload, (UINT32)total);
+	wire_send(ctx, magic, payload, (UINT32)total);
 	free(payload);
 	return CHANNEL_RC_OK;
 }
@@ -1290,8 +1295,18 @@ static void flush_pending_regions(termixContext* ctx, RdpgfxClientContext* gfx)
  *   1 - luma alone
  *   2 - chroma alone, and there is no luma to send
  *
- * LC=2 must be skipped rather than passed on: bitstream[0] holds chroma there,
- * and feeding it to a decoder expecting a picture paints garbage.
+ * The two views are not two streams. FreeRDP feeds both to one decoder, luma
+ * then chroma (avc444_decompress: one subsystem->Decompress per view), because
+ * the server encodes them as one H.264 sequence: a luma picture may reference
+ * a chroma one. Dropping the chroma views -- as this did until 2026-11 --
+ * breaks that chain on any server that sends them, and the luma pictures then
+ * decode against references the decoder never had: stale windows, blocks and
+ * shifted colours, measured on a Windows host sending 60 chroma views in 660
+ * updates. The first host tried sent none, which is why it went unnoticed.
+ *
+ * So chroma views go out as AVCX: same payload as AVCF, decoded by the browser
+ * to keep the chain whole and never painted -- the picture stays the 4:2:0
+ * luma view, which is all a browser decoder can show anyway.
  */
 static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COMMAND* cmd)
 {
@@ -1314,7 +1329,7 @@ static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COM
 		ctx->codecOther++;
 
 	if (!ctx->serverDecode && cmd->codecId == RDPGFX_CODECID_AVC420)
-		return send_avc_frame(ctx, cmd, (const RDPGFX_AVC420_BITMAP_STREAM*)cmd->extra);
+		return send_avc_frame(ctx, cmd, (const RDPGFX_AVC420_BITMAP_STREAM*)cmd->extra, "AVCF");
 
 	if (!ctx->serverDecode &&
 	    (cmd->codecId == RDPGFX_CODECID_AVC444 || cmd->codecId == RDPGFX_CODECID_AVC444v2))
@@ -1339,11 +1354,17 @@ static UINT tx_SurfaceCommand(RdpgfxClientContext* gfx, const RDPGFX_SURFACE_COM
 
 		if (bs->LC == 2)
 		{
-			ctx->chromaOnlySkipped++;
-			return CHANNEL_RC_OK;
+			ctx->auxDecodeOnly++;
+			return send_avc_frame(ctx, cmd, &bs->bitstream[0], "AVCX");
 		}
 
-		return send_avc_frame(ctx, cmd, &bs->bitstream[0]);
+		const UINT rc = send_avc_frame(ctx, cmd, &bs->bitstream[0], "AVCF");
+		if (rc != CHANNEL_RC_OK || bs->LC != 0)
+			return rc;
+
+		/* LC=0: the chroma view follows the luma one, in that order. */
+		ctx->auxDecodeOnly++;
+		return send_avc_frame(ctx, cmd, &bs->bitstream[1], "AVCX");
 	}
 
 	/*

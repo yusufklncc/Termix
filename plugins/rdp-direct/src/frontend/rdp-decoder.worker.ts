@@ -24,6 +24,7 @@ type InboundMessage =
   | { type: "init"; canvas: OffscreenCanvas }
   | { type: "resize"; width: number; height: number }
   | { type: "avc"; payload: ArrayBuffer }
+  | { type: "avcx"; payload: ArrayBuffer }
   | { type: "rect"; payload: ArrayBuffer }
   | { type: "rectw"; payload: ArrayBuffer }
   | { type: "reset" }
@@ -60,7 +61,7 @@ let decodedCount = 0;
  * sends nothing else for minutes, stays black forever. Held and replayed
  * instead.
  */
-const pendingChunks: ArrayBuffer[] = [];
+const pendingChunks: { payload: ArrayBuffer; aux: boolean }[] = [];
 const MAX_PENDING_CHUNKS = 64;
 
 /* How long a first picture may sit undelivered before the decoder is pushed.
@@ -112,6 +113,18 @@ let lastCodec: string | null = null;
  */
 let lastKeyChunk: ArrayBuffer | null = null;
 
+/**
+ * Stands in for the rects of a frame that is decoded and never painted:
+ * AVC444's auxiliary (chroma) view, which the bridge sends as AVCX.
+ *
+ * The two views of an AVC444 update are one H.264 sequence, so a luma picture
+ * may reference a chroma one; the decoder has to see both or later pictures
+ * decode against references it never had. Only the luma view is a picture a
+ * browser can show. Compared by identity, so an ordinary frame with no rects
+ * (paint everything) is never mistaken for it.
+ */
+const DECODE_ONLY: RdpRect[] = [];
+
 /** Rects for the frame currently in flight, in submission order. */
 const pendingRects: RdpRect[][] = [];
 
@@ -135,6 +148,13 @@ function giveUpOnDecoding(reason: string) {
 
 function paint(frame: VideoFrame) {
   const rects = pendingRects.shift();
+
+  if (rects === DECODE_ONLY) {
+    // The decoder produced it, so it is alive; there is just nothing to show.
+    videoFrames++;
+    frame.close();
+    return;
+  }
 
   if (
     softwareFallbackUsed &&
@@ -347,7 +367,7 @@ function reportStats(now: number) {
  * frames decide whether anything is ever drawn. This reports the first one
  * immediately, with the state that decided its fate. */
 
-function decodeAvc(payload: ArrayBuffer) {
+function decodeAvc(payload: ArrayBuffer, aux = false) {
   const parsed = parseAvcFrame(new Uint8Array(payload));
   if (!parsed || parsed.bitstream.length === 0) {
     drops.unparsed++;
@@ -358,13 +378,15 @@ function decodeAvc(payload: ArrayBuffer) {
   // frame carrying an SPS arrives. Anything before that is held, not dropped:
   // the first frame is the one that makes every later frame decodable.
   if (!configured && !configureFromStream(parsed.bitstream)) {
-    if (pendingChunks.length < MAX_PENDING_CHUNKS) pendingChunks.push(payload);
+    if (pendingChunks.length < MAX_PENDING_CHUNKS)
+      pendingChunks.push({ payload, aux });
     else drops.unconfigured++;
     return;
   }
 
   if (!decoder || decoder.state !== "configured") {
-    if (pendingChunks.length < MAX_PENDING_CHUNKS) pendingChunks.push(payload);
+    if (pendingChunks.length < MAX_PENDING_CHUNKS)
+      pendingChunks.push({ payload, aux });
     else drops.unconfigured++;
     return;
   }
@@ -379,12 +401,13 @@ function decodeAvc(payload: ArrayBuffer) {
 
   if (key) {
     // The decoder can take deltas from here, and this frame is what restarts it
-    // if it ever has to be reconfigured.
+    // if it ever has to be reconfigured. Only a picture is kept for that: a
+    // replayed one is painted.
     needsKeyFrame = false;
-    lastKeyChunk = payload.slice(0);
+    if (!aux) lastKeyChunk = payload.slice(0);
   }
 
-  pendingRects.push(parsed.rects);
+  pendingRects.push(aux ? DECODE_ONLY : parsed.rects);
   try {
     decoder.decode(
       new EncodedVideoChunk({
@@ -439,7 +462,7 @@ function decodeAvc(payload: ArrayBuffer) {
 
 function flushPending() {
   const held = pendingChunks.splice(0, pendingChunks.length);
-  for (const chunk of held) decodeAvc(chunk);
+  for (const chunk of held) decodeAvc(chunk.payload, chunk.aux);
 }
 
 function ensureDecoder() {
@@ -537,6 +560,11 @@ self.onmessage = async (event: MessageEvent<InboundMessage>) => {
     case "avc": {
       reportStats(performance.now());
       decodeAvc(message.payload);
+      break;
+    }
+
+    case "avcx": {
+      decodeAvc(message.payload, true);
       break;
     }
 

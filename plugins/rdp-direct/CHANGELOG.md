@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.3
+
+### Fixed
+
+- Stale windows, blocks and darkened colours on Windows hosts with
+  "Prioritize H.264/AVC 444" on. An AVC444 update is two views of one H.264
+  sequence and the bridge dropped the chroma one, so later pictures decoded
+  against references the browser never had. The bridge now sends it as AVCX
+  and the decoder takes it without painting it. Needs the matching bridge
+  image.
+
 ## 1.1.2
 
 ### Fixed

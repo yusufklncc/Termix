@@ -120,6 +120,12 @@ export function createRdpRenderer({
           transfer("avc", frame.payload);
           return true;
 
+        // AVC444's chroma view: decoded to keep the H.264 chain whole, never
+        // painted. See DECODE_ONLY in the worker.
+        case "AVCX":
+          transfer("avcx", frame.payload);
+          return true;
+
         case "RECT":
           transfer("rect", frame.payload);
           return true;

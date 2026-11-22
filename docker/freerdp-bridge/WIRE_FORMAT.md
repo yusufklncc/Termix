@@ -27,6 +27,7 @@ Bütün sayısal alanlar **little-endian**.
 | `FBEG` | `u32 frameId`                                                | Kare başlangıcı                             |
 | `FEND` | `u32 frameId`                                                | Kare sonu — tarayıcı burada `FACK` gönderir |
 | `AVCF` | aşağıya bak                                                  | **AVC420 H.264 karesi**                     |
+| `AVCX` | `AVCF` ile aynı                                              | Çözülecek ama **çizilmeyecek** H.264 karesi |
 | `CURS` | aşağıya bak                                                  | İmleç şekli                                 |
 | `CURD` | boş                                                          | Varsayılan imlece dön                       |
 | `CLIP` | UTF-8 metin                                                  | Pano — **çift yönlü**                       |
@@ -47,6 +48,21 @@ numRects × { u16 left, u16 top, u16 right, u16 bottom }   -- bu karenin güncel
 
 H.264 verisi FreeRDP'nin `RDPGFX_AVC420_BITMAP_STREAM.data` alanından olduğu gibi
 kopyalanır. Köprüde decode veya yeniden encode **yoktur** — Faz 3'ün bütün amacı bu.
+
+### `AVCX` — AVC444'ün ek (renk) görüntüsü
+
+AVC444 bir kareyi iki görüntüyle taşır: 4:2:0 bir ana görüntü (luma) ve 4:4:4'ü
+tamamlayan ek renk görüntüsü (chroma). Tarayıcı çözücüleri 4:4:4 göstermediği
+için ekrana yalnızca ana görüntü çizilir. Ama ikisi **tek bir H.264 dizisidir**:
+FreeRDP ikisini aynı çözücüye sırayla verir (önce ana, sonra ek) ve bir ana
+görüntü bir ek görüntüye referans verebilir. Ek görüntüleri atmak bu zinciri
+kırar; ek görüntü gönderen bir sunucuda pencere izleri, bloklar ve renk kaymaları
+çıkar (2026-11, 660 güncellemede 60 ek görüntü gönderen bir Windows'ta ölçüldü).
+
+Bu yüzden ek görüntü `AVCX` olarak, `AVCF` ile aynı yükle gelir. Tarayıcı onu
+aynı çözücüye verir ve çıkan resmi **çizmeden** atar. Sıra FreeRDP'ninkiyle
+aynıdır: `LC=0`'da önce `AVCF` (ana), hemen ardından `AVCX` (ek); `LC=2`'de
+yalnızca `AVCX`.
 
 ## Tarayıcı → Termix → köprü
 
